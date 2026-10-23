@@ -14,7 +14,7 @@ The system should remain understandable, maintainable and recoverable without re
 
 This is a substantial redesign of the existing `autonomous_ai` project.
 
-The existing repository, `saolda/autonomous_ai`, is available as a reference implementation and source of engineering lessons.
+The existing repository, `../autonomous_ai`, is available as a reference implementation and source of engineering lessons.
 
 It is not the new system's architectural specification.
 
@@ -216,7 +216,7 @@ Evaluate research quality using real examples and independently reviewed judgmen
 
 Existing implementation:
 
-Repository: `saolda/autonomous_ai`
+Repository: `../autonomous_ai`
 
 Relevant historical investigations:
 

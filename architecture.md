@@ -2,7 +2,7 @@
 
 **Status:** Draft 0.2 for review  
 **Project:** Mira  
-**Reference implementation:** `saolda/autonomous_ai`
+**Reference implementation:** `../autonomous_ai`
 
 ## 1. Purpose and boundaries
 
@@ -129,7 +129,7 @@ Multi-file updates require staging, validation and crash-safe commit/recovery; a
 
 ## 11. Implementation and review
 
-Development roles: the project owner decides scope and approves architecture; ChatGPT assists with design and independent review; Codex investigates, implements, tests and commits bounded approved changes. Consult `saolda/autonomous_ai` for lessons and reusable components, not inherited architectural constraints.
+Development roles: the project owner decides scope and approves architecture; ChatGPT assists with design and independent review; Codex investigates, implements, tests and commits bounded approved changes. Consult `../autonomous_ai` for lessons and reusable components, not inherited architectural constraints.
 
 **First milestone:** a small manually inspectable knowledge network with research/synthesis documents, findings, questions, external equation JSON, outward relationships, incoming relationship lookup, unit-level and document-level retrieval, revision safety, validation, index rebuilding and interruption recovery. No autonomous research engine until this foundation is reviewed.
 
