@@ -1,0 +1,82 @@
+{
+  "model": "nomic-http:nomic-embed-text-v1.5.Q5_K_M.gguf:sha256:0c7930f6c4f6f29b7da5046e3a2c0832aa3f602db3de5760a95f0582dbd3d6e6:prefix-v1",
+  "index": {
+    "documents": 3,
+    "records": 14,
+    "relationships": 6,
+    "model": "nomic-http:nomic-embed-text-v1.5.Q5_K_M.gguf:sha256:0c7930f6c4f6f29b7da5046e3a2c0832aa3f602db3de5760a95f0582dbd3d6e6:prefix-v1",
+    "dimensions": 768
+  },
+  "evaluation": "Three authored queries over synthetic fixtures; not a held-out or human-adjudicated benchmark.",
+  "results": [
+    {
+      "query": "How can a jacket slow the escape of warmth?",
+      "authored_expected": "r2#f1",
+      "expected_rank": 1,
+      "literal_phrase_hits": [],
+      "ranked_findings": [
+        {
+          "id": "r2#f1",
+          "label": "Thermal barrier",
+          "score": 0.618418819459005
+        },
+        {
+          "id": "r1#f1",
+          "label": "Heat transfer",
+          "score": 0.6044754451688384
+        },
+        {
+          "id": "r1#f2",
+          "label": "Cooling rate",
+          "score": 0.5729047699182239
+        }
+      ]
+    },
+    {
+      "query": "What makes a hot item cool down?",
+      "authored_expected": "r1#f1",
+      "expected_rank": 1,
+      "literal_phrase_hits": [],
+      "ranked_findings": [
+        {
+          "id": "r1#f1",
+          "label": "Heat transfer",
+          "score": 0.6783816884998546
+        },
+        {
+          "id": "r2#f1",
+          "label": "Thermal barrier",
+          "score": 0.6254168325107561
+        },
+        {
+          "id": "r1#f2",
+          "label": "Cooling rate",
+          "score": 0.6134596364727561
+        }
+      ]
+    },
+    {
+      "query": "When is treating an entire object as one temperature inaccurate?",
+      "authored_expected": "r2#f2",
+      "expected_rank": 1,
+      "literal_phrase_hits": [],
+      "ranked_findings": [
+        {
+          "id": "r2#f2",
+          "label": "Scope limitation",
+          "score": 0.7460227139917506
+        },
+        {
+          "id": "r1#f2",
+          "label": "Cooling rate",
+          "score": 0.7117341019205582
+        },
+        {
+          "id": "r1#f1",
+          "label": "Heat transfer",
+          "score": 0.6888586183916882
+        }
+      ]
+    }
+  ]
+}

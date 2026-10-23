@@ -1,0 +1,93 @@
+{
+  "corpus": "authored synthetic fixtures; citations are not real evidence",
+  "initial_counts": {
+    "documents": 3,
+    "records": 14,
+    "relationships": 6,
+    "model": "test-double:sha256-token-hash-v1:128",
+    "dimensions": 128
+  },
+  "rebuilt_counts": {
+    "documents": 3,
+    "records": 14,
+    "relationships": 6,
+    "model": "test-double:sha256-token-hash-v1:128",
+    "dimensions": 128
+  },
+  "equivalent_rebuild": true,
+  "references": {
+    "finding": "r1#f1",
+    "question": "r1#q1",
+    "equation": "e_r1_1",
+    "synthesis": "s1#f1"
+  },
+  "incoming": [
+    {
+      "source": "s1#f1",
+      "target": "r1#f1",
+      "type": "SYNTHESIZES",
+      "status": "reviewed",
+      "owner": "s1"
+    }
+  ],
+  "lexical_hits": [
+    "r2#f1",
+    "r1#f1"
+  ],
+  "vector_backend": "test-double:sha256-token-hash-v1:128",
+  "vector_hits": [
+    {
+      "id": "r2",
+      "score": 0.6708203932499369
+    },
+    {
+      "id": "s1",
+      "score": 0.47140452079103173
+    },
+    {
+      "id": "r2#f1",
+      "score": 0.4588314677411235
+    }
+  ],
+  "document_summaries": [
+    "r1",
+    "r2",
+    "s1"
+  ],
+  "equation_retrieved": {
+    "id": "e_r1_1",
+    "origin": "r1",
+    "label": "Newton cooling model",
+    "expression": "dT/dt = -k(T - T_a)",
+    "variables": {
+      "T": "object temperature",
+      "T_a": "ambient temperature",
+      "k": "cooling coefficient",
+      "t": "time"
+    },
+    "assumptions": [
+      "Uniform object temperature",
+      "Constant ambient temperature"
+    ],
+    "provenance": "Authored model fixture, not an independently verified derivation.",
+    "revision": 1,
+    "units": {
+      "T": "K",
+      "T_a": "K",
+      "k": "s^-1",
+      "t": "s"
+    }
+  },
+  "errors_detected": {
+    "invalid_target": "missing target: rzz#f1",
+    "stale_write": "newer document revision exists",
+    "interruption": "simulated interruption before pointer publication"
+  },
+  "interrupted_snapshot_unchanged": true,
+  "unpublished_snapshots": 1,
+  "integrity": {
+    "integrity": "ok",
+    "records": 15,
+    "relationships": 6
+  }
+}

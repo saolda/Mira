@@ -1,0 +1,39 @@
+test_anchor_in_plain_prose_rejected (test_foundation.FoundationTests.test_anchor_in_plain_prose_rejected) ... ok
+test_code_and_quote_anchors_are_not_units (test_foundation.FoundationTests.test_code_and_quote_anchors_are_not_units) ... ok
+test_concurrent_processes_allocate_unique_ids (test_foundation.FoundationTests.test_concurrent_processes_allocate_unique_ids) ... ok
+test_derived_database_deletion_and_rebuild_equivalent (test_foundation.FoundationTests.test_derived_database_deletion_and_rebuild_equivalent) ... ok
+test_document_metadata_and_vector_integrity (test_foundation.FoundationTests.test_document_metadata_and_vector_integrity) ... ok
+test_duplicate_anchor (test_foundation.FoundationTests.test_duplicate_anchor) ... ok
+test_duplicate_document_identity (test_foundation.FoundationTests.test_duplicate_document_identity) ... ok
+test_duplicate_relationships_even_status_differs (test_foundation.FoundationTests.test_duplicate_relationships_even_status_differs) ... ok
+test_empty_store (test_foundation.FoundationTests.test_empty_store) ... ok
+test_endpoint_restrictions (test_foundation.FoundationTests.test_endpoint_restrictions) ... ok
+test_equation_creation_reuse_and_complete_retrieval (test_foundation.FoundationTests.test_equation_creation_reuse_and_complete_retrieval) ... ok
+test_equation_invalid_and_missing (test_foundation.FoundationTests.test_equation_invalid_and_missing) ... ok
+test_external_cites_and_doi (test_foundation.FoundationTests.test_external_cites_and_doi) ... ok
+test_external_document_modification_fails_closed (test_foundation.FoundationTests.test_external_document_modification_fails_closed) ... ok
+test_incoming_outgoing_filter_before_limit (test_foundation.FoundationTests.test_incoming_outgoing_filter_before_limit) ... ok
+test_index_exact_fulltext_vector_and_model_metadata (test_foundation.FoundationTests.test_index_exact_fulltext_vector_and_model_metadata) ... ok
+test_index_integrity_detects_tampering (test_foundation.FoundationTests.test_index_integrity_detects_tampering) ... ok
+test_malformed_anchor (test_foundation.FoundationTests.test_malformed_anchor) ... ok
+test_malformed_json_and_duplicate_keys (test_foundation.FoundationTests.test_malformed_json_and_duplicate_keys) ... ok
+test_missing_source (test_foundation.FoundationTests.test_missing_source) ... ok
+test_missing_target (test_foundation.FoundationTests.test_missing_target) ... ok
+test_model_change_rebuild_and_invalid_vectors (test_foundation.FoundationTests.test_model_change_rebuild_and_invalid_vectors) ... ok
+test_multifile_equation_publication_is_all_or_nothing (test_foundation.FoundationTests.test_multifile_equation_publication_is_all_or_nothing) ... ok
+test_real_process_crash_after_publication (test_foundation.FoundationTests.test_real_process_crash_after_publication) ... ok
+test_real_process_crash_before_publication (test_foundation.FoundationTests.test_real_process_crash_before_publication) ... ok
+test_round_trip_and_multiline_fields (test_foundation.FoundationTests.test_round_trip_and_multiline_fields) ... ok
+test_stable_ids_title_change_and_cas (test_foundation.FoundationTests.test_stable_ids_title_change_and_cas) ... ok
+test_stale_index_never_returned (test_foundation.FoundationTests.test_stale_index_never_returned) ... ok
+test_symmetric_related_duplicate (test_foundation.FoundationTests.test_symmetric_related_duplicate) ... ok
+test_synthesis_direction (test_foundation.FoundationTests.test_synthesis_direction) ... ok
+test_synthetic_corpus (test_foundation.FoundationTests.test_synthetic_corpus) ... ok
+test_terminal_relationships_required (test_foundation.FoundationTests.test_terminal_relationships_required) ... ok
+test_unit_edits_deletes_and_allocator_regression_rejected (test_foundation.FoundationTests.test_unit_edits_deletes_and_allocator_regression_rejected) ... ok
+test_unsupported_type_and_status (test_foundation.FoundationTests.test_unsupported_type_and_status) ... ok
+
+----------------------------------------------------------------------
+Ran 34 tests in 0.441s
+
+OK
