@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mira-foundation"
+version = "0.1.0"
+description = "Inspectable canonical knowledge and rebuildable retrieval"
+requires-python = ">=3.11"
+dependencies = ["markdown-it-py>=3,<5"]
+
+[project.scripts]
+mira = "mira.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

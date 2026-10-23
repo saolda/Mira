@@ -1,0 +1,24 @@
+{
+  "assumptions": [
+    "Uniform object temperature",
+    "Constant ambient temperature"
+  ],
+  "expression": "dT/dt = -k(T - T_a)",
+  "id": "e_r1_1",
+  "label": "Newton cooling model",
+  "origin": "r1",
+  "provenance": "Authored model fixture, not an independently verified derivation.",
+  "revision": 1,
+  "units": {
+    "T": "K",
+    "T_a": "K",
+    "k": "s^-1",
+    "t": "s"
+  },
+  "variables": {
+    "T": "object temperature",
+    "T_a": "ambient temperature",
+    "k": "cooling coefficient",
+    "t": "time"
+  }
+}
