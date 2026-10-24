@@ -1,0 +1,5 @@
+{
+  "action": "S2",
+  "context": {{ context_json }},
+  "output_contract": {{ output_contract_json }}
+}

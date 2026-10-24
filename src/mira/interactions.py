@@ -35,14 +35,15 @@ class Interactions:
         durable_write(path, dumps(scrub(data)))
         sync_dir(path.parent)
 
-    def start(self, event, request, context):
+    def start(self, event, request, context, *, template=None):
         # Caller holds store lock, giving monotonic order even across restarts.
         sequence = len(list(self.store.path("interactions").iterdir())) + 1
         identity = f"{sequence:08d}-{uuid.uuid4().hex}"
         path = self.store.path("interactions/" + identity)
         path.mkdir(); sync_dir(path.parent)
         self.write(identity, "request", {**event, "timestamp": now(), "sequence": sequence,
-            "serialized_request": request, "request": loads(request), "context": context})
+            "serialized_request": request, "request": loads(request), "context": context,
+            **({"prompt_template": template} if template is not None else {})})
         return identity
 
 

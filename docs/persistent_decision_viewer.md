@@ -120,6 +120,24 @@ copied experiment file matched its original, and the originals remain intact.
 Persistent exports are now in `memory/transcripts/monte-carlo-dropout/`. No new
 scientific claims or research-quality improvement is asserted by this increment.
 
+## Prompt templates and filled prompts
+
+Editable templates for R1, R3, R4 and S2 are in the repository's
+[`prompt_templates/`](../prompt_templates/README.md), with shared system text and
+per-action user/contract files. Click **Prompt templates** in the viewer header to
+review current unfilled files. Each decision has a **Filled prompt templates
+actually sent** panel, followed by the exact filled system/developer/user messages.
+New calls save template source text, source hashes, inserted values, filled messages
+and the request digest before dispatch. The viewer checks those messages/digest
+against the saved HTTP body; it never fills today's template to represent an old call.
+The original dropout run has actual saved messages but no template-version snapshot,
+so its missing provenance is explicitly labelled. The local `prompt-template-check`
+fixture experiment demonstrates all four new template snapshots without changing
+or rerunning the real experiment. Initial prompt wording/context selection remains
+byte-for-byte compatible with the earlier fixture requests, including R4's omission
+of raw search evidence. This exposes existing behavior for review rather than
+silently improving the policy.
+
 ## What is recorded versus what is shown
 
 Actual model inputs are decoded only from the saved `serialized_request` body,
@@ -200,3 +218,11 @@ we do not guess. Current files may be mid-operation if research is running; only
 verified commit events are labelled committed. Unfinished calls cannot always be
 distinguished from a currently executing call. There is no model policy change,
 self-correction, graphical brain analysis, presentation generation or cloud hosting.
+
+### Prompt-template follow-up verification
+
+All **98 tests pass**, adding eight tests for saved template provenance, exact
+compatibility with every historical fixture request, safe one-pass substitution,
+CRLF/source edits affecting only new calls, missing/invalid templates, honest legacy
+records, mismatch detection and the read-only template catalog. A local Firefox
+check verified both a filled R4 template and all four current template sources.

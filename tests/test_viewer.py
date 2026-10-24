@@ -208,6 +208,17 @@ class ViewerTests(unittest.TestCase):
         self.assertIn("serialized_request", saved)
         self.assertEqual(file_hashes(self.root), before)
 
+    def test_template_catalog_http_route_is_read_only(self):
+        before = file_hashes(self.root)
+        status, content, _ = self.request("GET", "/api/prompt-templates")
+        self.assertEqual(status, 200)
+        data = json.loads(content)
+        self.assertEqual({entry["action"] for entry in data}, {"R1", "R3", "R4", "S2"})
+        self.assertEqual(len(data[0]["files"]), 3)
+        status, content, _ = self.request("GET", f"/api/experiments/run-a/decisions/{self.r4}")
+        self.assertTrue(json.loads(content)["template_verification"]["matches_recorded_request"])
+        self.assertEqual(file_hashes(self.root), before)
+
     def test_default_server_binding_is_localhost(self):
         with patch("mira.viewer.ThreadingHTTPServer.__init__", return_value=None) as parent:
             ViewerServer(self.home)

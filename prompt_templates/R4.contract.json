@@ -1,0 +1,8 @@
+{
+  "children": [
+    "contributing child question for split decisions only"
+  ],
+  "decision": "kill|exhaust|retry|retry_split|exhaust_split",
+  "keywords": "nonempty string list for retry decisions, else null",
+  "rationale": "nonempty string"
+}

@@ -1,0 +1,21 @@
+{
+  "memories": [
+    {
+      "findings": [
+        {
+          "evidence_ids": [
+            "IDs from supplied search results"
+          ],
+          "explanation": "nonempty string",
+          "kind": "observation|claim|inference|hypothesis",
+          "label": "nonempty string",
+          "proposition": "nonempty string",
+          "provenance": "nonempty string"
+        }
+      ],
+      "summary": "nonempty string",
+      "title": "nonempty string"
+    }
+  ],
+  "no_finding_reason": "nonempty if memories is empty, else null"
+}

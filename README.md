@@ -27,3 +27,7 @@ PYTHONPATH=src python3 -m mira viewer
 Open http://127.0.0.1:8767 and select an experiment and decision. New research
 runs default to ignored `memory/research/` directories; annotations and exports
 are separate. See [storage, imports, viewer and review instructions](docs/persistent_decision_viewer.md).
+
+LLM prompts are editable in [prompt_templates/](prompt_templates/README.md).
+The viewer’s **Prompt templates** button shows current sources; each decision
+shows the saved filled prompts and template provenance when recorded.

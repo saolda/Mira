@@ -7,7 +7,6 @@ from .format import Memory, Unit, Relationship, base36, render, require
 
 SYNTHESIS_FINDING = {"label": "nonempty string", "proposition": "nonempty string", "explanation": "nonempty string",
                      "provenance": "nonempty string", "source_findings": ["complete input finding IDs, e.g. r1#f1"]}
-decisions.CONTRACTS["S2"] = {"title": "nonempty string", "summary": "nonempty string", "findings": [SYNTHESIS_FINDING]}
 
 
 def context(state, memories, equations, identity, inputs):

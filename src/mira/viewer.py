@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, unquote
 from .inspection import Inspector
 from .reviews import Reviews
 from .store import ConflictError
+from .prompts import PromptTemplates
 
 
 class ViewerServer(ThreadingHTTPServer):
@@ -55,6 +56,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, files("mira").joinpath("viewer_assets", name).read_bytes(), kind)
             parts = self._parts()
             if parts == ["api", "session"]: return self._send(200, {"review_token": self.server.token})
+            if parts == ["api", "prompt-templates"]: return self._send(200, PromptTemplates().catalog())
             if parts == ["api", "experiments"]: return self._send(200, self.server.inspector.experiments())
             if len(parts) >= 3 and parts[:2] == ["api", "experiments"]:
                 name = parts[2]

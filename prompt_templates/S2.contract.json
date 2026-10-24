@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "explanation": "nonempty string",
+      "label": "nonempty string",
+      "proposition": "nonempty string",
+      "provenance": "nonempty string",
+      "source_findings": [
+        "complete input finding IDs, e.g. r1#f1"
+      ]
+    }
+  ],
+  "summary": "nonempty string",
+  "title": "nonempty string"
+}

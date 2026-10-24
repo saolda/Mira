@@ -32,7 +32,13 @@ async function select(i){if(i<0||i>=timeline.length)return;selected=i;const seq=
  const input=data.inputs;
  $('inspection').append(el('p',data.input_source,'notice'));
  showJSON('Research objective and selected node',{root_question:input.root_question,node:input.node,ancestor_questions:input.ancestor_questions},'These fields were extracted only from the recorded HTTP request. Missing means absent.');
- messages('Exact system prompt',input.system_messages);messages('Exact developer prompt',input.developer_messages);messages('Exact user prompt',input.user_messages);
+ const templateSection=section('Filled prompt templates actually sent',data.template_verification.notice);
+ if(data.prompt_template){
+  templateSection.append(jsonView({action:data.prompt_template.action,request_sha256:data.prompt_template.serialized_request_sha256,redaction_applied:data.prompt_template.redaction_applied,verification:data.template_verification},'Recorded template identity',true));
+  for(const file of data.prompt_template.files||[]){const d=el('details');d.append(el('summary',file.path+' · '+file.sha256),el('pre',file.source));templateSection.append(d);}
+  templateSection.append(jsonView(data.prompt_template.bindings,'Values inserted into the templates',false));
+ }else absent(templateSection,'This historical call predates template snapshots. Its actual filled messages remain available below. Current template files are not substituted.');
+ messages('Filled system template — exact sent text',input.system_messages);messages('Filled developer template — exact sent text',input.developer_messages);messages('Filled user template — exact sent text',input.user_messages);
  showJSON('Structured context actually supplied',data.structured_context);
  memoryList('Existing memories actually supplied',input.existing_memories,'Complete recorded contents. No additional corpus memories are inserted here.');
  showJSON('Search evidence actually supplied',input.search_evidence,'If absent, the model did not receive a search_evidence field. Prior retrieval is shown separately below.');
@@ -60,3 +66,5 @@ function addReview(data,selectedExperiment){const s=section('Your local review',
 }
 $('experiments').onchange=()=>loadRun().catch(e=>$('alert').textContent=e.message);$('filter').onchange=()=>{selected=-1;renderTimeline();if(timeline.length)select(0);};$('previous').onclick=()=>select(selected-1);$('next').onclick=()=>select(selected+1);$('refresh').onclick=()=>loadExperiments().catch(e=>$('alert').textContent=e.message);
 (async()=>{try{sessionToken=(await api('/api/session')).review_token;await loadExperiments();}catch(e){$('alert').textContent=e.message;}})();
+
+$('templates').onclick=async()=>{const ticket=++requestNumber;try{const catalog=await api('/api/prompt-templates');if(ticket!==requestNumber)return;$('inspection').replaceChildren(el('h1','Current prompt templates'),el('p','These are current files on disk, not proof of what an older call used. Select a decision to inspect its saved, filled templates.','notice'));$('alert').textContent='';for(const action of catalog){const s=section(action.action+' prompt templates','Edit these files in prompt_templates/. New calls save their own immutable source snapshot and filled text.');for(const file of action.files){const d=el('details');d.open=file.path.endsWith('.user.json');d.append(el('summary',file.path),el('pre',file.source));s.append(d);}s.append(el('p','Variables: '+action.variables.join(', '),'hint'));}}catch(e){$('alert').textContent=e.message;}};

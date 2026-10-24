@@ -170,6 +170,15 @@ class Inspector:
             payload = req["request"]; source = "Recorded request object; exact serialized body absent"
         messages = payload.get("messages", []) if payload else []
         require(isinstance(messages, list), "recorded messages must be a list")
+        template = req.get("prompt_template")
+        template_check = {"recorded": isinstance(template, dict), "matches_recorded_request": None,
+                          "notice": "Template version was not recorded for this call. Filled text below comes only from the saved request."}
+        if isinstance(template, dict):
+            matches = (isinstance(serialized, str) and template.get("serialized_request_sha256") == digest(serialized)
+                       and template.get("filled_messages") == messages)
+            template_check.update(matches_recorded_request=matches,
+                                  notice="Filled templates match the recorded request." if matches else "Template snapshot does not match the saved request; use the saved request as authority.")
+            if not matches: warnings.append(template_check["notice"])
         user_payloads = []
         for message in messages:
             if isinstance(message, dict) and message.get("role") == "user":
@@ -210,6 +219,8 @@ class Inspector:
             "user_messages": [m for m in messages if isinstance(m, dict) and m.get("role") == "user"] or None}
         return {"id": identity, "experiment": name, "status": self._status(record, event), "record": record,
             "input_source": source, "serialized_request": serialized, "inputs": inputs,
+            "prompt_template": template, "template_verification": template_check,
+            "filled_prompt_messages": messages,
             "structured_context": context if "context" in structured else None,
             "model": payload.get("model") if payload else None,
             "generation_settings": {k: v for k, v in payload.items() if k not in {"model", "messages"}} if payload else None,

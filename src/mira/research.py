@@ -4,7 +4,7 @@ from collections import Counter
 import uuid
 
 from .api import Knowledge
-from .format import Memory, Unit, Relationship, base36, dumps, loads, render, require
+from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
 from . import decisions, research_tree as tree
@@ -58,11 +58,15 @@ class Research:
 
     def _model(self, event, action, context, state):
         require(0 < self.llm.settings["max_tokens"] <= state["output_reserve"], "generation limit exceeds output reserve")
-        serialized = self.trace.clean(decisions.request(self.llm.model, self.llm.settings, action, context))
+        unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
+        serialized = self.trace.clean(unredacted)
+        template["redaction_applied"] = serialized != unredacted
+        template["filled_messages"] = loads(serialized)["messages"]
+        template["serialized_request_sha256"] = digest(serialized)
         # Byte count is a deliberately conservative token estimate, including JSON overhead.
         require(len(serialized.encode("utf-8")) + state["output_reserve"] <= state["context_budget"],
                 "blocked_context_budget: full decision context does not fit")
-        identity = self.trace.start(event, serialized, context)
+        identity = self.trace.start(event, serialized, context, template=template)
         event["interaction_id"] = identity
         try:
             raw = self.llm.complete(serialized)
