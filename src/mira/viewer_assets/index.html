@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mira · Decision viewer</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><strong>Mira</strong><span>Research decisions</span><small>Local records · canonical data is read-only</small><button id="refresh">Refresh</button></header>
+<div id="layout">
+<aside>
+<label for="experiments">Experiment</label><select id="experiments"><option>Loading…</option></select>
+<div id="run-question"></div><details open><summary>Question tree</summary><p class="hint" id="tree-label">Current recorded state</p><div id="tree"></div></details>
+<label for="filter">Action history</label><select id="filter"><option value="all">All actions</option><option value="decision">LLM decisions only</option><option value="R4">R4 dispositions</option><option value="S2">S2 synthesis</option></select>
+<nav id="timeline" aria-label="Research history"></nav>
+</aside>
+<main>
+<div id="alert" role="status"></div>
+<div id="navigation"><button id="previous">← Previous</button><button id="next">Next →</button><span id="position"></span></div>
+<article id="inspection"><h1>Inspect Mira's decisions</h1><p>Select an experiment, then a decision in the history.</p><p>The viewer distinguishes recorded model inputs from the research corpus and external evidence. An absent field is shown explicitly.</p></article>
+</main></div>
+</body></html>

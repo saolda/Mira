@@ -1,5 +1,7 @@
 # Autonomous research implementation milestones
 
+Current persistent storage and local viewer instructions are in [Persistent research and the decision viewer](persistent_decision_viewer.md). The `/tmp` paths in historical run reports below are original locations, not current defaults.
+
 The owner approved continued development through Increments 2b, 3 and 4, including
 persistent model-decision transparency. Phase 1 and the live journal remain intact.
 
@@ -86,12 +88,11 @@ may emit ResourceWarnings when collecting them; tests still pass.
 ### Fixture demonstration and transcript
 
 ```bash
-MIRA_DEMO_ROOT=$(mktemp -d /tmp/mira-research-demo.XXXXXX)
-PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" research-demo
-PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" research-state
-PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" transcript --full > /tmp/mira-full-transcript.md
-PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" transcript --concise
-PYTHONPATH=src python3 -m mira --live --root "$MIRA_DEMO_ROOT" integrity
+PYTHONPATH=src python3 -m mira research-demo --experiment fixture-demo
+PYTHONPATH=src python3 -m mira research-state --experiment fixture-demo
+PYTHONPATH=src python3 -m mira transcript --experiment fixture-demo --full
+PYTHONPATH=src python3 -m mira transcript --experiment fixture-demo --concise
+PYTHONPATH=src python3 -m mira --live --root memory/research/fixture-demo integrity
 ```
 
 The recorded run is in `examples/full_research_transcript.md` and
@@ -173,25 +174,25 @@ experiment look successful. The actual prompts, response bodies, usage and
 rejection/commit results can be inspected in the isolated corpus. A full export is
 at `/tmp/mira-real-dropout-transcript.md` on this workspace. Raw external evidence
 and model prose are not copied into the public sample transcript; the checked-in
-full sample uses fictional fixtures. Temporary experiment artifacts require normal
-external retention/backup if they should survive `/tmp` cleanup.
+full sample uses fictional fixtures. The next increment imported this run and its original export into ignored project-local
+`memory/`; see the persistent-viewer instructions. The original temporary sources
+were preserved unchanged.
 
 ### Reproduce a real bounded run
 
 Against the independently managed model already available on Fractal:
 
 ```bash
-MIRA_REAL_ROOT=$(mktemp -d /tmp/mira-real-experiment.XXXXXX)
-PYTHONPATH=src python3 -m mira --root "$MIRA_REAL_ROOT" research-init \
+PYTHONPATH=src python3 -m mira research-init \
   'Using arXiv abstracts only, what does Monte Carlo dropout approximate when estimating predictive uncertainty? Focus on this single narrow question.' \
-  --database arxiv --context-budget 16000 --output-reserve 2048
-PYTHONPATH=src python3 -m mira --root "$MIRA_REAL_ROOT" research-run \
+  --experiment dropout-evaluation --database arxiv --context-budget 16000 --output-reserve 2048
+PYTHONPATH=src python3 -m mira research-run --experiment dropout-evaluation \
   --llm-url http://127.0.0.1:8090 \
   --model /home/eric/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf \
   --no-thinking --max-tokens 2048 --max-cycles 6
-PYTHONPATH=src python3 -m mira --root "$MIRA_REAL_ROOT" transcript --full > /tmp/mira-real-transcript.md
-PYTHONPATH=src python3 -m mira --root "$MIRA_REAL_ROOT" transcript --concise
-PYTHONPATH=src python3 -m mira --live --root "$MIRA_REAL_ROOT" integrity
+PYTHONPATH=src python3 -m mira transcript --experiment dropout-evaluation --full
+PYTHONPATH=src python3 -m mira transcript --experiment dropout-evaluation --concise
+PYTHONPATH=src python3 -m mira --live --root memory/research/dropout-evaluation integrity
 ```
 
 Use `/v1/models` to obtain the model identifier if a different model is served.

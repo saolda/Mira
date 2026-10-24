@@ -17,3 +17,13 @@ Run a synthetic demonstration with
 `PYTHONPATH=src python3 -m mira --root /tmp/mira-demo --test-embedding demo`.
 The test embedding is not a semantic model; actual local-model results are recorded
 separately. No old memories or runtime state are imported.
+
+Inspect persistent research locally:
+
+```bash
+PYTHONPATH=src python3 -m mira viewer
+```
+
+Open http://127.0.0.1:8767 and select an experiment and decision. New research
+runs default to ignored `memory/research/` directories; annotations and exports
+are separate. See [storage, imports, viewer and review instructions](docs/persistent_decision_viewer.md).

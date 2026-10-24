@@ -10,7 +10,8 @@ from . import research_cli
 
 def main():
     parser = argparse.ArgumentParser(prog="mira")
-    parser.add_argument("--root", default="knowledge")
+    parser.add_argument("--root", help="explicit corpus root (Phase 1 default: knowledge)")
+    parser.add_argument("--memory-dir", help="persistent research catalog (default: project memory/)")
     parser.add_argument("--live", action="store_true", help="explicitly use live canonical storage")
     parser.add_argument("--test-embedding", action="store_true", help="token-hash test double, not semantic retrieval")
     parser.add_argument("--embedding-url")
@@ -37,10 +38,15 @@ def main():
     edges.add_argument("--direction", choices=["incoming", "outgoing"], default="outgoing")
     edges.add_argument("--status", action="append")
     args = parser.parse_args()
-    if args.command in {"research-init", "research-run", "research-state", "research-demo", "transcript"}:
+    if args.command == "viewer":
+        from .viewer import serve
+        serve(args.memory_dir, port=args.port)
+        return
+    if args.command in {"research-init", "research-run", "research-state", "research-demo", "research-import", "transcript"}:
         result = research_cli.execute(args)
         print(result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False))
         return
+    args.root = args.root or "knowledge"
     if args.test_embedding and args.embedding_url:
         parser.error("choose one embedding backend")
     if args.embedding_url and not args.model_identity:

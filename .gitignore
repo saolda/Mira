@@ -4,3 +4,6 @@ __pycache__/
 .coverage
 knowledge/
 *.sqlite3
+
+# Local research corpora, model interactions, transcripts and human reviews
+/memory/

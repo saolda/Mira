@@ -6,6 +6,8 @@ from .interactions import transcript
 from .research import Research
 from .decisions import ScriptedLLM
 from .search import FixtureSearch
+from .experiments import Experiments
+from .format import require
 
 
 def register(sub):
@@ -30,20 +32,50 @@ def register(sub):
     run.add_argument("--acknowledge-interrupted", action="store_true")
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
-    sub.add_parser("research-state")
+    state = sub.add_parser("research-state")
+    viewer = sub.add_parser("viewer")
+    viewer.add_argument("--port", type=int, default=8767)
+    importer = sub.add_parser("research-import")
+    importer.add_argument("source")
+    importer.add_argument("--experiment", required=True)
+    importer.add_argument("--transcript", help="optional existing exported transcript to preserve")
     show = sub.add_parser("transcript")
     show.add_argument("--full", action="store_true")
     show.add_argument("--concise", action="store_true")
+    show.add_argument("--output", help="optional export path; catalog runs also export under memory/transcripts/")
+    for command in (init, run, demo, state, show):
+        command.add_argument("--experiment", help="persistent experiment name")
 
 
 def execute(args):
+    catalog = Experiments(args.memory_dir)
+    if args.command == "research-import":
+        require(not args.root, "research-import selects destination with --experiment, not --root")
+        destination = catalog.import_run(args.source, args.experiment, transcript=args.transcript)
+        for full in (False, True):
+            catalog.export_transcript(args.experiment, transcript(destination, full=full), full=full)
+        return {"experiment": args.experiment, "root": str(destination), "source_preserved": True}
+    require(not (args.root and args.experiment), "choose --root or --experiment")
+    managed = args.root is None
+    if managed:
+        path = catalog.create(args.experiment) if args.command in {"research-init", "research-demo"} else catalog.select(args.experiment)
+        args.root = str(path)
+        args.experiment = path.name
     if args.command == "research-demo":
         from .research_demo import demonstrate
-        return demonstrate(args.root, max_cycles=args.max_cycles)
+        result = demonstrate(args.root, max_cycles=args.max_cycles)
+        if managed:
+            for full in (False, True): catalog.export_transcript(args.experiment, transcript(args.root, full=full), full=full)
+        return result
     if args.command == "transcript":
-        return transcript(args.root, full=args.full and not args.concise)
+        full = args.full and not args.concise
+        result = transcript(args.root, full=full)
+        if managed: catalog.export_transcript(args.experiment, result, full=full)
+        if args.output:
+            from .experiments import atomic_text
+            atomic_text(Path(args.output), result)
+        return result
     if args.command == "research-run":
-        from .format import require
         require(bool(args.script) != bool(args.llm_url), "choose --script or --llm-url")
         if args.script:
             script = loads(Path(args.script).read_text())
@@ -61,8 +93,9 @@ def execute(args):
         llm, adapters = ScriptedLLM([]), {}
     research = Research(args.root, llm, adapters)
     if args.command == "research-init":
-        return research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
+        result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve)
+        return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.acknowledge_interrupted: research.acknowledge_interrupted()
     return research.run(args.max_cycles)

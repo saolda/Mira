@@ -14,3 +14,6 @@ mira = "mira.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+mira = ["viewer_assets/*.html", "viewer_assets/*.js", "viewer_assets/*.css"]
