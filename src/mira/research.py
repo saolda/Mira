@@ -70,6 +70,7 @@ class Research:
             self.trace.write(identity, "response", {"timestamp": now(), "error": self.trace.clean(str(exc)),
                 "error_type": type(exc).__name__, "raw": getattr(exc, "raw", None), "status": "call_failed"})
             raise
+        raw = self.trace.clean(raw)
         self.trace.write(identity, "response", {"timestamp": now(), "raw": raw, "status": "received"})
         value, info = decisions.proposal(raw)
         event["model"] = info
@@ -122,7 +123,8 @@ class Research:
             context = self._context(state, memories, identity)
             evidence = None
             if action == "R3":
-                evidence = loads(files[n["pending_results"]]); context["search_evidence"] = evidence
+                evidence = loads(files[n["pending_results"]])
+                context["search_evidence"] = {key: value for key, value in evidence.items() if key != "raw_api_response"}
                 event["evidence_ref"] = n["pending_results"]
             value = self._model(event, action, context, state)
             decisions.validate(action, value, evidence)
@@ -212,6 +214,13 @@ class Research:
                 decode(candidate)
             except Exception as exc:
                 state, memories, ledger = original
+                if "memory_ids" in event:
+                    event["proposed_memory_ids"] = event.pop("memory_ids")
+                if "generated_memories" in event:
+                    event["rejected_generated_memories"] = event.pop("generated_memories")
+                if "tree" in event:
+                    event["proposed_tree"] = event.pop("tree")
+                event["tree"] = deepcopy(state["nodes"])
                 event.update(status="rejected", error=self.trace.clean(str(exc)), error_type=type(exc).__name__)
                 success = False; extras = {}
             interaction = event.get("interaction_id")

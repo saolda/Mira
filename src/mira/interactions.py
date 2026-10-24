@@ -27,7 +27,12 @@ class Interactions:
     def write(self, identity, phase, data):
         path = self.store.path(f"interactions/{identity}/{phase}.json")
         # Immutable phase files: an interrupted write remains visible, never replaced.
-        durable_write(path, self.clean(dumps(data)))
+        def scrub(value):
+            if isinstance(value, str): return self.clean(value)
+            if isinstance(value, dict): return {self.clean(k): scrub(v) for k, v in value.items()}
+            if isinstance(value, list): return [scrub(v) for v in value]
+            return value
+        durable_write(path, dumps(scrub(data)))
         sync_dir(path.parent)
 
     def start(self, event, request, context):

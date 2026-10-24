@@ -20,7 +20,7 @@ CONTRACTS = {
 
 
 def request(model, settings, action, context):
-    require(set(settings) <= {"temperature", "max_tokens", "top_p", "seed"}, "unsupported generation settings")
+    require(set(settings) <= {"temperature", "max_tokens", "top_p", "seed", "response_format", "chat_template_kwargs"}, "unsupported generation settings")
     return dumps({"model": model, **settings, "messages": [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": dumps({"action": action, "output_contract": CONTRACTS[action], "context": context})}]})

@@ -16,7 +16,16 @@ def register(sub):
     init.add_argument("--context-budget", type=int, default=8192)
     init.add_argument("--output-reserve", type=int, default=2048)
     run = sub.add_parser("research-run")
-    run.add_argument("--script", required=True, help="JSON with responses and provider fixtures")
+    run.add_argument("--script", help="JSON with responses and provider fixtures")
+    run.add_argument("--llm-url", help="HTTP model base URL; credentials must use environment variable")
+    run.add_argument("--model", help="model identifier reported by /v1/models")
+    run.add_argument("--api-key-env", default="MIRA_LLM_API_KEY")
+    run.add_argument("--temperature", type=float, default=0)
+    run.add_argument("--max-tokens", type=int, default=2048)
+    run.add_argument("--timeout", type=float, default=120)
+    run.add_argument("--no-thinking", action="store_true", help="llama.cpp/Qwen enable_thinking=false")
+    run.add_argument("--plain-output", action="store_true", help="omit JSON response-format hint")
+    run.add_argument("--search-limit", type=int, default=2)
     run.add_argument("--max-cycles", type=int, default=20)
     run.add_argument("--acknowledge-interrupted", action="store_true")
     demo = sub.add_parser("research-demo")
@@ -34,9 +43,20 @@ def execute(args):
     if args.command == "transcript":
         return transcript(args.root, full=args.full and not args.concise)
     if args.command == "research-run":
-        script = loads(Path(args.script).read_text())
-        llm = ScriptedLLM(script["responses"])
-        adapters = {key: FixtureSearch(rows) for key, rows in script["providers"].items()}
+        from .format import require
+        require(bool(args.script) != bool(args.llm_url), "choose --script or --llm-url")
+        if args.script:
+            script = loads(Path(args.script).read_text())
+            llm = ScriptedLLM(script["responses"])
+            adapters = {key: FixtureSearch(rows) for key, rows in script["providers"].items()}
+        else:
+            import os
+            from .clients import HTTPModel
+            from .search import ArxivSearch
+            llm = HTTPModel(args.llm_url, args.model, api_key=os.environ.get(args.api_key_env),
+                temperature=args.temperature, max_tokens=args.max_tokens, timeout=args.timeout,
+                no_thinking=args.no_thinking, json_output=not args.plain_output)
+            adapters = {"arxiv": ArxivSearch(limit=args.search_limit)}
     else:
         llm, adapters = ScriptedLLM([]), {}
     research = Research(args.root, llm, adapters)

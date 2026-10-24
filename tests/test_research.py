@@ -132,6 +132,16 @@ class ResearchTests(unittest.TestCase):
         r.step(); r.step(); self.assertEqual(r.step()["status"], "rejected")
         self.assertEqual(len(self.llm.requests), 2)
         self.assertEqual(r.knowledge.validate()["documents"], 0)
+        # A schema-valid draft can still fail canonical Markdown admission after
+        # allocation. The outcome must not advertise unpublished IDs as committed.
+        invalid_markdown = draft(); invalid_markdown["title"] = "Bad\nTitle"
+        r.llm = ScriptedLLM([{"memories": [invalid_markdown], "no_finding_reason": None}])
+        event = r.step()
+        self.assertEqual(event["status"], "rejected")
+        self.assertEqual(event["proposed_memory_ids"], ["r1"])
+        self.assertNotIn("memory_ids", event)
+        self.assertEqual(read_records(self.root)[-1]["outcome"]["memory_ids"], [])
+        self.assertEqual(r.knowledge.validate()["documents"], 0)
 
     def test_interrupted_call_needs_explicit_acknowledgment(self):
         r = self.make([{"keywords": ["heat"]}])
