@@ -27,7 +27,7 @@ from test_research import evidence, draft, decision
 def make_run(root):
     r = Research(root, ScriptedLLM([{"keywords": ["heat"]}, {"memories": [draft()], "no_finding_reason": None}, decision("kill")]),
                  {"fixture": FixtureSearch([evidence()])})
-    r.initialize("Original recorded question?", ["fixture"])
+    r.initialize("Original recorded question?", ["fixture"], context_budget=12000)
     r.run(5)
     return r
 
@@ -105,7 +105,7 @@ class ViewerTests(unittest.TestCase):
         self.assertRaises(ValueError, self.catalog.import_run, self.root, "unsafe-copy")
         self.assertFalse(self.catalog.path("unsafe-copy").exists())
 
-    def test_full_request_response_exact_and_r4_missing_evidence_explicit(self):
+    def test_full_request_response_exact_and_r4_evidence_explicit(self):
         before = file_hashes(self.root)
         data = self.inspector.decision("run-a", self.r4)
         original_request = loads((self.root / "interactions" / self.r4 / "request.json").read_text())
@@ -116,7 +116,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(data["inputs"]["system_messages"][0], payload["messages"][0])
         self.assertEqual(data["inputs"]["user_messages"][0], payload["messages"][1])
         self.assertIsNone(data["inputs"]["developer_messages"])
-        self.assertIsNone(data["inputs"]["search_evidence"])
+        self.assertEqual(data["inputs"]["search_evidence"][0]["results"], evidence()["results"])
         self.assertEqual(len(data["inputs"]["existing_memories"]), 1)
         self.assertEqual(len(data["retrieved_before_decision"]), 1)
         self.assertEqual(data["tree_before"]["q1"]["status"], "living")
@@ -136,7 +136,18 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(again["serialized_request"], data["serialized_request"])
         self.assertEqual(again["inputs"], data["inputs"])
         self.assertEqual(again["historical_corpus"], data["historical_corpus"])
-        self.assertIsNone(again["inputs"]["search_evidence"])
+        self.assertEqual(again["inputs"]["search_evidence"], data["inputs"]["search_evidence"])
+
+    def test_task_and_slot_panels_use_only_actual_recorded_messages(self):
+        data = self.inspector.decision("run-a", self.r4)
+        actual = loads(loads(data["serialized_request"])["messages"][-1]["content"])
+        self.assertEqual(data["task_instructions"], {key: actual[key] for key in
+            ("task", "instructions", "information_rules", "output_requirements")})
+        self.assertEqual({slot["name"]: slot["value"] for slot in data["prompt_slots"]}, actual["context"])
+        slots = {slot["name"]: slot for slot in data["prompt_slots"]}
+        self.assertEqual(slots["next_database"]["status"], "Explicit null")
+        self.assertEqual(slots["equations"]["status"], "Empty collection")
+        self.assertEqual(slots["linked_memories"]["status"], "Supplied")
 
     def test_missing_and_interrupted_record_is_visible_without_state(self):
         path = self.root / "interactions" / "00000004-interrupted"

@@ -1,8 +1,9 @@
 # Persistent research storage and local decision viewer
 
 This increment was built directly on the merged `main` research implementation.
-It changes storage defaults and adds inspection/reviews; decision prompts, R4
-policy, research strategies and synthesis policy are unchanged.
+The initial increment changed storage defaults and added inspection/reviews.
+The subsequent full state-prompt update is described below; research strategies
+and synthesis scheduling remain unchanged.
 
 ## Launch and find the dropout R4 decision
 
@@ -132,11 +133,18 @@ and the request digest before dispatch. The viewer checks those messages/digest
 against the saved HTTP body; it never fills today's template to represent an old call.
 The original dropout run has actual saved messages but no template-version snapshot,
 so its missing provenance is explicitly labelled. The local `prompt-template-check`
-fixture experiment demonstrates all four new template snapshots without changing
-or rerunning the real experiment. Initial prompt wording/context selection remains
-byte-for-byte compatible with the earlier fixture requests, including R4's omission
-of raw search evidence. This exposes existing behavior for review rather than
-silently improving the policy.
+fixture experiment preserves the initial templates, which retained the old prompt
+wording and R4 evidence omission. Those historical requests remain unchanged.
+
+The current templates now contain complete state tasks, instructions, named context
+slots and JSON Schema output contracts. New R4 calls receive this node's search
+history and normalized evidence, alongside linked memories; R1/R3 also receive
+search history and explicit provider/strategy slots. The viewer exposes **State
+task and exact output instructions** and **Filled information slots**, extracted
+only from the saved request. Null and empty values are distinct. The isolated
+`state-prompt-check` fixture demonstrates the new prompts across all four states.
+See the [template guide](../prompt_templates/README.md) for slot definitions,
+output requirements, context budgets and reproduction commands.
 
 ## What is recorded versus what is shown
 
@@ -216,8 +224,8 @@ a second database, and does not push live updates. Large histories can be slow.
 Missing old after-images prevent complete historical availability reconstruction;
 we do not guess. Current files may be mid-operation if research is running; only
 verified commit events are labelled committed. Unfinished calls cannot always be
-distinguished from a currently executing call. There is no model policy change,
-self-correction, graphical brain analysis, presentation generation or cloud hosting.
+distinguished from a currently executing call. No graphical brain analysis, presentation generation, automatic self-correction
+or cloud hosting is included.
 
 ### Prompt-template follow-up verification
 
@@ -226,3 +234,20 @@ compatibility with every historical fixture request, safe one-pass substitution,
 CRLF/source edits affecting only new calls, missing/invalid templates, honest legacy
 records, mismatch detection and the read-only template catalog. A local Firefox
 check verified both a filled R4 template and all four current template sources.
+
+### Full state-prompt follow-up verification
+
+All **102 tests pass** after the full state-prompt update. Coverage checks named
+slot binding, literal source text, explicit absence, undeclared-context rejection,
+state tasks/output schemas, R4 failed/successful search evidence, historical prompts
+remaining unchanged, exact recorded instructions in the viewer and bounded
+synthesis through three levels with the larger prompts. Phase 1 tests still pass.
+The scripted fixture uses an explicit 11500-byte-estimated budget with a 2048
+output reserve; runtime defaults remain configurable at 8192 / 2048. No new real
+LLM experiment has been run to assess these prompts' research quality.
+
+The fresh local `state-prompt-check` demonstration finished 16 research actions and
+five synthesis actions across three tree levels. All 17 recorded model calls have
+verified filled template snapshots. An isolated Firefox check confirmed the R4
+task, exact output instructions, filled slots/evidence and current source catalog.
+The imported dropout corpus still matches its original source byte-for-byte.

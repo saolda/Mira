@@ -47,7 +47,7 @@ class GardenerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.llm = DemoLLM(); self.r = Research(self.root, self.llm, {})
-        self.r.initialize("Synthetic research?", ["fixture"])
+        self.r.initialize("Synthetic research?", ["fixture"], context_budget=12000)
 
     def state(self): return loads((self.root / "research/state.json").read_text())
 
@@ -98,7 +98,7 @@ class GardenerTests(unittest.TestCase):
             self.assertTrue({"q1", "q2", "q4"} <= {r["request"]["node_id"] for r in syntheses})
             for record in syntheses:
                 request = record["request"]["serialized_request"]
-                self.assertLessEqual(len(request.encode()) + 2048, 8192)
+                self.assertLessEqual(len(request.encode()) + 2048, state["context_budget"])
                 self.assertGreaterEqual(len(record["request"]["context"]["input_memories"]), 2)
                 self.assertTrue(record["validation"]["accepted"])
             self.assertTrue(any(any(m["id"].startswith("s") for m in r["request"]["context"]["input_memories"]) for r in syntheses))
@@ -111,7 +111,7 @@ class GardenerTests(unittest.TestCase):
             llm = ScriptedLLM([{"keywords": ["heat"]}, {"memories": [draft(), draft("B")], "no_finding_reason": None},
                 decision("retry"), {"memories": [], "no_finding_reason": "No new supported finding."}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
-            r.initialize("Q?", ["fixture"])
+            r.initialize("Q?", ["fixture"], context_budget=12000)
             actions = [r.step()["action"] for _ in range(5)]
             self.assertEqual(actions, ["R1", "R2", "R3", "R4", "R2"])
             r.llm = DemoLLM()

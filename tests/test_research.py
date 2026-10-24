@@ -44,6 +44,7 @@ class ResearchTests(unittest.TestCase):
     def make(self, responses, searches=(), **config):
         self.llm = ScriptedLLM(responses); self.adapter = FixtureSearch(searches)
         self.r = Research(self.root, self.llm, {"fixture": self.adapter})
+        config = {"context_budget": 12000, **config}
         self.r.initialize("How does the fictional barrier affect heat?", ["fixture"], **config)
         return self.r
 
@@ -85,6 +86,33 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(self.state()["nodes"]["q1"]["next_database_index"], 1)
         self.assertIsNone(self.state()["nodes"]["q1"]["pending_results"])
         self.assertEqual(len(self.llm.requests), 1)
+
+    def test_prompts_supply_search_history_evidence_and_provider_by_named_slots(self):
+        r = self.make([{"keywords": ["heat"]}, {"memories": [draft()], "no_finding_reason": None}, decision()],
+            [{"status": "failed", "results": [], "error": "offline"},
+             {**evidence(), "raw_api_response": "Raw provider feed is retained outside prompts."}])
+        self.assertEqual(r.step()["status"], "committed")
+        self.assertEqual(r.step()["status"], "search_failed")
+        for _ in range(3): self.assertEqual(r.step()["status"], "committed")
+        prompts = {loads(loads(wire)["messages"][-1]["content"])["action"]:
+                   loads(loads(wire)["messages"][-1]["content"]) for wire in self.llm.requests}
+        r1 = prompts["R1"]["context"]
+        self.assertEqual(r1["question"], r1["node"]["question"])
+        self.assertEqual(r1["next_database"], "fixture")
+        self.assertEqual(r1["strategy"]["databases"], ["fixture"])
+        self.assertEqual(r1["search_history"], [])
+        r3 = prompts["R3"]["context"]
+        self.assertEqual(r3["search_evidence"]["results"], evidence()["results"])
+        r4 = prompts["R4"]["context"]
+        self.assertIsNone(r4["next_database"])
+        self.assertEqual([s["status"] for s in r4["search_history"]], ["failed", "ok"])
+        self.assertEqual([s["query"] for s in r4["search_history"]], ["heat", "heat"])
+        self.assertEqual(r4["search_evidence"][1]["results"], evidence()["results"])
+        self.assertEqual(r4["search_evidence"][0]["error"], "offline")
+        self.assertIn("r1", [m["id"] for m in r4["linked_memories"]])
+        self.assertNotIn("raw_api_response", dumps(prompts))
+        files = r.store._files()
+        self.assertTrue(any("Raw provider feed" in raw for path, raw in files.items() if path.startswith("research/results/")))
 
     def test_all_dispositions_children_zero_and_sustained_priority(self):
         for kind in ("kill", "exhaust", "retry", "retry_split", "exhaust_split"):
@@ -157,14 +185,14 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r.step()["status"], "rejected"); self.assertFalse(self.llm.requests)
         with tempfile.TemporaryDirectory() as directory:
             llm = ScriptedLLM([{"keywords": ["heat"]}, {"memories": [], "no_finding_reason": "No relevant supported finding."}])
-            r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])}); r.initialize("Q?", ["fixture"])
+            r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])}); r.initialize("Q?", ["fixture"], context_budget=12000)
             for _ in range(3): self.assertEqual(r.step()["status"], "committed")
             self.assertEqual(r.knowledge.validate()["documents"], 0)
 
     def test_transport_errors_and_secret_redaction(self):
         class SecretModel(ScriptedLLM): secrets = ("test-secret-token",)
         llm = SecretModel([RuntimeError("failed test-secret-token")])
-        r = Research(self.root, llm, {}); r.initialize("Q?", ["fixture"])
+        r = Research(self.root, llm, {}); r.initialize("Q?", ["fixture"], context_budget=12000)
         self.assertEqual(r.step()["status"], "rejected")
         for path in self.root.rglob("*"):
             if path.is_file(): self.assertNotIn("test-secret-token", path.read_text())

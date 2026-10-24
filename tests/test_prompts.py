@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from mira.decisions import ScriptedLLM, prepared_request
+from mira.decisions import ScriptedLLM
 from mira.experiments import Experiments, file_hashes
 from mira.format import digest, dumps, loads
 from mira.inspection import Inspector
-from mira.prompts import ACTIONS, PromptTemplates
+from mira.prompts import ACTIONS, SLOTS, PromptTemplates
 from mira.research import Research
 
 
@@ -31,17 +31,24 @@ class PromptTests(unittest.TestCase):
         file = next((root / "interactions").glob("*/request.json"))
         return root, llm.requests[0], file, loads(file.read_text())
 
-    def test_templates_preserve_every_historical_fixture_request_byte_for_byte(self):
+    def test_historical_fixture_prompts_are_displayed_without_new_instructions(self):
         path = Path(__file__).resolve().parents[1] / "docs/examples/full_research_transcript.md"
         records = [loads(m[1]) for m in re.finditer(r"Actual request record:\n```json\n(.*?)\n```", path.read_text(), re.S)]
         self.assertGreater(len(records), 10)
+        root = self.catalog.create("historical")
         seen = set()
-        for record in records:
+        for i, record in enumerate(records):
             original = record["serialized_request"]; payload = loads(original)
-            settings = {k: v for k, v in payload.items() if k not in {"model", "messages"}}
-            rendered, metadata = prepared_request(payload["model"], settings, record["action"], record["context"])
-            self.assertEqual(rendered, original)
-            self.assertEqual(metadata["filled_messages"], payload["messages"])
+            identity = f"{i:08d}-historical"
+            path = root / "interactions" / identity; path.mkdir(parents=True)
+            (path / "request.json").write_text(dumps(record))
+            before = file_hashes(root)
+            data = Inspector(self.catalog.home).decision("historical", identity)
+            self.assertEqual(data["serialized_request"], original)
+            self.assertEqual(data["filled_prompt_messages"], payload["messages"])
+            self.assertIsNone(data["task_instructions"]["task"])
+            if record["action"] == "R4": self.assertIsNone(data["inputs"]["search_evidence"])
+            self.assertEqual(file_hashes(root), before)
             seen.add(record["action"])
         self.assertEqual(seen, set(ACTIONS))
 
@@ -49,8 +56,9 @@ class PromptTests(unittest.TestCase):
         context = {"question": 'Literal {{ unknown }} ${name} "quoted" \n text'}
         for action in ACTIONS:
             messages, metadata = PromptTemplates().render(action, context)
-            self.assertEqual(loads(messages[1]["content"])["context"], context)
-            self.assertEqual(metadata["bindings"]["context"], context)
+            bound = {key: context.get(key) for key in SLOTS[action]}
+            self.assertEqual(loads(messages[1]["content"])["context"], bound)
+            self.assertEqual(metadata["bindings"]["context"], bound)
             for file in metadata["files"]:
                 self.assertEqual(file["sha256"], digest(file["source"]))
 
@@ -64,6 +72,31 @@ class PromptTests(unittest.TestCase):
         self.assertTrue(data["template_verification"]["matches_recorded_request"])
         self.assertEqual(data["filled_prompt_messages"], loads(wire)["messages"])
         self.assertEqual(file_hashes(root), before)
+
+    def test_every_state_has_a_task_named_slots_and_precise_output_schema(self):
+        tasks = {"R1": "search query", "R3": "search evidence", "R4": "disposition", "S2": "Synthesize"}
+        fields = {"R1": ["keywords"], "R3": ["memories", "no_finding_reason"],
+                  "R4": ["decision", "keywords", "children", "rationale"], "S2": ["title", "summary", "findings"]}
+        for action in ACTIONS:
+            context = {key: {"marker": key} for key in SLOTS[action]}
+            messages, snapshot = PromptTemplates().render(action, context)
+            user = loads(messages[-1]["content"])
+            self.assertIn(tasks[action], user["task"])
+            self.assertGreater(len(user["instructions"]), 2)
+            self.assertIn("JSON only", user["output_requirements"])
+            self.assertEqual(user["context"], context)
+            schema = user["output_contract"]
+            self.assertEqual(schema["required"], fields[action])
+            self.assertEqual(set(schema["properties"]), set(fields[action]))
+            self.assertFalse(schema["additionalProperties"])
+            self.assertEqual(schema["type"], "object")
+            source = snapshot["files"][1]["source"]
+            for key in SLOTS[action]: self.assertIn("{{ " + key + "_json }}", source)
+        self.assertEqual(PromptTemplates().render("R4", {})[1]["bindings"]["output_contract"]["properties"]["decision"]["enum"],
+                         ["kill", "exhaust", "retry", "retry_split", "exhaust_split"])
+
+    def test_unknown_context_fields_cannot_be_silently_omitted(self):
+        self.assertRaisesRegex(ValueError, "no declared prompt slot", PromptTemplates().render, "R4", {"unbound_evidence": "important"})
 
     def test_template_edit_changes_only_new_calls_and_preserves_old_provenance(self):
         root, wire, file, original = self.call("before")
@@ -83,10 +116,10 @@ class PromptTests(unittest.TestCase):
     def test_unknown_placeholder_missing_context_and_missing_file_fail_closed(self):
         user = self.templates / "R1.user.json"
         original = user.read_text()
-        user.write_text(original.replace("context_json", "typo_context"))
+        user.write_text(original.replace("question_json", "typo_context"))
         self.assertRaisesRegex(ValueError, "unknown prompt placeholder", PromptTemplates().render, "R1", {})
         user.write_text('{"action":"R1"}')
-        self.assertRaisesRegex(ValueError, "preserve action", PromptTemplates().render, "R1", {})
+        self.assertRaisesRegex(ValueError, "missing slot", PromptTemplates().render, "R1", {})
         user.unlink()
         self.assertRaises(FileNotFoundError, PromptTemplates().render, "R1", {})
         self.assertRaises(ValueError, PromptTemplates().render, "R2", {})

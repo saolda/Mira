@@ -92,7 +92,7 @@ class IntegrationTests(unittest.TestCase):
             proposal = draft(); proposal["findings"][0]["evidence_ids"] = [result["results"][0]["id"]]
             llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"memories": [proposal], "no_finding_reason": None}])
             r = Research(root, llm, {"arxiv": ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM))})
-            r.initialize("What does this abstract claim?", ["arxiv"])
+            r.initialize("What does this abstract claim?", ["arxiv"], context_budget=12000)
             with patch("time.sleep"):
                 for _ in range(3): self.assertEqual(r.step()["status"], "committed")
             self.assertNotIn("raw_api_response", llm.requests[-1])

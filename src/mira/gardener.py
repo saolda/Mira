@@ -12,7 +12,7 @@ SYNTHESIS_FINDING = {"label": "nonempty string", "proposition": "nonempty string
 def context(state, memories, equations, identity, inputs):
     n = state["nodes"][identity]
     equation_ids = {u.fields["Equation"] for m in inputs for u in m.units if u.kind == "equation"}
-    return {"root_question": state["nodes"][state["root_id"]]["question"], "node": n,
+    return {"root_question": state["nodes"][state["root_id"]]["question"], "node": n, "question": n["question"],
             "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, identity)],
             "input_memories": [{"id": m.id, "markdown": render(m)} for m in inputs],
             "equations": [asdict(e) for e in equations if e.id in equation_ids]}

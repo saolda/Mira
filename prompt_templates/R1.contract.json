@@ -1,5 +1,19 @@
 {
-  "keywords": [
-    "one or more nonempty search terms"
-  ]
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "keywords"
+  ],
+  "additionalProperties": false
 }

@@ -1,5 +1,6 @@
 """State-driven controller: one selected action, at most one model call per step."""
 from copy import deepcopy
+from dataclasses import asdict
 from collections import Counter
 import uuid
 
@@ -35,12 +36,28 @@ class Research:
             state = loads(self.store._files()["research/state.json"])
             return tree.metrics(state)
 
-    def _context(self, state, memories, node_id):
+    def _context(self, state, memories, equations, files, node_id):
         n = state["nodes"][node_id]
-        return {"root_question": state["nodes"][state["root_id"]]["question"], "node": deepcopy(n),
+        linked = [m for m in memories if m.id in n["memory_ids"]]
+        equation_ids = {u.fields["Equation"] for m in linked for u in m.units if u.kind == "equation"}
+        strategy = deepcopy(state["strategies"][state["strategy_index"]])
+        searches = []
+        for path, raw in files.items():
+            if path.startswith("research/results/"):
+                result = loads(raw)
+                if result.get("node_id") == node_id:
+                    searches.append({key: value for key, value in result.items() if key != "raw_api_response"})
+        searches.sort(key=lambda item: (item.get("timestamp", ""), item.get("reference", "")))
+        history = [{key: value for key, value in result.items() if key != "results"} for result in searches]
+        return {"root_question": state["nodes"][state["root_id"]]["question"], "question": n["question"],
+                "node": deepcopy(n),
                 "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, node_id)],
-                "linked_memories": [{"id": m.id, "markdown": render(m)} for m in memories if m.id in n["memory_ids"]],
-                "children": [deepcopy(state["nodes"][i]) for i in n["child_ids"]]}
+                "linked_memories": [{"id": m.id, "markdown": render(m)} for m in linked],
+                "children": [deepcopy(state["nodes"][i]) for i in n["child_ids"]],
+                "strategy": strategy,
+                "next_database": strategy["databases"][n["next_database_index"]] if n["next_database_index"] < len(strategy["databases"]) else None,
+                "search_history": history,
+                "equations": [asdict(e) for e in equations if e.id in equation_ids]}, searches
 
     def _unresolved(self, files):
         committed = {loads(t).get("interaction_id") for p, t in files.items() if p.startswith("events/")}
@@ -96,7 +113,7 @@ class Research:
         memories.append(memory); state["nodes"][node_id]["memory_ids"].append(identity)
         return identity
 
-    def _research(self, state, memories, ledger, files, event):
+    def _research(self, state, memories, equations, ledger, files, event):
         identity = state["active_node_id"]; n = state["nodes"][identity]
         before_nodes = set(state["nodes"])
         databases = state["strategies"][state["strategy_index"]]["databases"]
@@ -124,12 +141,14 @@ class Research:
             n["next_database_index"] += 1
             if evidence["status"] == "ok": n["pending_results"] = evidence_ref
         else:
-            context = self._context(state, memories, identity)
+            context, searches = self._context(state, memories, equations, files, identity)
             evidence = None
             if action == "R3":
                 evidence = loads(files[n["pending_results"]])
                 context["search_evidence"] = {key: value for key, value in evidence.items() if key != "raw_api_response"}
                 event["evidence_ref"] = n["pending_results"]
+            elif action == "R4":
+                context["search_evidence"] = searches
             value = self._model(event, action, context, state)
             decisions.validate(action, value, evidence)
             if action == "R1": n["keywords"] = value["keywords"]
@@ -195,7 +214,7 @@ class Research:
                 elif state["research_cycles_since_synthesis"] >= state["synthesis_interval"]:
                     success = self._synthesis(state, memories, equations, ledger, event)
                 else:
-                    extras, success = self._research(state, memories, ledger, files, event)
+                    extras, success = self._research(state, memories, equations, ledger, files, event)
                 tree.refresh(state, memories)
                 event["tree"] = deepcopy(state["nodes"])
                 if state["active_node_id"] is None and state["terminal_event"] is None:

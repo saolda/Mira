@@ -221,6 +221,12 @@ class Inspector:
             "input_source": source, "serialized_request": serialized, "inputs": inputs,
             "prompt_template": template, "template_verification": template_check,
             "filled_prompt_messages": messages,
+            "task_instructions": {key: structured.get(key) for key in
+                ("task", "instructions", "information_rules", "output_requirements")},
+            "prompt_slots": [{"name": key, "value": value,
+                "status": "Explicit null" if value is None else
+                          "Empty collection" if value == [] or value == {} else "Supplied"}
+                for key, value in context.items()] if "context" in structured else None,
             "structured_context": context if "context" in structured else None,
             "model": payload.get("model") if payload else None,
             "generation_settings": {k: v for k, v in payload.items() if k not in {"model", "messages"}} if payload else None,

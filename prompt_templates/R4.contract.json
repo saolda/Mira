@@ -1,8 +1,113 @@
 {
-  "children": [
-    "contributing child question for split decisions only"
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "enum": [
+        "kill",
+        "exhaust",
+        "retry",
+        "retry_split",
+        "exhaust_split"
+      ]
+    },
+    "keywords": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?=.*\\S)[^\\r\\n]+$"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  },
+  "required": [
+    "decision",
+    "keywords",
+    "children",
+    "rationale"
   ],
-  "decision": "kill|exhaust|retry|retry_split|exhaust_split",
-  "keywords": "nonempty string list for retry decisions, else null",
-  "rationale": "nonempty string"
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "retry",
+              "retry_split"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "keywords": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "retry_split",
+              "exhaust_split"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "children": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "children": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
 }

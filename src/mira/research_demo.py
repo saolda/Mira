@@ -46,9 +46,10 @@ class DemoLLM(ScriptedLLM):
 def demonstrate(root, *, max_cycles=50):
     llm = DemoLLM()
     r = Research(root, llm, {"fixture": FixtureSearch([evidence() for _ in range(4)])})
-    # Research finishes first so context descent demonstrates leaf-to-root synthesis.
+    # Explicit fixture budget fits complete research prompts and forces synthesis
+    # descent through all three levels. The runtime default remains configurable.
     r.initialize("What can the fictional heat-barrier fixture tell us?", ["fixture"], synthesis_interval=100,
-                 context_budget=8192, output_reserve=2048)
+                 context_budget=11500, output_reserve=2048)
     outcome = r.run(max_cycles)
     return {"status": outcome["status"], "metrics": r.inspect(), "model_calls": len(llm.requests),
             "knowledge": r.knowledge.validate(), "root": str(r.store.root)}

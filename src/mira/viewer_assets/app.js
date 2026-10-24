@@ -38,6 +38,10 @@ async function select(i){if(i<0||i>=timeline.length)return;selected=i;const seq=
   for(const file of data.prompt_template.files||[]){const d=el('details');d.append(el('summary',file.path+' · '+file.sha256),el('pre',file.source));templateSection.append(d);}
   templateSection.append(jsonView(data.prompt_template.bindings,'Values inserted into the templates',false));
  }else absent(templateSection,'This historical call predates template snapshots. Its actual filled messages remain available below. Current template files are not substituted.');
+ showJSON('State task and exact output instructions',data.task_instructions,'Extracted from the actual saved user message. Null fields were not supplied in this call.');
+ const slots=section('Filled information slots','Only fields in the saved request are listed. Explicit null means no value; an empty collection is distinct. Absent fields are not added.');
+ if(data.prompt_slots===null||!data.prompt_slots?.length)absent(slots,'No structured context slots were recorded.');
+ else for(const slot of data.prompt_slots)slots.append(jsonView(slot.value,slot.name+' · '+slot.status));
  messages('Filled system template — exact sent text',input.system_messages);messages('Filled developer template — exact sent text',input.developer_messages);messages('Filled user template — exact sent text',input.user_messages);
  showJSON('Structured context actually supplied',data.structured_context);
  memoryList('Existing memories actually supplied',input.existing_memories,'Complete recorded contents. No additional corpus memories are inserted here.');

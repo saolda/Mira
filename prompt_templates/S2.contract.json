@@ -1,15 +1,68 @@
 {
-  "findings": [
-    {
-      "explanation": "nonempty string",
-      "label": "nonempty string",
-      "proposition": "nonempty string",
-      "provenance": "nonempty string",
-      "source_findings": [
-        "complete input finding IDs, e.g. r1#f1"
-      ]
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?=.*\\S)[^\\r\\n]+$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?=.*\\S)[^\\r\\n]+$"
+          },
+          "proposition": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "provenance": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "source_findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[rs][1-9a-z][0-9a-z]*#f[1-9a-z][0-9a-z]*$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "label",
+          "proposition",
+          "explanation",
+          "provenance",
+          "source_findings"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
     }
+  },
+  "required": [
+    "title",
+    "summary",
+    "findings"
   ],
-  "summary": "nonempty string",
-  "title": "nonempty string"
+  "additionalProperties": false
 }

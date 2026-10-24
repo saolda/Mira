@@ -96,8 +96,9 @@ PYTHONPATH=src python3 -m mira --live --root memory/research/fixture-demo integr
 ```
 
 The recorded run is in `examples/full_research_transcript.md` and
-`examples/concise_research_transcript.md` beside this document. It uses the 8192 /
-2048 default budget, and intentionally sets the research interval to 100 so that
+`examples/concise_research_transcript.md` beside this document. The original
+exported sample used the 8192 / 2048 default budget. Current complete state prompts use an explicit 11500 / 2048 fixture budget (defaults
+remain unchanged). The demo intentionally sets the research interval to 100 so that
 all branches are researched before final draining. The separate cadence test
 verifies the default five. Decisions and evidence are deterministic; timestamps,
 run/operation UUIDs and directory names vary.
