@@ -1,4 +1,4 @@
-"""Small knowledge API. Mutations validate and commit one complete snapshot."""
+"""Knowledge API shared by snapshot and journaled live persistence."""
 from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict
@@ -10,9 +10,28 @@ from .store import ConflictError, SnapshotStore
 
 
 class Knowledge:
-    def __init__(self, root="knowledge", embedding=None):
-        self.store = SnapshotStore(root)
+    def __init__(self, root="knowledge", embedding=None, *, store=None):
+        self.store = store if store is not None else SnapshotStore(root)
         self.directory = SemanticDirectory(self.store, embedding)
+
+    def transaction(self, operation, *, files=None, operation_type="knowledge",
+                    context=None, expected_revision=None, fault=None):
+        """Commit a validated batch through the live store.
+
+        operation mutates the existing Memory/Equation lists and identity ledger.
+        files contains JSON text for state/results/events, committed in the same
+        operation. The callback runs under the writer lock; it must not call back
+        into Knowledge. Returns only after the durable commit marker.
+        """
+        require(getattr(self.store, "live", False), "batch transaction requires live store")
+        with self.store.lock():
+            revision, memories, equations, ledger = self.store.read()
+            if expected_revision is not None and revision != expected_revision:
+                raise ConflictError("live transaction revision changed")
+            result = operation(memories, equations, ledger)
+            self.store.publish(memories, equations, ledger, revision, fault,
+                               files=files, operation_type=operation_type, context=context)
+            return deepcopy(result)
 
     def _mutate(self, operation, fault=None):
         with self.store.lock():

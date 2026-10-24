@@ -38,6 +38,8 @@ class SemanticDirectory:
         return self.backend.identity if self.backend else "none"
 
     def rebuild_locked(self, snapshot=None):
+        # The first tuple member is an opaque canonical revision: a Phase 1
+        # generation ID or a live content digest. Keep the legacy SQLite key.
         generation, documents, equations, _ = snapshot or self.store.read()
         docs, _, _, edges = validate_corpus(documents, equations)
         rows = records(documents, equations)
@@ -130,9 +132,10 @@ class SemanticDirectory:
             sql += " ORDER BY score,u.id LIMIT ?"
             return self._query(lambda db: [dict(row) for row in db.execute(sql, [*params, limit])])
         require(self.backend is not None, "configure an embedding backend for vector search")
-        vector = self.backend.embed([query], query=True)
-        validate_vectors(vector, 1)
         def ranked(db):
+            # Validate canonical/recovery state in _query before contacting a model.
+            vector = self.backend.embed([query], query=True)
+            validate_vectors(vector, 1)
             rows = db.execute("SELECT * FROM units" + (" WHERE type=?" if type else ""), (type,) if type else ())
             results = []
             for row in rows:

@@ -1,6 +1,10 @@
 # Mira 2: Increment 1 investigation and approval proposal
 
-Status: proposed, 24 October 2026. No controller or persistence changes implemented.
+Status: approved by the owner on 24 October 2026, with two clarifications:
+killed nodes may contribute existing memories but only exhausted nodes qualify
+for the 1000-point terminal bonus; 8192 context tokens and 2048 output tokens are
+configurable initial defaults. Increment 2a is authorized; Increment 2b awaits
+persistence and crash-recovery review. See `live_persistence.md` for the 2a result.
 
 ## Verified baseline
 
