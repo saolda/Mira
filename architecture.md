@@ -7,7 +7,7 @@
 
 Mira researches an overarching question, develops expertise, and presents human-readable research. Mira 2 begins with an empty corpus.
 
-A **memory** is a structured Markdown document stored in `memories/`, with a stable document ID (e.g. `r2f`, `s4`). Findings use `[#f1]` / `r2f#f1`; questions `[#q1]`; equations `[#e1]` with external JSON IDs such as `e_r2f_1`; images `[#i1]` with stable asset IDs such as `i_r2f_1` and a separate file extension. Findings record proposition, explanation, provenance, kind and evidence status. A terminal `## Relationships` JSON section records outgoing edges; incoming edges are derived. A rebuildable knowledge index supports exact, full-text, semantic and relationship retrieval.
+A **memory** is a structured Markdown document stored directly in `memories/`, with a stable document ID (e.g. `r2f`, `s4`). Findings use `[#f1]` / `r2f#f1`; questions `[#q1]`; equations `[#e1]` with external JSON IDs such as `e_r2f_1`; images `[#i1]` with stable asset IDs such as `i_r2f_1` and a separate file extension. Findings record proposition, explanation, provenance, kind and evidence status. A terminal `## Relationships` JSON section records outgoing edges; incoming edges are derived. A rebuildable knowledge index supports exact, full-text, semantic and relationship retrieval.
 
 ## 2. Research strategies
 
@@ -37,6 +37,7 @@ The core state is a tree of research questions/objectives. The initial tree cont
   "research_cycles_since_synthesis": 0,
   "synthesis_interval": 5,
   "priority_max": 10,
+  "terminal_synthesis_bonus": 1000,
   "nodes": {
     "q1": {
       "parent_id": null,
@@ -93,7 +94,7 @@ else:
 
 New child nodes start living with **priority 0**; the initial root starts at 10. Inactive living nodes accrue priority up to the maximum. This discourages immediate repeated descent into newly created branches but does not mathematically guarantee a balanced tree. Track maximum depth and the distribution of living nodes by depth; consider corrective tree-tending rules if imbalance emerges.
 
-The active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
+When selecting a new active node, ties are broken by **oldest node creation order** (stable node ID order only if IDs encode creation order). If no living nodes remain, log a detailed terminal event with the root question, node-status totals, unsynthesized counts and pending work before stopping research. Synthesis may continue as needed to finish the tree; a no-living-node event is unusual and must not silently terminate the process.\n\nThe active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
 
 ## 5. Research cycle
 
@@ -120,7 +121,7 @@ An empty search is recorded as an unsuccessful result and does not require an R3
 
 Synthesis has its **own priority-ordered candidate list**. Each research cycle recomputes the affected node's synthesis score and candidate position. Changes to memories, node status, or children also update affected ancestor counts and candidate scores up to the root.
 
-An exhausted node with no living descendants and sufficient unconsumed material is given preferential synthesis priority. The exact score, minimum-material threshold and context budget are configurable design parameters still to be fixed.
+An exhausted node with no living descendants and sufficient unconsumed material is given preferential synthesis priority. Use `synthesis_score = unsynthesized_memory_count + terminal_bonus`, where `terminal_bonus = 1000` only for an **exhausted** node with zero living descendants and at least two eligible unsynthesized input memories. The 1000 bonus is intentionally large: monitor whether terminal nodes actually dominate the candidate list and revisit the value if not. **Completed nodes are excluded** from synthesis candidates regardless of their unsynthesized count. Context budget and candidate tie-breaking remain configurable decisions.
 
 ### 6.1 Synthesis states
 
@@ -133,7 +134,7 @@ An exhausted node with no living descendants and sufficient unconsumed material 
 
 ```python
 candidate = synthesis_candidates.top()
-if candidate is None or candidate.unsynthesized_memory_count == 0:
+if candidate is None or candidate.unsynthesized_memory_count < 2:
     log_synthesis_no_candidate()
     return
 
@@ -146,7 +147,7 @@ while estimated_frontier_tokens(node) > context_budget:
 
 inputs = choose_unsynthesized_memories(node, context_budget)
 # If even the node's own inputs exceed budget, choose a bounded batch.
-if not inputs:
+if len(inputs) < 2:
     log_synthesis_no_fitting_inputs(node)
     return
 
@@ -157,16 +158,16 @@ proposal = llm_synthesize(question=node.question,
 commit_synthesis_memory_and_consumption_marks(proposal, inputs, node)
 update_counts_and_candidate_scores_up_to_root(node)
 if node.status == "exhausted" and no_living_descendants(node) \
-   and final_synthesis_is_current(node):
+   and node.unsynthesized_memory_count <= 1:
     node.status = "complete"
     update_counts_and_candidate_scores_up_to_root(node)
 ```
 
 `choose_unsynthesized_memories` selects research memories not yet consumed **and** synthesis memories not yet consumed, without also including memories already represented by those syntheses. This avoids counting the same source twice. A synthesis memory can subsequently be consumed by a higher-level synthesis. The operation records exactly which input memory IDs contributed.
 
-A context budget must be checked using estimated tokens, not memory counts alone. If a subtree is too large, descend; if one node's own material is too large, synthesize a bounded batch. A synthesis is committed together with its input-consumption marks, or neither is committed.
+A context budget must be checked using estimated tokens, not memory counts alone. The input selector must never choose fewer than two inputs; if the context budget cannot accommodate two, log an explicit blocked-synthesis condition. If a subtree is too large, descend; if one node's own material is too large, synthesize a bounded batch. A synthesis is committed together with its input-consumption marks, or neither is committed.
 
-An exhausted node becomes `complete` when it has no living descendants and its available inputs have been consolidated into a current final synthesis (or it has no useful material to synthesize). Its final synthesis memory remains unsynthesized so its parent can consume it. Therefore a nonzero `unsynthesized_memory_count` does **not** by itself prevent completion. Completing a node can make its parent's synthesis more urgent. Completion handling for nodes with no useful memories must not require an LLM pass.
+A synthesis requires **at least two distinct unsynthesized input memories**; never synthesize a single memory into another memory. An exhausted node with no living descendants becomes `complete` when its subtree contains **zero or one** unsynthesized memory. The remaining memory, if any, is its final result and remains available for synthesis by an ancestor. A node with multiple inputs must be reduced to at most one through one or more bounded synthesis batches before completion. Its final synthesis memory remains unsynthesized so its parent can consume it. Therefore a nonzero `unsynthesized_memory_count` does **not** by itself prevent completion. Completing a node can make its parent's synthesis more urgent. Completion handling for nodes with no useful memories must not require an LLM pass.
 
 ### 6.3 Ancestor aggregates
 
@@ -189,8 +190,24 @@ This traverses **O(tree height)** ancestors, not necessarily O(log n): the resea
 
 ## 7. Persistence and design boundaries
 
-State changes, new memories, and consumption marks must be durably committed with recovery semantics; a failed synthesis must not mark its inputs consumed. Canonical knowledge is authoritative; derived indexes can be rebuilt.
+### 7.1 Canonical storage and recovery
 
-The following remain **undecided**: node-health/repair rules, synthesis scoring formula and minimum threshold, child-selection and batch-ordering policy, exact LLM prompts and JSON outputs, tie-breaking, context-budget reserve, completion of empty branches, exact final-synthesis currency test, tree-imbalance thresholds and repairs, and atomic persistence protocol. These are design tasks, not implied implementation details.
+Use a **simple live memory directory**, not copy-on-write generations or whole-corpus snapshots. The authoritative corpus is `memories/*.md`, plus canonical equation JSON assets and a persistent research-tree state file. Do not adopt the Phase 1 `knowledge/CURRENT` and `knowledge/generations/` snapshot layout for the new autonomous corpus. Retain stable IDs, human-readable documents and rebuildable indexes.
+
+Synthesis touches several files: its new synthesis memory, the `synthesized_by` metadata of each input memory, and node/state counts. Ordinary single-file atomic replacement is insufficient to make all of those changes atomic. Therefore every multi-file mutation must have a **small operation journal** recording a unique operation ID, operation type, affected IDs, expected preconditions, intended changes, and progress. Write and durably publish the journal **before** changing canonical files. Use temporary files plus atomic replacement for each individual document; publish completion only after all affected documents and state are consistent. Journal entries are small descriptions of operations, not full copies of the entire corpus.
+
+On startup after an unclean exit, **pause autonomous actions and perform crash-recovery assessment**: inspect incomplete journal entries, compare actual files and metadata to intended changes, validate references, and report whether the operation is complete, safely finishable, safely reversible, or ambiguous. A small CLI recovery tool should expose `inspect`, `validate`, and `repair` capabilities, with a dry-run default and explicit confirmation for changes. Never silently guess or discard ambiguous research. Successful operations must be idempotently recognisable so replay does not duplicate memories or synthesis.
+
+The exact journal file format and durability mechanism are implementation contracts for Codex to propose and test; the above recovery behaviour is mandatory. No routine full-corpus snapshots are required. External backups remain a separate concern.
+
+SQLite/FTS/vector/relationship indexes remain **derived, rebuildable** aids to retrieval, not authoritative knowledge. Reuse appropriate search-database adapters or source definitions from the local read-only `../autonomous_ai` reference, subject to review; these external research databases are distinct from Mira's local SQLite retrieval index.
+
+### 7.2 Monitoring and scope
+
+Track maximum tree depth, living-node totals, nodes by depth, child counts, synthesis-score distribution, and whether exhausted terminal nodes actually receive prompt synthesis. Provide a basic read-only project-state viewer, taking inspiration from the historical `autonomous_ai` brain viewer, without making it a prerequisite for the first controller tests.
+
+Equations retain the existing first-class JSON/anchor model. Image references may be collected with provenance; automatic image generation and project-specific presentation generation are deferred. The core memory format stays uniform across projects; `ProjectOverview.md` describes separate presentation layers.
+
+The following remain **undecided**: node-health/repair rules, child-selection and bounded batch-ordering policy, exact LLM prompts and JSON outputs, synthesis-candidate tie-breaking, context-budget reserve, tree-imbalance thresholds and repairs, and exact journal/recovery protocol. Codex must surface design choices before implementing consequential changes. These are design tasks, not implied implementation details.
 
 This document supersedes previous fixed-stage cycle proposals and previous synthesis proposals, including a separate synthesis process. Implementation notes may be created separately after these contracts are settled.
