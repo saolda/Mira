@@ -60,6 +60,11 @@ def decode(files):
         require(int(doc.id[1:], 36) < ledger[doc.id[0]], "document allocator would reuse ID")
     validate_corpus(documents, equations)
     validate_lineage(documents)
+    if "research/state.json" in files:
+        state = loads(files["research/state.json"])
+        if state.get("mira_research") == 1:
+            from .research_tree import validate
+            validate(state, documents, files)
     return documents, equations, ledger
 
 
