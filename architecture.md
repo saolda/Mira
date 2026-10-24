@@ -91,7 +91,9 @@ else:
     research_cycles_since_synthesis += 1
 ```
 
-New child nodes start living with **priority 0**; the initial root starts at 10. Inactive living nodes accrue priority up to the maximum. This discourages immediate repeated descent into newly created branches but does not mathematically guarantee a balanced tree. Track maximum depth and the distribution of living nodes by depth; consider corrective tree-tending rules if imbalance emerges.\n\nThe active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
+New child nodes start living with **priority 0**; the initial root starts at 10. Inactive living nodes accrue priority up to the maximum. This discourages immediate repeated descent into newly created branches but does not mathematically guarantee a balanced tree. Track maximum depth and the distribution of living nodes by depth; consider corrective tree-tending rules if imbalance emerges.
+
+The active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
 
 ## 5. Research cycle
 
@@ -173,7 +175,13 @@ For a mutation at node `n`:
 ```python
 apply_local_mutation(n)
 while n is not None:
-    n.unsynthesized_memory_count = local_unsynthesized_count(n) + sum(\n        child.unsynthesized_memory_count for child in children(n))\n    n.living_descendant_count = sum(\n        int(child.status == 'living') + child.living_descendant_count\n        for child in children(n))\n    n.synthesis_score = score_synthesis_candidate(n)\n    update_synthesis_candidate(n)
+    n.unsynthesized_memory_count = local_unsynthesized_count(n) + sum(
+        child.unsynthesized_memory_count for child in children(n))
+    n.living_descendant_count = sum(
+        int(child.status == 'living') + child.living_descendant_count
+        for child in children(n))
+    n.synthesis_score = score_synthesis_candidate(n)
+    update_synthesis_candidate(n)
     n = parent(n)
 ```
 
