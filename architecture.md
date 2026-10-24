@@ -155,12 +155,12 @@ proposal = llm_synthesize(question=node.question,
 commit_synthesis_memory_and_consumption_marks(proposal, inputs, node)
 update_counts_and_candidate_scores_up_to_root(node)
 if node.status == "exhausted" and no_living_descendants(node) \
-   and no_unconsumed_inputs(node):
+   and final_synthesis_is_current(node):
     node.status = "complete"
     update_counts_and_candidate_scores_up_to_root(node)
 ```
 
-`choose_unconsumed_frontier_memories` selects research memories not yet consumed **and** synthesis memories not yet consumed, without also including memories already represented by those syntheses. This avoids counting the same source twice. A synthesis memory can subsequently be consumed by a higher-level synthesis. The operation records exactly which input memory IDs contributed.
+`choose_unsynthesized_memories` selects research memories not yet consumed **and** synthesis memories not yet consumed, without also including memories already represented by those syntheses. This avoids counting the same source twice. A synthesis memory can subsequently be consumed by a higher-level synthesis. The operation records exactly which input memory IDs contributed.
 
 A context budget must be checked using estimated tokens, not memory counts alone. If a subtree is too large, descend; if one node's own material is too large, synthesize a bounded batch. A synthesis is committed together with its input-consumption marks, or neither is committed.
 
