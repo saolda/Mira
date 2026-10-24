@@ -1,146 +1,72 @@
 # Mira Architecture
 
-**Status:** Draft 0.2 for review  
+**Status:** Working outline, 24 October 2026  
 **Project:** Mira  
-**Reference implementation:** `../autonomous_ai`
+**Historical reference implementation:** local `../autonomous_ai` (read-only)
 
-## 1. Purpose and boundaries
+## 1. Purpose
 
-Mira is a locally operated autonomous research system that investigates questions, builds evidence-grounded findings, discovers relationships, tests hypotheses, synthesizes knowledge, and identifies useful next questions. The new system starts with an **empty research corpus**. The old `autonomous_ai` repository is a read-only design reference, not a compatibility requirement.
+Mira autonomously researches questions, develops expertise in the selected topic, and presents its research in human-readable form. Research may produce findings, syntheses, questions, equations, illustrations, and relationships between knowledge units.
 
-Mira's canonical knowledge is human-readable and inspectable independently of an LLM. Deterministic software handles identities, retrieval, validation, scheduling, persistence and recovery. LLMs handle interpretation, research planning, inference and semantic judgments.
+Mira 2 begins with an empty research corpus. The old local `autonomous_ai` project is a reference, not a compatibility requirement.
 
-## 2. Canonical storage and identity
+## 2. Research objectives and state
 
-- Research and synthesis memories are structured Markdown documents with stable short IDs, e.g. `r2f.md`, `s4.md`.
-- A document title may change without changing its identity. IDs are never reused.
-- The primary knowledge unit is a **finding**, anchored `[#f1]` and globally referenced as `r2f#f1`.
-- **Questions** are anchored `[#q1]`, globally `r2f#q1`. An independent research goal may refer to a question; the question's identity remains with its originating document.
-- **Equations** use local Markdown shorthand `[#e1]` and an external canonical JSON definition with a globally stable ID such as `e_r2f_1`. The embedded document ID denotes origin, not an exclusive future location.
-- Future candidate unit types: definitions, algorithms, datasets, and experimental results. Do not implement until a concrete need justifies them.
-- Material revisions, splits, merges, retirement, and relocation require explicit identity and reference-preservation rules. Do not silently reuse or repurpose IDs.
+The core state object is a **hierarchical tree of research questions/objectives**.
 
-## 3. Standard finding format
+- Each node represents a research question or objective.
+- Individual research memories are linked to nodes in this tree.
+- The system has an **active node**.
+- The state of the tree and active node determines what action the system takes next.
+- When the tree is **unhealthy**, an LLM action tends or repairs it, potentially by splitting a node/question into subnodes/questions.
+- When the tree is **healthy**, the next action depends on the state of the active node.
 
-A finding separates **proposition**, **explanation**, and **provenance**.
+The exact node fields, tree-health rules, active-node states, and action-selection algorithm are **not yet designed**. They must be specified as concrete data structures and deterministic algorithms before implementation.
 
-```markdown
-[#f2] Attention-only architectures enable training parallelism
+## 3. Execution model
 
-**Kind:** Inference
-**Evidence status:** Supported
+Each execution cycle consists of:
 
-**Proposition:** Removing recurrent sequence dependencies enables
-greater parallelism during training.
+1. Read the persistent state object.
+2. **Deterministically** select an action from that state.
+3. Execute the action. It may be a deterministic operation or an LLM pass.
+4. Apply the action's result to the state object and persist it.
 
-**Explanation:** The conclusion follows from the architecture's
-lack of recurrent processing across sequence positions. This does
-not imply that attention is free of computational or memory costs.
+**At most one LLM pass per cycle.**
 
-**Provenance:** Inferred from the cited architecture description
-and the earlier finding on recurrent dependencies. See outgoing
-relationships below for canonical references.
-```
+Potential actions include online retrieval, research-memory creation, knowledge synthesis, and goal-tree tending. This is a candidate set, not an approved action registry. Each action will require an explicit input schema, algorithm or LLM prompt, output schema, and state-update rules.
 
-The proposition is short and independently intelligible. Explanation records reasoning, assumptions, qualifications, and scope. Provenance describes how the finding was reached **without duplicating canonical citations or relationship records**. The outgoing relationship JSON identifies the actual premises, findings, equations and external sources.
+There is **no fixed multi-stage research cycle**. The earlier SELECT/REVIEW/PLAN/ACT/INTERPRET/COMMIT/UPDATE GOALS sequence is superseded.
 
-A simple observation may have a short explanation; a complex inference may require substantial prose. Relationship JSON need not encode the detailed logical nuances of `A + B + C ⇒ X`; the prose does that.
+## 4. Knowledge representation
 
-Initial kinds: observation, claim, inference, hypothesis, synthesis. Kind and evidence status are separate concepts. Evidence-status vocabulary is not yet final.
+Canonical research and synthesis memories are human-readable structured Markdown, with stable document IDs such as `r2f` and `s4`.
 
-## 4. Relationships
+- **Findings:** local `[#f1]`, global `r2f#f1`. Each finding contains a proposition, explanation, and provenance, with kind and evidence status.
+- **Questions:** local `[#q1]`, global `r2f#q1`. A question may be linked to a research-objective node without changing its identity.
+- **Equations:** local `[#e1]`, external JSON identity such as `e_r2f_1`.
+- **Images/illustrations:** local `[#i1]`; proposed global asset identity `i_r2f_1`, stored as e.g. `i_r2f_1.jpg`. The file extension is not part of the stable logical identity. Images require source and attribution metadata; precise schema remains to be designed.
 
-Every Markdown memory has a terminal `## Relationships` section containing structured JSON for **outgoing** relationships only. No `[#s]` source unit exists: external source references belong in the relationship JSON. Incoming relationships are resolved through a derived relationship index.
+Each Markdown memory has a terminal `## Relationships` section containing canonical **outgoing** relationship JSON. Incoming relationships are derived. External sources are referenced in relationships, without separate `[#s]` units.
 
-Illustrative schema, not yet frozen:
+## 5. Retrieval and persistence
 
-```json
-{
-  "version": 1,
-  "relationships": [
-    {"from": "f2", "type": "BUILDS_ON", "to": "r1a#f3", "status": "proposed"},
-    {"from": "f2", "type": "CITES", "to": "https://arxiv.org/abs/1706.03762", "status": "unverified"}
-  ]
-}
-```
+The knowledge directory indexes individual findings/questions and document summaries. Retrieval supports stable-ID lookup, full-text search, vector similarity, and relationship traversal. Similarity alone is not evidence of a semantic relationship.
 
-Candidate relationship types: `CITES`, `SUPPORTS`, `CONTRADICTS`, `QUALIFIES`, `DEPENDS_ON`, `BUILDS_ON`, `SYNTHESIZES`, `RELATED_TO`, `INFLUENCED_BY`. Their meanings, direction, evidence requirements and allowed endpoint types must be specified before implementation. Descriptive provenance and evidential support require different standards. An inferred relationship begins as a proposal and must not silently become verified.
+Canonical Markdown and external JSON are authoritative. SQLite and vector indexes are rebuildable derived data.
 
-A relationship is canonical only in the originating document. A derived SQLite database indexes incoming and outgoing edges, validity, type and status. It must be completely rebuildable from canonical files.
+The state object must be persisted so execution can resume after interruption. Exact persistence and recovery algorithms, including handling actions with external effects, remain to be designed.
 
-## 5. Equations and questions
+## 6. Design method and next work
 
-Equation definitions are external JSON objects recording the expression, variables, units where relevant, assumptions, provenance and revision. Markdown uses a local anchor; other documents may reference the stable global equation ID. Equation equivalence, revision and reuse rules remain to be designed.
+Specify **data structures first**, with only fields actually needed by the algorithms. Then specify deterministic action-selection rules and each action's exact inputs, operations, outputs, and state changes. For LLM actions, include the complete prompt and supplied context.
 
-Questions are first-class units with a lifecycle such as open, partially answered, answered or superseded (exact states TBD). Goals are managed independently but can refer to `r2f#q1`. Goal management must not change or take ownership of the question's identity.
+Next design tasks:
 
-## 6. SemanticDirectory and retrieval
+1. Define the research-objective tree and active-node data structures.
+2. Define measurable tree-health conditions.
+3. Define deterministic action selection from state.
+4. Define the action contracts, one at a time.
+5. Define durable state updates and recovery.
 
-The redesigned `SemanticDirectory` indexes **individual knowledge units**, not just memory titles and summaries. A unit record includes stable ID, type, parent document, label, proposition or searchable content, revision and embedding metadata. It may include carefully selected explanatory context, but should not substitute document titles for finding content.
-
-The directory also stores a **document-summary record** linked to the entire canonical document for broad discovery.
-
-Retrieval combines:
-1. Exact stable-ID lookup.
-2. Structured metadata and relationship queries.
-3. Full-text search.
-4. Vector similarity over unit content.
-5. Graph expansion to related units.
-
-The retrieval layer returns candidate IDs; the context assembler loads complete canonical content, provenance and relevant relationships before LLM judgment. Vector similarity does not establish support, contradiction or any other semantic edge. The vector backend is replaceable and its indexes are derived and rebuildable; embedding model/version metadata is retained.
-
-## 7. Evidence and reasoning
-
-Mira distinguishes source statements, observations, claims, inferences, hypotheses and syntheses. An accurate citation does not imply the cited claim is true. Provenance records whether a source was directly examined, indirectly cited or interpreted. Evidence status and uncertainty must be explicit where material.
-
-A finding may be concise: `A + B + C + D + E ⇒ X`. The proposition states `X`; outward relationships identify A through E; explanation prose describes **why** the premises warrant X and any qualifications. A flat graph is not required to represent a full formal derivation.
-
-Synthesis records outgoing `SYNTHESIZES` or other appropriate relationships to its inputs and must not silently promote uncertain premises to established conclusions.
-
-## 8. Autonomous cycle
-
-Proposed conceptual sequence:
-
-```text
-SELECT OBJECTIVE → RETRIEVE CONTEXT → ASSESS GAPS → PLAN
-→ RESEARCH / ACT → CONSTRUCT FINDINGS → DISCOVER RELATIONSHIPS
-→ VALIDATE → COMMIT → UPDATE GOALS → REFLECT → PAUSE / CONTINUE
-```
-
-Stages may be skipped for bounded task types, but the transition protocol must be explicit. Mira may investigate new questions, extend knowledge, verify uncertain claims, resolve contradictions or synthesize existing findings.
-
-**Construction-time relationships** are recorded while the evidence and inference are in context. **Retrospective discovery** retrieves existing units and proposes additional edges for review. The system must not depend on recovering all provenance after the fact.
-
-Plans and external actions have explicit permissions and budgets. The harness supports safe pause, interruption, shutdown, restart and recovery.
-
-## 9. LLM orchestration and validation
-
-The deterministic harness assembles relevant, bounded context before requesting LLM decisions. Requests specify objective, available evidence, permitted choices, output schema and abstention conditions.
-
-LLM responses are proposals. Structural problems (malformed JSON, missing fields, invalid IDs) receive deterministic validation and bounded repair. Semantic problems (unsupported inference, wrong relationship direction, disputed scope) require reconsideration, qualification, rejection or deferral, **not silent correction**. Multiple agreeing model calls do not constitute independent evidence.
-
-A semantic review evaluates evidence and reasoning using the actual retrieved passages, not only titles or similarity scores.
-
-## 10. Persistence, indexing and audit
-
-Canonical Markdown and external JSON are durable authority. SQLite relationship/full-text indexes and vector indexes are disposable derived state. Database rebuilds must be tested.
-
-Multi-file updates require staging, validation and crash-safe commit/recovery; a simple try/except rollback is insufficient. Identity allocation, goal transitions, research actions, validation decisions and commit results must be auditable. A cycle log records objective, retrieved context IDs, actions, proposed changes, accepted/rejected changes and committed state, without requiring exposure of private model reasoning.
-
-## 11. Implementation and review
-
-Development roles: the project owner decides scope and approves architecture; ChatGPT assists with design and independent review; Codex investigates, implements, tests and commits bounded approved changes. Consult `../autonomous_ai` for lessons and reusable components, not inherited architectural constraints.
-
-**First milestone:** a small manually inspectable knowledge network with research/synthesis documents, findings, questions, external equation JSON, outward relationships, incoming relationship lookup, unit-level and document-level retrieval, revision safety, validation, index rebuilding and interruption recovery. No autonomous research engine until this foundation is reviewed.
-
-## 12. Open design decisions
-
-- Exact Markdown and relationship JSON schemas.
-- Stable ID allocation, relocation, revision, split/merge and retirement semantics.
-- Evidence-status and question-state vocabularies.
-- Equation reuse, equivalence and revision.
-- External source canonicalization and passage-level provenance.
-- Retrieval ranking, embedding model and vector backend.
-- Multi-file transactional commit and recovery protocol.
-- Precise state transitions, goal policy and research budgets.
-- Human-adjudicated semantic evaluation and relationship admission criteria.
+Do not implement an autonomous controller from this outline; its operational contracts are not yet specified.
