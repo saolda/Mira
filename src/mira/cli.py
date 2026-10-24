@@ -5,6 +5,7 @@ from .api import Knowledge
 from .demo import demonstrate
 from .embeddings import NomicHTTPEmbedding, TestEmbedding
 from .live import LiveStore
+from . import research_cli
 
 
 def main():
@@ -17,6 +18,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("validate", "rebuild", "integrity", "summaries", "demo"):
         sub.add_parser(command)
+    research_cli.register(sub)
     recovery = sub.add_parser("recovery")
     recovery.add_argument("recovery_action", nargs="?", choices=["inspect", "validate", "repair"], default="inspect")
     recovery.add_argument("operation_id", nargs="?")
@@ -35,6 +37,10 @@ def main():
     edges.add_argument("--direction", choices=["incoming", "outgoing"], default="outgoing")
     edges.add_argument("--status", action="append")
     args = parser.parse_args()
+    if args.command in {"research-init", "research-run", "research-state", "transcript"}:
+        result = research_cli.execute(args)
+        print(result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False))
+        return
     if args.test_embedding and args.embedding_url:
         parser.error("choose one embedding backend")
     if args.embedding_url and not args.model_identity:
