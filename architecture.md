@@ -7,7 +7,7 @@
 
 Mira researches an overarching question, develops expertise, and presents human-readable research. Mira 2 begins with an empty corpus.
 
-Canonical research and synthesis memories are structured Markdown with stable document IDs (e.g. `r2f`, `s4`). Findings use `[#f1]` / `r2f#f1`; questions `[#q1]`; equations `[#e1]` with external JSON IDs such as `e_r2f_1`; images `[#i1]` with stable asset IDs such as `i_r2f_1` and a separate file extension. Findings record proposition, explanation, provenance, kind and evidence status. A terminal `## Relationships` JSON section records outgoing edges; incoming edges are derived. A rebuildable knowledge index supports exact, full-text, semantic and relationship retrieval.
+A **memory** is a structured Markdown document stored in `memories/`, with a stable document ID (e.g. `r2f`, `s4`). Findings use `[#f1]` / `r2f#f1`; questions `[#q1]`; equations `[#e1]` with external JSON IDs such as `e_r2f_1`; images `[#i1]` with stable asset IDs such as `i_r2f_1` and a separate file extension. Findings record proposition, explanation, provenance, kind and evidence status. A terminal `## Relationships` JSON section records outgoing edges; incoming edges are derived. A rebuildable knowledge index supports exact, full-text, semantic and relationship retrieval.
 
 ## 2. Research strategies
 
@@ -47,13 +47,10 @@ The core state is a tree of research questions/objectives. The initial tree cont
       "keywords": null,
       "next_database_index": 0,
       "pending_results": null,
-      "research_memory_ids": [],
-      "synthesis_memory_ids": [],
-      "subtree_counts": {
-        "unsynthesized_research": 0,
-        "unconsumed_synthesis": 0,
-        "living_descendants": 0
-      }
+      "memory_ids": [],
+      "unsynthesized_memory_count": 0,
+      "living_descendant_count": 0,
+      "synthesis_score": 0
     }
   },
   "living_priority_order": ["q1"],
@@ -63,21 +60,23 @@ The core state is a tree of research questions/objectives. The initial tree cont
 
 `status` is `living`, `exhausted`, `killed` or `complete`. `pending_results` is null or a durable search-result reference. The strategy index is global; `next_database_index` is per node and can reset after new keywords are chosen.
 
-A memory record also needs the following **synthesis bookkeeping**, separate from its canonical prose:
+### 3.1 Memory metadata and synthesis accounting
 
-```json
-{
-  "memory_id": "r2f",
-  "node_id": "q1",
-  "kind": "research",
-  "consumed_by_synthesis_id": null,
-  "estimated_context_tokens": 1800
-}
+There is **no separate memory-record object**. Each memory is one `.md` document in `memories/`; its document metadata identifies its originating tree node and synthesis lineage. Illustrative metadata for a synthesis memory:
+
+```yaml
+id: s4
+kind: synthesis
+node_id: q1
+synthesized_by: null
+source_memories: [r2f, s3]
 ```
 
-`kind` is `research` or `synthesis`. A research memory with non-null `consumed_by_synthesis_id` is a **synthesized research memory**. A synthesis memory with non-null `consumed_by_synthesis_id` is a **synthesized synthesis memory**. Both remain stored and retrievable. The field is set only after the consuming synthesis is committed.
+`kind` is `research` or `synthesis`. `source_memories` is populated for synthesis memories and lists the exact input memory IDs. `synthesized_by` is initially null; after a successful synthesis commit, each input memory receives the ID of the synthesis memory that consumed it. Thus a **synthesized research memory** and a **synthesized synthesis memory** are simply consumed memories of different kinds. Neither is deleted.
 
-`subtree_counts` aggregate the node and all descendants. `unsynthesized_research` counts research memories not yet consumed; `unconsumed_synthesis` counts synthesis memories not yet consumed. These are counts of distinct *frontier* memories, not all historical memories. A node's synthesis priority is derived from these counts and its completion status; the precise score formula is not yet fixed.
+`memory_ids` on a node links its directly associated documents. `unsynthesized_memory_count` counts **all unconsumed memories** at the node and throughout its descendants, regardless of kind. This is the subtree's synthesis-input frontier. When a synthesis consumes K inputs and creates one new synthesis memory, the relevant subtree count changes by `1 - K`. Only committed changes affect counts.
+
+`synthesis_score` is **separate** from `unsynthesized_memory_count`: the count measures available material; the score orders synthesis candidates and may include a completion bonus. The score formula and minimum eligible count are not yet specified. `living_descendant_count` counts living nodes below the node, excluding the node itself. These three values are updated along the ancestor chain after a relevant mutation.
 
 ## 4. Scheduling
 
@@ -92,7 +91,7 @@ else:
     research_cycles_since_synthesis += 1
 ```
 
-The active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
+New child nodes start living with **priority 0**; the initial root starts at 10. Inactive living nodes accrue priority up to the maximum. This discourages immediate repeated descent into newly created branches but does not mathematically guarantee a balanced tree. Track maximum depth and the distribution of living nodes by depth; consider corrective tree-tending rules if imbalance emerges.\n\nThe active research node receives a sustained turn. After each research cycle on it, its priority decreases by 1; every *other living* node gains 1, capped at `priority_max`. Only when the active node reaches 0 (or ceases to be living) is the highest-priority living node selected. A global priority offset may implement inactive-node increments without modifying every node. Tie-breaking remains to be specified.
 
 ## 5. Research cycle
 
@@ -117,7 +116,7 @@ An empty search is recorded as an unsuccessful result and does not require an R3
 
 ## 6. Synthesis gardener
 
-Synthesis has its **own priority-ordered candidate list**. Each research cycle updates the active node's synthesis score and candidate position. Changes to memories, node status, or children also update affected ancestor counts and candidate scores up to the root.
+Synthesis has its **own priority-ordered candidate list**. Each research cycle recomputes the affected node's synthesis score and candidate position. Changes to memories, node status, or children also update affected ancestor counts and candidate scores up to the root.
 
 An exhausted node with no living descendants and sufficient unconsumed material is given preferential synthesis priority. The exact score, minimum-material threshold and context budget are configurable design parameters still to be fixed.
 
@@ -132,7 +131,7 @@ An exhausted node with no living descendants and sufficient unconsumed material 
 
 ```python
 candidate = synthesis_candidates.top()
-if candidate is None or eligible_frontier_count(candidate) == 0:
+if candidate is None or candidate.unsynthesized_memory_count == 0:
     log_synthesis_no_candidate()
     return
 
@@ -143,7 +142,7 @@ while estimated_frontier_tokens(node) > context_budget:
         break
     node = child
 
-inputs = choose_unconsumed_frontier_memories(node, context_budget)
+inputs = choose_unsynthesized_memories(node, context_budget)
 # If even the node's own inputs exceed budget, choose a bounded batch.
 if not inputs:
     log_synthesis_no_fitting_inputs(node)
@@ -165,7 +164,7 @@ if node.status == "exhausted" and no_living_descendants(node) \
 
 A context budget must be checked using estimated tokens, not memory counts alone. If a subtree is too large, descend; if one node's own material is too large, synthesize a bounded batch. A synthesis is committed together with its input-consumption marks, or neither is committed.
 
-An exhausted node becomes `complete` only when it has no living descendants and no remaining eligible inputs requiring synthesis. Completing a node can make its parent's synthesis more urgent. Completion handling for nodes with no useful memories must not require an LLM pass.
+An exhausted node becomes `complete` when it has no living descendants and its available inputs have been consolidated into a current final synthesis (or it has no useful material to synthesize). Its final synthesis memory remains unsynthesized so its parent can consume it. Therefore a nonzero `unsynthesized_memory_count` does **not** by itself prevent completion. Completing a node can make its parent's synthesis more urgent. Completion handling for nodes with no useful memories must not require an LLM pass.
 
 ### 6.3 Ancestor aggregates
 
@@ -174,17 +173,16 @@ For a mutation at node `n`:
 ```python
 apply_local_mutation(n)
 while n is not None:
-    recompute_subtree_counts(n)  # local counts + cached child aggregates
-    update_synthesis_candidate(n)
+    n.unsynthesized_memory_count = local_unsynthesized_count(n) + sum(\n        child.unsynthesized_memory_count for child in children(n))\n    n.living_descendant_count = sum(\n        int(child.status == 'living') + child.living_descendant_count\n        for child in children(n))\n    n.synthesis_score = score_synthesis_candidate(n)\n    update_synthesis_candidate(n)
     n = parent(n)
 ```
 
-This is **O(tree height)** for count propagation, not necessarily O(log n): the question tree is not guaranteed to be balanced. Priority-list maintenance has its own cost.
+This traverses **O(tree height)** ancestors, not necessarily O(log n): the research tree is not guaranteed to be balanced. The displayed child sums also incur work proportional to the number of children; an implementation can maintain incremental aggregates. Priority-list maintenance has its own cost. Tree monitoring records maximum depth and node counts by depth to assess whether low child priorities are keeping growth reasonably balanced.
 
 ## 7. Persistence and design boundaries
 
 State changes, new memories, and consumption marks must be durably committed with recovery semantics; a failed synthesis must not mark its inputs consumed. Canonical knowledge is authoritative; derived indexes can be rebuilt.
 
-The following remain **undecided**: node-health/repair rules, synthesis scoring formula and minimum threshold, child-selection and batch-ordering policy, exact LLM prompts and JSON outputs, tie-breaking, context-budget reserve, completion of empty branches, and atomic persistence protocol. These are design tasks, not implied implementation details.
+The following remain **undecided**: node-health/repair rules, synthesis scoring formula and minimum threshold, child-selection and batch-ordering policy, exact LLM prompts and JSON outputs, tie-breaking, context-budget reserve, completion of empty branches, exact final-synthesis currency test, tree-imbalance thresholds and repairs, and atomic persistence protocol. These are design tasks, not implied implementation details.
 
 This document supersedes previous fixed-stage cycle proposals and previous synthesis proposals, including a separate synthesis process. Implementation notes may be created separately after these contracts are settled.
