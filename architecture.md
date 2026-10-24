@@ -77,7 +77,7 @@ source_memories: [r2f, s3]
 
 `memory_ids` on a node links its directly associated documents. `unsynthesized_memory_count` counts **all unconsumed memories** at the node and throughout its descendants, regardless of kind. This is the subtree's synthesis-input frontier. When a synthesis consumes K inputs and creates one new synthesis memory, the relevant subtree count changes by `1 - K`. Only committed changes affect counts.
 
-`synthesis_score` is **separate** from `unsynthesized_memory_count`: the count measures available material; the score orders synthesis candidates and may include a completion bonus. The score formula and minimum eligible count are not yet specified. `living_descendant_count` counts living nodes below the node, excluding the node itself. These three values are updated along the ancestor chain after a relevant mutation.
+`synthesis_score` is **separate** from `unsynthesized_memory_count`: the count measures available material; the score orders synthesis candidates and may include a completion bonus. The score formula is defined in section 6; the minimum eligible synthesis batch is two memories. `living_descendant_count` counts living nodes below the node, excluding the node itself. These three values are updated along the ancestor chain after a relevant mutation.
 
 ## 4. Scheduling
 
@@ -127,8 +127,8 @@ An exhausted node with no living descendants and sufficient unconsumed material 
 
 | State | Predicate | Action | LLM |
 |---|---|---|---|
-| S1 | No top candidate, or candidate has no eligible unconsumed inputs | Log the condition; do not synthesize | No |
-| S2 | Candidate has eligible unconsumed inputs | Find a fitting node or bounded batch; synthesize inputs into one synthesis memory | Yes |
+| S1 | No top candidate, or fewer than two eligible unconsumed inputs | Log the condition; do not synthesize | No |
+| S2 | Candidate has at least two eligible unconsumed inputs | Find a fitting node or bounded batch; synthesize inputs into one synthesis memory | Yes |
 
 ### 6.2 Selection and synthesis algorithm
 
@@ -163,7 +163,7 @@ if node.status == "exhausted" and no_living_descendants(node) \
     update_counts_and_candidate_scores_up_to_root(node)
 ```
 
-`choose_unsynthesized_memories` selects research memories not yet consumed **and** synthesis memories not yet consumed, without also including memories already represented by those syntheses. This avoids counting the same source twice. A synthesis memory can subsequently be consumed by a higher-level synthesis. The operation records exactly which input memory IDs contributed.
+`choose_unsynthesized_memories` selects research memories not yet consumed **and** synthesis memories not yet consumed, without also including memories already represented by those syntheses. This avoids counting the same source twice. A synthesis memory can subsequently be consumed by a higher-level synthesis. If a node's only remaining unsynthesized memory belongs to a descendant, that memory is still eligible for its ancestors; completion does not require relocating it. The operation records exactly which input memory IDs contributed.
 
 A context budget must be checked using estimated tokens, not memory counts alone. The input selector must never choose fewer than two inputs; if the context budget cannot accommodate two, log an explicit blocked-synthesis condition. If a subtree is too large, descend; if one node's own material is too large, synthesize a bounded batch. A synthesis is committed together with its input-consumption marks, or neither is committed.
 
