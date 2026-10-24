@@ -37,7 +37,7 @@ def main():
     edges.add_argument("--direction", choices=["incoming", "outgoing"], default="outgoing")
     edges.add_argument("--status", action="append")
     args = parser.parse_args()
-    if args.command in {"research-init", "research-run", "research-state", "transcript"}:
+    if args.command in {"research-init", "research-run", "research-state", "research-demo", "transcript"}:
         result = research_cli.execute(args)
         print(result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False))
         return

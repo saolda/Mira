@@ -49,3 +49,62 @@ restart with pending results, malformed outputs, unsupported citations, context
 blocking, no-finding results, interrupted calls, secret redaction and independent
 transcript inspection. Increment 2b uses scripted models and fixture search only;
 its scheduled S1 hook is replaced by the gardener in Increment 3.
+
+## Increment 3
+
+The gardener now runs in the controller process after every configured number of
+committed research actions (default five). With no living nodes it drains final
+synthesis directly. Candidate score is frontier count plus 1000 only for exhausted
+nodes with no living descendants and at least two inputs. Killed nodes retain
+usable material without the bonus. Completed nodes are excluded permanently.
+Exhausted terminal nodes complete at zero or one remaining inputs, without LLM work.
+
+Selection descends to eligible children by score/creation order while the full
+context exceeds budget. It chooses the oldest fitting pair, then adds remaining
+inputs in creation order when they fit; this avoids falsely blocking when one old
+large input crowds out two smaller inputs. The complete serialized request plus
+output reserve is checked using conservative UTF-8 byte estimates. No complete
+memory is silently truncated. Equations referenced by inputs include their JSON
+definitions. If no pair fits, S1 logs `blocked_synthesis` and the runner stops.
+Both the context budget and output reserve are configurable; actual max output
+tokens must fit the reserve. A blocked pair requires an explicit configuration or
+research-material review rather than automatic single-memory synthesis.
+
+S2 requires finding-level source references covering every consumed memory. Its
+new Markdown, reciprocal input consumption marks, all affected tree counts and
+audit event commit through one journal operation. The final synthesis remains
+unconsumed for ancestors. Malformed proposals preserve inputs and counters.
+
+Milestone verification: all 67 tests pass, including 8 gardener tests. Coverage
+includes the five-action cadence, killed-node scoring/material, zero/one-input
+completion, bounded batches, three-level upward synthesis, no resynthesis of
+completed nodes, input coverage, invalid proposals, blocked budgets and an actual
+controller/gardener subprocess crash followed by explicit journal repair. Some
+original foundation tests leave SQLite test connections unclosed and Python 3.14
+may emit ResourceWarnings when collecting them; tests still pass.
+
+### Fixture demonstration and transcript
+
+```bash
+MIRA_DEMO_ROOT=$(mktemp -d /tmp/mira-research-demo.XXXXXX)
+PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" research-demo
+PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" research-state
+PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" transcript --full > /tmp/mira-full-transcript.md
+PYTHONPATH=src python3 -m mira --root "$MIRA_DEMO_ROOT" transcript --concise
+PYTHONPATH=src python3 -m mira --live --root "$MIRA_DEMO_ROOT" integrity
+```
+
+The recorded run is in `examples/full_research_transcript.md` and
+`examples/concise_research_transcript.md` beside this document. It uses the 8192 /
+2048 default budget, and intentionally sets the research interval to 100 so that
+all branches are researched before final draining. The separate cadence test
+verifies the default five. Decisions and evidence are deterministic; timestamps,
+run/operation UUIDs and directory names vary.
+
+What it accomplished: four nodes across three levels performed 16 research actions,
+created eight research memories and five synthesis memories, and finished with all
+nodes complete and one unconsumed root result. Seventeen scripted model responses
+were admitted. Upward synthesis included the leaf q4, intermediate q2 and root q1.
+The sample evidence is explicitly fictional: this demonstrates controller behavior,
+provenance, budgeting, accounting, recovery and inspectability, not new scientific
+knowledge or autonomous research quality. No important corpus is used.

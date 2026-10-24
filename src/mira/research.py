@@ -149,9 +149,20 @@ class Research:
         state["research_cycles"] += 1; state["research_cycles_since_synthesis"] += 1
         return extras, True
 
-    def _synthesis(self, state, memories, ledger, event):
-        # Increment 2b boundary; gardener is added in Increment 3.
-        event.update(action="S1", status="no_gardener_yet")
+    def _synthesis(self, state, memories, equations, ledger, event):
+        from . import gardener
+        identity, inputs, context, selection = gardener.select(state, memories, equations, self.llm.model, self.llm.settings)
+        event["selection"] = selection
+        if identity is None:
+            event.update(action="S1", reason="no_candidate")
+        elif len(inputs) < 2:
+            event.update(action="S1", node_id=identity, status="blocked_synthesis", reason="no_fitting_pair")
+        else:
+            event.update(action="S2", node_id=identity, question=state["nodes"][identity]["question"], input_ids=[m.id for m in inputs])
+            value = self._model(event, "S2", context, state)
+            gardener.validate(value, inputs)
+            output = gardener.apply(state, memories, ledger, identity, inputs, value)
+            event.update(memory_ids=[output.id], generated_memories=[render(output)])
         state["synthesis_cycles"] += 1; state["research_cycles_since_synthesis"] = 0
         return True
 
@@ -174,9 +185,9 @@ class Research:
                 if state["active_node_id"] is None:
                     if not state["synthesis_candidate_order"]:
                         return {"status": "finished", "research_cycles": state["research_cycles"], "synthesis_cycles": state["synthesis_cycles"]}
-                    success = self._synthesis(state, memories, ledger, event)
+                    success = self._synthesis(state, memories, equations, ledger, event)
                 elif state["research_cycles_since_synthesis"] >= state["synthesis_interval"]:
-                    success = self._synthesis(state, memories, ledger, event)
+                    success = self._synthesis(state, memories, equations, ledger, event)
                 else:
                     extras, success = self._research(state, memories, ledger, files, event)
                 tree.refresh(state, memories)

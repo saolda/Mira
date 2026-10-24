@@ -19,6 +19,8 @@ def register(sub):
     run.add_argument("--script", required=True, help="JSON with responses and provider fixtures")
     run.add_argument("--max-cycles", type=int, default=20)
     run.add_argument("--acknowledge-interrupted", action="store_true")
+    demo = sub.add_parser("research-demo")
+    demo.add_argument("--max-cycles", type=int, default=50)
     sub.add_parser("research-state")
     show = sub.add_parser("transcript")
     show.add_argument("--full", action="store_true")
@@ -26,6 +28,9 @@ def register(sub):
 
 
 def execute(args):
+    if args.command == "research-demo":
+        from .research_demo import demonstrate
+        return demonstrate(args.root, max_cycles=args.max_cycles)
     if args.command == "transcript":
         return transcript(args.root, full=args.full and not args.concise)
     if args.command == "research-run":
