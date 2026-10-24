@@ -129,26 +129,19 @@ LLM agreement alone does not constitute independent verification.
 
 ### 7. Autonomous operation
 
-Mira uses a staged autonomous research cycle inspired by the original project.
+[`architecture.md`](architecture.md) is the **authoritative specification** for Mira's autonomous execution model, persistent research-question tree, deterministic research actions, priority scheduling and synthesis gardener. This overview defines goals and principles; it does not prescribe a competing execution cycle.
 
-The redesigned cycle should include:
+The controller selects one action per cycle from persisted state, with at most one LLM pass. Research and synthesis use separate scheduled cycles within the same process. The older fixed sequence of objective selection, planning, research, reflection and goal management is superseded. Those activities may occur within appropriate actions but are not mandatory stages.
 
-1. Objective selection.
-2. Context retrieval.
-3. Knowledge-gap assessment.
-4. Planning.
-5. Research or action.
-6. Finding construction.
-7. Relationship discovery.
-8. Validation.
-9. Transactional commit.
-10. Goal management and reflection.
+Mira must support safe pause, shutdown, recovery and resumption. Autonomous actions require bounded resource budgets and explicit permissions.
 
-The precise cycle remains subject to architectural review.
+### 7A. Research memories and presentation outputs
 
-Mira must support safe pause, shutdown, recovery and resumption.
+Canonical research and synthesis memories are **agent-oriented knowledge documents**, designed for accurate retrieval, evidence tracking, reuse and further synthesis. They need not themselves be polished publications.
 
-Autonomous actions require bounded resource budgets and explicit permissions.
+A separate **presentation generation** objective transforms selected synthesis memories and supporting evidence into polished, human-readable presentation documents (for example `presentation.md`). Presentation outputs are **derived**, not canonical research memories; they must retain citations and traceability to the source memories and must not silently introduce unsupported claims.
+
+Presentation format, editorial style and publication workflow can be **project-specific**, outside Mira's core research/synthesis controller. For example, a HistoryOfAI project may build chronological historical articles from Mira's synthesis memories, while HumanLegacy may use a different publication format to populate its research library. The exact document schemas, generation schedule and project adapters remain to be designed. The core memory format stays common across projects.
 
 ### 8. Persistence and recoverability
 
