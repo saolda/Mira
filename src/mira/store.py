@@ -38,6 +38,7 @@ class SnapshotStore:
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        require(not (self.root / "journal").exists(), "live corpus requires LiveStore (CLI: --live)")
         (self.root / "generations").mkdir(exist_ok=True)
 
     @contextmanager
@@ -102,24 +103,7 @@ class SnapshotStore:
         # The previous snapshot is the identity ledger of committed objects.
         previous, old_docs, old_eqs, old_ledger = self.read()
         require(previous == expected, "snapshot changed")
-        new_docs = {d.id: d for d in documents}
-        for old in old_docs:
-            require(old.id in new_docs, "document removal/retirement unsupported")
-            new = new_docs[old.id]
-            require(all(new.next_ids[k] >= old.next_ids[k] for k in old.next_ids), "anchor allocator regressed")
-            new_units = {u.anchor: u for u in new.units}
-            require(all(new_units.get(u.anchor) == u for u in old.units), "existing unit edits/removal unsupported in Phase 1")
-            for unit in new.units:
-                if unit.anchor not in {u.anchor for u in old.units}:
-                    require(int(unit.anchor[1:], 36) >= old.next_ids[unit.anchor[0]], "anchor ID reuse")
-        eqs = {eq.id: eq for eq in equations}
-        require(all(eqs.get(eq.id) == eq for eq in old_eqs), "equation edits/removal unsupported")
-        require(set(ledger) == {"r", "s"} and all(type(v) is int and v >= old_ledger[k] for k, v in ledger.items()), "document allocator regressed")
-        old_ids = {d.id for d in old_docs}
-        for memory in documents:
-            require(int(memory.id[1:], 36) < ledger[memory.id[0]], "document high-water mark")
-            if memory.id not in old_ids:
-                require(int(memory.id[1:], 36) >= old_ledger[memory.id[0]], "document ID reuse")
+        validate_transition(documents, equations, ledger, old_docs, old_eqs, old_ledger)
         generation = uuid.uuid4().hex
         directory = self.root / "generations" / generation
         directory.mkdir()
@@ -158,3 +142,25 @@ class SnapshotStore:
             cursor = loads((self.root / "generations" / cursor / "manifest.json").read_text())["parent"]
         return {"current": current, "retained_committed": sorted(committed),
                 "unpublished": sorted(p.name for p in (self.root / "generations").iterdir() if p.name not in committed)}
+
+
+def validate_transition(documents, equations, ledger, old_docs, old_eqs, old_ledger):
+    """Shared append-only identity admission, independent of storage layout."""
+    new_docs = {d.id: d for d in documents}
+    for old in old_docs:
+        require(old.id in new_docs, "document removal/retirement unsupported")
+        new = new_docs[old.id]
+        require(all(new.next_ids[k] >= old.next_ids[k] for k in old.next_ids), "anchor allocator regressed")
+        new_units = {u.anchor: u for u in new.units}
+        require(all(new_units.get(u.anchor) == u for u in old.units), "existing unit edits/removal unsupported in Phase 1")
+        for unit in new.units:
+            if unit.anchor not in {u.anchor for u in old.units}:
+                require(int(unit.anchor[1:], 36) >= old.next_ids[unit.anchor[0]], "anchor ID reuse")
+    eqs = {eq.id: eq for eq in equations}
+    require(all(eqs.get(eq.id) == eq for eq in old_eqs), "equation edits/removal unsupported")
+    require(set(ledger) == {"r", "s"} and all(type(v) is int and v >= old_ledger[k] for k, v in ledger.items()), "document allocator regressed")
+    old_ids = {d.id for d in old_docs}
+    for memory in documents:
+        require(int(memory.id[1:], 36) < ledger[memory.id[0]], "document high-water mark")
+        if memory.id not in old_ids:
+            require(int(memory.id[1:], 36) >= old_ledger[memory.id[0]], "document ID reuse")
