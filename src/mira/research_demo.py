@@ -26,11 +26,11 @@ class DemoLLM(ScriptedLLM):
     def complete(self, serialized_request):
         self.requests.append(serialized_request)
         content = loads(serialized_request)["messages"][-1]["content"]
-        action = content.split(":", 1)[0]
+        action = "R1" if content.startswith("Generate concise, targeted search terms") else content.split(":", 1)[0]
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
-        identity = decoder.raw_decode(content.split("Selected node:\n", 1)[1])[0]["id"]
+        identity = decoder.raw_decode(content.split("Selected node:\n", 1)[1])[0]["id"] if action != "R1" else None
         if action == "R1": value = {"keywords": ["fictional", "heat", "barrier"]}
         elif action == "R3": value = {"memories": [finding("A transfers 4 units"), finding("B transfers 8 units")], "no_finding_reason": None}
         elif action == "R4":

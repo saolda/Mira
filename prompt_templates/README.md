@@ -18,7 +18,8 @@ Use `{{question}}`, for example. Variables are declared in `src/mira/prompts.py`
 
 | Actions | Variables |
 | --- | --- |
-| R1, R3, R4 | root_question, question, node, ancestor_questions, linked_memories, children, strategy, next_database, search_history, equations |
+| R1 | question, question_context, previous_search_terms, control_terms, memory_context |
+| R3, R4 | root_question, question, node, ancestor_questions, linked_memories, children, strategy, next_database, search_history, equations |
 | R3, R4 additionally | search_evidence |
 | S2 | root_question, question, node, ancestor_questions, input_memories, equations |
 
@@ -32,6 +33,11 @@ multiline strings retain their exact value as escaped JSON newlines; structured
 values span readable lines. Surrounding template text and line endings are kept
 exactly. Substitution runs once over the source: braces in inserted evidence are
 literal data and never recursively evaluated.
+
+R1 uses the exact focused template and five-variable projection documented in
+[focused R1 context](../docs/focused_r1.md). No node record, provider pointer, full
+memory, equations or raw history is included. Control terms are operator-supplied,
+not inferred from failed searches.
 
 R3 receives the pending normalized result batch; R4 receives this node's result
 batches, unsuccessful attempts and linked findings. Full provider feeds remain on

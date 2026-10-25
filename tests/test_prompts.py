@@ -80,7 +80,7 @@ class PromptTests(unittest.TestCase):
             messages, snapshot = PromptTemplates().render(action, context)
             self.assertEqual(len(messages), 1)
             self.assertEqual(messages[0]["role"], "user")
-            self.assertTrue(messages[0]["content"].startswith(action + ":"))
+            self.assertTrue(messages[0]["content"].startswith("Generate concise, targeted search terms" if action == "R1" else action + ":"))
             self.assertIn("Return JSON only", messages[0]["content"])
             self.assertNotIn('"$schema"', messages[0]["content"])
             self.assertEqual(snapshot["bindings"]["context"], context)
@@ -97,7 +97,7 @@ class PromptTests(unittest.TestCase):
         source = "Prefix 温度\r\n" + " / ".join("{{" + key + "}}" for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
         (self.templates / "R1.txt").write_bytes(source.encode())
         context = dict.fromkeys(SLOTS["R1"], None)
-        context.update(question="", children=[], node={}, root_question="first\nsecond {{question}}")
+        context.update(question="", question_context=[], previous_search_terms=[], control_terms=[], memory_context={"note": "first\nsecond {{question}}"})
         messages, metadata = PromptTemplates().render("R1", context)
         expected = "Prefix 温度\r\n" + " / ".join(dumps(context[key]).rstrip("\n") for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
         self.assertEqual(messages[0]["content"], expected)

@@ -27,6 +27,7 @@ def register(sub):
     run.add_argument("--timeout", type=float, default=120)
     run.add_argument("--no-thinking", action="store_true", help="llama.cpp/Qwen enable_thinking=false")
     run.add_argument("--plain-output", action="store_true", help="omit JSON response-format hint")
+    run.add_argument("--control-term", action="append", default=[], help="literal term forbidden in the next R1 query; repeat for multiple terms")
     run.add_argument("--search-limit", type=int, default=2)
     run.add_argument("--max-cycles", type=int, default=20)
     run.add_argument("--acknowledge-interrupted", action="store_true")
@@ -91,7 +92,7 @@ def execute(args):
             adapters = {"arxiv": ArxivSearch(limit=args.search_limit)}
     else:
         llm, adapters = ScriptedLLM([]), {}
-    research = Research(args.root, llm, adapters)
+    research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []))
     if args.command == "research-init":
         result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve)

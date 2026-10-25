@@ -8,15 +8,16 @@ from .api import Knowledge
 from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
-from . import decisions, research_tree as tree
+from . import decisions, research_tree as tree, r1
 from .search import validate_search
 
 
 class Research:
-    def __init__(self, root, llm, adapters):
+    def __init__(self, root, llm, adapters, *, control_terms=()):
         self.knowledge = Knowledge(store=LiveStore(root))
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
+        self.control_terms = r1.controls(control_terms)
         self.trace = Interactions(self.store, getattr(llm, "secrets", ()))
 
     def initialize(self, question, databases, **config):
@@ -141,7 +142,10 @@ class Research:
             n["next_database_index"] += 1
             if evidence["status"] == "ok": n["pending_results"] = evidence_ref
         else:
-            context, searches = self._context(state, memories, equations, files, identity)
+            if action == "R1":
+                context = r1.context(state, memories, files, identity, self.control_terms)
+            else:
+                context, searches = self._context(state, memories, equations, files, identity)
             evidence = None
             if action == "R3":
                 evidence = loads(files[n["pending_results"]])
@@ -151,7 +155,9 @@ class Research:
                 context["search_evidence"] = searches
             value = self._model(event, action, context, state)
             decisions.validate(action, value, evidence)
-            if action == "R1": n["keywords"] = value["keywords"]
+            if action == "R1":
+                r1.validate_terms(value["keywords"], self.control_terms)
+                n["keywords"] = value["keywords"]
             elif action == "R3":
                 event["memory_ids"] = [self._add_memory(state, memories, ledger, identity, d, evidence) for d in value["memories"]]
                 event["generated_memories"] = [render(m) for m in memories if m.id in event["memory_ids"]]

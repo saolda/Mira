@@ -98,10 +98,11 @@ class ResearchTests(unittest.TestCase):
         prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
                    for record in read_records(self.root)}
         r1 = prompts["R1"]["context"]
-        self.assertEqual(r1["question"], r1["node"]["question"])
-        self.assertEqual(r1["next_database"], "fixture")
-        self.assertEqual(r1["strategy"]["databases"], ["fixture"])
-        self.assertEqual(r1["search_history"], [])
+        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context"})
+        self.assertEqual(r1["question"], self.state()["nodes"]["q1"]["question"])
+        self.assertEqual(r1["question_context"], [])
+        self.assertEqual(r1["previous_search_terms"], [])
+        self.assertEqual(r1["control_terms"], [])
         r3 = prompts["R3"]["context"]
         self.assertEqual(r3["search_evidence"]["results"], evidence()["results"])
         r4 = prompts["R4"]["context"]

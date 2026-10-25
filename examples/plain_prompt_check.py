@@ -1,4 +1,6 @@
-"""Four real model calls, recorded in a new experiment without applying proposals.
+"""Real model calls, recorded in a new experiment without applying proposals.
+
+By default evaluates four actions; --r1-only performs one focused R1 call.
 
 Uses synthetic source material (not external research). No scripted model outputs,
 service lifecycle changes or modifications to existing experiments.
@@ -8,7 +10,7 @@ import json
 import uuid
 from urllib.request import urlopen
 
-from mira import gardener, research_tree as tree
+from mira import gardener, research_tree as tree, r1
 from mira.clients import HTTPModel
 from mira.decisions import validate
 from mira.experiments import Experiments
@@ -21,13 +23,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", default="http://127.0.0.1:8090")
     parser.add_argument("--experiment", required=True)
+    parser.add_argument("--r1-only", action="store_true")
+    parser.add_argument("--control-term", action="append", default=[])
     args = parser.parse_args()
     with urlopen(args.endpoint.rstrip("/") + "/v1/models", timeout=5) as response:
         model = json.load(response)["data"][0]["id"]
     catalog = Experiments()
     root = catalog.create(args.experiment)
-    llm = HTTPModel(args.endpoint, model, max_tokens=1600, timeout=90, no_thinking=True)
-    research = Research(root, llm, {})
+    llm = HTTPModel(args.endpoint, model, max_tokens=256 if args.r1_only else 1600, timeout=90, no_thinking=True)
+    research = Research(root, llm, {}, control_terms=args.control_term)
     research.initialize("What can these synthetic insulation observations establish, and what remains unknown?", ["fixture"], context_budget=24000, output_reserve=2048)
     evidence = {"status": "ok", "provider": "fixture", "query": "synthetic insulation test", "reference": "evaluation-only", "results": [
         {"id": "fixture-a", "url": "https://example.org/synthetic-a", "title": "Authored synthetic observation A", "content_kind": "fixture", "truncated": False,
@@ -48,13 +52,15 @@ def main():
         tree.refresh(state, memories)
         research.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)}, operation_type="evaluation_seed")
     outcomes = []
-    for action in ("R1", "R3", "R4", "S2"):
+    for action in (("R1",) if args.r1_only else ("R1", "R3", "R4", "S2")):
         print("Calling " + action + " on " + model, flush=True)
         with research.store.lock():
             token, memories, equations, ledger = research.store.read()
             files = research.store._files()
             state = loads(files["research/state.json"])
-            if action == "S2":
+            if action == "R1":
+                context = r1.context(state, memories, files, "q1", research.control_terms)
+            elif action == "S2":
                 context = gardener.context(state, memories, equations, "q1", memories)
             else:
                 context, _ = research._context(state, memories, equations, files, "q1")
@@ -72,6 +78,7 @@ def main():
                 value = research._model(event, action, context, state)
                 if action == "S2": gardener.validate(value, memories)
                 else: validate(action, value, evidence if action == "R3" else None)
+                if action == "R1": r1.validate_terms(value["keywords"], research.control_terms)
                 accepted, error = True, None
             except Exception as exc:
                 accepted, error = False, str(exc)
@@ -89,7 +96,7 @@ def main():
     for full in (False, True):
         catalog.export_transcript(args.experiment, transcript(root, full=full), full=full)
     report = {"experiment": args.experiment, "model": model, "endpoint": args.endpoint, "outcomes": outcomes,
-              "limitation": "Four calls on authored synthetic evidence; structural validation is not semantic verification. Proposals were not applied."}
+              "limitation": "Bounded calls on authored synthetic evidence; structural validation is not semantic verification. Proposals were not applied."}
     (root / "prompt_evaluation.json").write_text(dumps(report))
     print(dumps(report), flush=True)
 
