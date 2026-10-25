@@ -8,7 +8,7 @@ from .api import Knowledge
 from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
-from . import decisions, research_tree as tree, r1
+from . import decisions, research_tree as tree, r1, r3
 from .search import validate_search
 
 
@@ -98,22 +98,6 @@ class Research:
         event["model"] = info
         return value
 
-    def _add_memory(self, state, memories, ledger, node_id, draft, evidence):
-        identity = "r" + base36(ledger["r"]); ledger["r"] += 1
-        memory = Memory(identity, draft["title"], draft["summary"], metadata={"node_id": node_id,
-            "kind": "research", "source_memories": [], "synthesized_by": None,
-            "created_order": len(memories) + 1, "evidence_ref": evidence["reference"]})
-        rows = {r["id"]: r for r in evidence["results"]}
-        for finding in draft["findings"]:
-            anchor = memory.allocate("f")
-            memory.units.append(Unit(anchor, finding["label"], {"Kind": finding["kind"],
-                "Evidence status": "unverified", "Proposition": finding["proposition"],
-                "Explanation": finding["explanation"], "Provenance": finding["provenance"]}))
-            for url in dict.fromkeys(rows[i]["url"] for i in finding["evidence_ids"]):
-                memory.relationships.append(Relationship(anchor, "CITES", url, "unverified"))
-        memories.append(memory); state["nodes"][node_id]["memory_ids"].append(identity)
-        return identity
-
     def _research(self, state, memories, equations, ledger, files, event):
         identity = state["active_node_id"]; n = state["nodes"][identity]
         before_nodes = set(state["nodes"])
@@ -144,22 +128,25 @@ class Research:
         else:
             if action == "R1":
                 context = r1.context(state, memories, files, identity, self.control_terms)
+            elif action == "R3":
+                evidence = loads(files[n["pending_results"]])
+                context = r3.context(state, identity, evidence)
             else:
                 context, searches = self._context(state, memories, equations, files, identity)
-            evidence = None
+            evidence = loads(files[n["pending_results"]]) if action == "R3" else None
             if action == "R3":
-                evidence = loads(files[n["pending_results"]])
-                context["search_evidence"] = {key: value for key, value in evidence.items() if key != "raw_api_response"}
                 event["evidence_ref"] = n["pending_results"]
             elif action == "R4":
                 context["search_evidence"] = searches
             value = self._model(event, action, context, state)
             decisions.validate(action, value, evidence)
             if action == "R1":
-                r1.validate_terms(value["keywords"], self.control_terms)
-                n["keywords"] = value["keywords"]
+                accepted = r1.filter_terms(value["keywords"], self.control_terms)
+                event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
+                n["keywords"] = accepted
             elif action == "R3":
-                event["memory_ids"] = [self._add_memory(state, memories, ledger, identity, d, evidence) for d in value["memories"]]
+                output = r3.create_memory(state, memories, equations, ledger, identity, value["results"], evidence)
+                event["memory_ids"] = [output.id] if output is not None else []
                 event["generated_memories"] = [render(m) for m in memories if m.id in event["memory_ids"]]
                 n["pending_results"] = None
             else:
@@ -205,7 +192,7 @@ class Research:
             state = loads(files["research/state.json"])
             tree.validate(state, memories, files)
             require(not self._unresolved(files), "interrupted/unknown model call: inspect transcript and explicitly acknowledge before retry")
-            original = deepcopy((state, memories, ledger))
+            original = deepcopy((state, memories, equations, ledger))
             event_id = uuid.uuid4().hex
             event = {"run_id": state["run_id"], "timestamp": now(),
                      "cycle": state["research_cycles"] + state["synthesis_cycles"] + 1,
@@ -239,10 +226,11 @@ class Research:
                 tree.validate(state, memories, combined)
                 # Admission includes canonical Markdown/lineage checks before marking valid.
                 from .live import decode
-                candidate = {**combined, "identity.json": dumps(ledger), **{"memories/" + m.id + ".md": render(m) for m in memories}}
+                candidate = {**combined, "identity.json": dumps(ledger), **{"memories/" + m.id + ".md": render(m) for m in memories},
+                             **{"equations/" + e.id + ".json": dumps(asdict(e)) for e in equations}}
                 decode(candidate)
             except Exception as exc:
-                state, memories, ledger = original
+                state, memories, equations, ledger = original
                 if "memory_ids" in event:
                     event["proposed_memory_ids"] = event.pop("memory_ids")
                 if "generated_memories" in event:

@@ -91,7 +91,7 @@ class GardenerTests(unittest.TestCase):
             result = demonstrate(directory)
             self.assertEqual(result["status"], "finished")
             state = loads(Path(directory, "research/state.json").read_text())
-            self.assertEqual(state["research_cycles"], 16)
+            self.assertEqual(state["research_cycles"], 28)
             self.assertTrue(all(n["status"] == "complete" for n in state["nodes"].values()))
             records = read_records(directory)
             syntheses = [r for r in records if r["request"]["action"] == "S2"]
@@ -108,12 +108,19 @@ class GardenerTests(unittest.TestCase):
 
     def test_five_research_actions_then_one_synthesis_same_process(self):
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat"]}, {"memories": [draft(), draft("B")], "no_finding_reason": None},
-                decision("retry"), {"memories": [], "no_finding_reason": "No new supported finding."}])
+            llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft(), draft("B")]},
+                decision("retry"), {"results": []}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
             r.initialize("Q?", ["fixture"], context_budget=12000)
             actions = [r.step()["action"] for _ in range(5)]
             self.assertEqual(actions, ["R1", "R2", "R3", "R4", "R2"])
+            with r.store.lock():
+                token, memories, equations, ledger = r.store.read()
+                state = loads(r.store._files()["research/state.json"])
+                from mira import r3
+                r3.create_memory(state, memories, equations, ledger, "q1", [draft("C")], {**evidence(), "reference": "synthetic-existing-batch"})
+                tree.refresh(state, memories)
+                r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
             r.llm = DemoLLM()
             self.assertEqual(r.step()["action"], "S2")
             state = loads(Path(directory, "research/state.json").read_text())

@@ -25,7 +25,7 @@ from test_research import evidence, draft, decision
 
 
 def make_run(root):
-    r = Research(root, ScriptedLLM([{"keywords": ["heat"]}, {"memories": [draft()], "no_finding_reason": None}, decision("kill")]),
+    r = Research(root, ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft()]}, decision("kill")]),
                  {"fixture": FixtureSearch([evidence()])})
     r.initialize("Original recorded question?", ["fixture"], context_budget=12000)
     r.run(5)

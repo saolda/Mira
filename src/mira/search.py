@@ -84,6 +84,12 @@ class ArxivSearch:
                     "content": summary[:self.max_abstract_chars], "content_kind": "abstract",
                     "truncated": len(summary) > self.max_abstract_chars, "published": field("published"),
                     "authors": [author.findtext("a:name", default="", namespaces=ns) for author in entry.findall("a:author", ns)]})
+                row = results[-1]
+                if field("updated"): row["updated"] = field("updated")
+                row["links"] = [dict(link.attrib) for link in entry.findall("a:link", ns)]
+                for tag in ("comment", "journal_ref", "doi"):
+                    value = entry.findtext("{http://arxiv.org/schemas/atom}" + tag)
+                    if value: row[tag] = value.strip()
             require(len(results) <= self.limit, "provider exceeded requested result bound")
             return validate_search({"status": "ok" if results else "empty", "results": results,
                                     "request_url": url, "raw_api_response": raw})

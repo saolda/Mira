@@ -58,7 +58,7 @@ def validate(value, inputs):
     decisions.fields(value, ["title", "summary", "findings"])
     decisions.text(value["title"]); decisions.text(value["summary"])
     require(isinstance(value["findings"], list) and value["findings"], "synthesis findings required")
-    targets = {m.id + "#" + u.anchor for m in inputs for u in m.units if u.kind == "finding"}
+    targets = {m.id + "#" + u.anchor for m in inputs for u in m.units if u.kind in {"finding", "equation", "image"}}
     covered = set()
     for finding in value["findings"]:
         decisions.fields(finding, SYNTHESIS_FINDING)

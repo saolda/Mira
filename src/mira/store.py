@@ -155,7 +155,7 @@ def validate_transition(documents, equations, ledger, old_docs, old_eqs, old_led
         require(all(new_units.get(u.anchor) == u for u in old.units), "existing unit edits/removal unsupported in Phase 1")
         for unit in new.units:
             if unit.anchor not in {u.anchor for u in old.units}:
-                require(int(unit.anchor[1:], 36) >= old.next_ids[unit.anchor[0]], "anchor ID reuse")
+                require(int(unit.anchor[1:], 36) >= old.next_ids.get(unit.anchor[0], 1), "anchor ID reuse")
     eqs = {eq.id: eq for eq in equations}
     require(all(eqs.get(eq.id) == eq for eq in old_eqs), "equation edits/removal unsupported")
     require(set(ledger) == {"r", "s"} and all(type(v) is int and v >= old_ledger[k] for k, v in ledger.items()), "document allocator regressed")

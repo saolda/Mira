@@ -1,0 +1,18 @@
+{
+  "assumptions": [],
+  "expression": "E = mc^2",
+  "id": "e_r1_1",
+  "label": "Mass-energy expression",
+  "origin": "r1",
+  "provenance": "Supplied source identifiers: source-a. Model extraction; not independently verified. Equation origin: source (model-reported, unverified).",
+  "revision": 1,
+  "units": {
+    "E": "joules",
+    "m": "kilograms"
+  },
+  "variables": {
+    "E": "Energy",
+    "c": "Speed of light",
+    "m": "Mass"
+  }
+}

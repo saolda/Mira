@@ -3,9 +3,6 @@ from .format import dumps, loads, require
 
 from .prompts import PromptTemplates
 
-FINDING = {"label": "nonempty string", "kind": "observation|claim|inference|hypothesis",
-           "proposition": "nonempty string", "explanation": "nonempty string", "provenance": "nonempty string",
-           "evidence_ids": ["IDs from supplied search results"]}
 def prepared_request(model, settings, action, context):
     require(set(settings) <= {"temperature", "max_tokens", "top_p", "seed", "response_format", "chat_template_kwargs"}, "unsupported generation settings")
     messages, provenance = PromptTemplates().render(action, context)
@@ -53,21 +50,8 @@ def validate(action, value, evidence=None):
         for question in value["children"]: text(question)
         require(len(value["children"]) == len(set(value["children"])), "duplicate child question")
     elif action == "R3":
-        fields(value, ["memories", "no_finding_reason"])
-        require(isinstance(value["memories"], list), "memories list required")
-        if not value["memories"]: text(value["no_finding_reason"])
-        else: require(value["no_finding_reason"] is None, "unexpected no-finding reason")
-        ids = {r["id"] for r in evidence["results"]}
-        for draft in value["memories"]:
-            fields(draft, ["title", "summary", "findings"])
-            text(draft["title"]); text(draft["summary"])
-            require(isinstance(draft["findings"], list) and draft["findings"], "findings required")
-            for finding in draft["findings"]:
-                fields(finding, FINDING)
-                for key in ("label", "proposition", "explanation", "provenance"): text(finding[key])
-                require(finding["kind"] in {"observation", "claim", "inference", "hypothesis"}, "invalid finding kind")
-                require(isinstance(finding["evidence_ids"], list) and finding["evidence_ids"] and
-                        all(isinstance(i, str) and i in ids for i in finding["evidence_ids"]), "unsupported evidence reference")
+        from .r3 import validate
+        validate(value, evidence)
     return value
 
 

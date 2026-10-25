@@ -10,7 +10,7 @@ import json
 import uuid
 from urllib.request import urlopen
 
-from mira import gardener, research_tree as tree, r1
+from mira import gardener, research_tree as tree, r1, r3
 from mira.clients import HTTPModel
 from mira.decisions import validate
 from mira.experiments import Experiments
@@ -60,6 +60,8 @@ def main():
             state = loads(files["research/state.json"])
             if action == "R1":
                 context = r1.context(state, memories, files, "q1", research.control_terms)
+            elif action == "R3":
+                context = r3.context(state, "q1", evidence)
             elif action == "S2":
                 context = gardener.context(state, memories, equations, "q1", memories)
             else:
@@ -78,7 +80,7 @@ def main():
                 value = research._model(event, action, context, state)
                 if action == "S2": gardener.validate(value, memories)
                 else: validate(action, value, evidence if action == "R3" else None)
-                if action == "R1": r1.validate_terms(value["keywords"], research.control_terms)
+                if action == "R1": event["filtered_keywords"] = r1.filter_terms(value["keywords"], research.control_terms)
                 accepted, error = True, None
             except Exception as exc:
                 accepted, error = False, str(exc)

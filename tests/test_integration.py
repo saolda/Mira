@@ -90,8 +90,8 @@ class IntegrationTests(unittest.TestCase):
     def test_search_to_model_to_knowledge_keeps_raw_feed_out_of_context(self):
         with tempfile.TemporaryDirectory() as root:
             result = ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM)).search("uncertainty")
-            proposal = draft(); proposal["findings"][0]["evidence_ids"] = [result["results"][0]["id"]]
-            llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"memories": [proposal], "no_finding_reason": None}])
+            proposal = draft(); proposal["source_ids"] = [result["results"][0]["id"]]
+            llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"results": [proposal]}])
             r = Research(root, llm, {"arxiv": ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM))})
             r.initialize("What does this abstract claim?", ["arxiv"], context_budget=12000)
             with patch("time.sleep"):

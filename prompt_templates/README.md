@@ -6,11 +6,12 @@ example. New calls reload the selected file. There is no shared prompt, persona,
 system message or developer message. The HTTP transport receives one user message.
 R2 is a deterministic provider call; S1 selects synthesis inputs without an LLM.
 
-Python response validators remain authoritative and unchanged. The templates do
-not contain JSON Schema or ask the model to assign IDs, priorities, relationship
+Python response validators remain authoritative; R3 now validates ordered results.
+The templates do not contain JSON Schema or ask the model to assign IDs, priorities, relationship
 records or consumption marks. R4 retains kill, exhaust, retry, retry_split and
 exhaust_split with their existing conditional keywords/children requirements.
-S2 still requires exact supplied finding references and coverage of every input.
+S2 requires exact supplied references and coverage of every input, including
+equation/image anchors for media-only inputs.
 
 ## Variables
 
@@ -19,8 +20,9 @@ Use `{{question}}`, for example. Variables are declared in `src/mira/prompts.py`
 | Actions | Variables |
 | --- | --- |
 | R1 | question, question_context, previous_search_terms, control_terms, memory_context |
-| R3, R4 | root_question, question, node, ancestor_questions, linked_memories, children, strategy, next_database, search_history, equations |
-| R3, R4 additionally | search_evidence |
+| R3 | question, question_context, research |
+| R4 | root_question, question, node, ancestor_questions, linked_memories, children, strategy, next_database, search_history, equations |
+| R4 additionally | search_evidence |
 | S2 | root_question, question, node, ancestor_questions, input_memories, equations |
 
 Each template includes all its declared variables; duplicate occurrences are
@@ -36,14 +38,18 @@ literal data and never recursively evaluated.
 
 R1 uses the exact focused template and five-variable projection documented in
 [focused R1 context](../docs/focused_r1.md). No node record, provider pointer, full
-memory, equations or raw history is included. Control terms are operator-supplied,
-not inferred from failed searches.
+memory, equations or raw history is included. The fixed heading/metadata control
+words are always supplied, with optional
+operator additions. Python removes whole-word matches before dispatch; previous
+terms remain separate. See [ordered R3 and R1 controls](../docs/ordered_r3.md) for
+the current contracts.
 
-R3 receives the pending normalized result batch; R4 receives this node's result
+R3 receives only the selected question, deduplicated question context and pending
+research source rows. It returns ordered research objects; Python creates one
+memory per nonempty batch. R4 receives this node's result
 batches, unsuccessful attempts and linked findings. Full provider feeds remain on
 disk and are not inserted. S2 receives complete selected unconsumed memories,
-including a synthesis's own finding IDs when it is an input. These data-selection
-rules, scheduling and synthesis cadence are unchanged.
+including a synthesis's own finding IDs when it is an input. R4/S2 data selection, scheduling and synthesis cadence remain unchanged.
 
 ## Recorded provenance and historical inspection
 
@@ -66,9 +72,9 @@ No new dependency or transport-specific system-message requirement was introduce
 
 The existing UTF-8 request-byte budget and synthesis complete-input selection
 still apply. Shorter prompts may naturally allow more inputs to fit the same
-budget. Only the scripted demo's explicit fixture budget was adjusted from 11500
-to 10000 to retain its three-level synthesis-descent test; runtime defaults and
-scheduler logic are unchanged.
+budget. Only the scripted demo's explicit fixture budget is 12000, with two batches per
+node to exercise one-memory-per-R3 synthesis. Runtime defaults and scheduler logic
+are unchanged.
 
 ## Verification and bounded real evaluation
 

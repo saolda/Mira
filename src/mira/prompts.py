@@ -9,7 +9,7 @@ from .format import digest, dumps, require
 ACTIONS = ("R1", "R3", "R4", "S2")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
                 "children", "strategy", "next_database", "search_history", "equations")
-SLOTS = {"R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context"), "R3": COMMON_SLOTS + ("search_evidence",),
+SLOTS = {"R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context"), "R3": ("question", "question_context", "research"),
          "R4": COMMON_SLOTS + ("search_evidence",),
          "S2": ("root_question", "question", "node", "ancestor_questions", "input_memories", "equations")}
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")

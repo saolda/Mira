@@ -5,6 +5,10 @@ from . import research_tree as tree
 from .format import MD, dumps, loads, require
 
 
+CONTROL_TERMS = ["summary", "explanation", "findings", "proposition", "provenance",
+                 "evidence", "sources", "references", "metadata", "title"]
+
+
 def normalized(text):
     return " ".join(text.split())
 
@@ -22,7 +26,20 @@ def unique(values):
 def controls(values):
     require(isinstance(values, (list, tuple)) and all(isinstance(v, str) and v.strip()
             and "\n" not in v and "\r" not in v for v in values), "control terms must be a list of nonempty single-line strings")
-    return unique(values)
+    return unique([*CONTROL_TERMS, *values])
+
+
+def filter_terms(components, control_terms):
+    result = []
+    for component in components:
+        for term in control_terms:
+            component = re.sub(r"(?<!\w)" + re.escape(normalized(term)) + r"(?!\w)", " ", component, flags=re.I)
+        component = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", "", component)
+        component = normalized(component).strip(" ,;:-")
+        if re.search(r"\w", component): result.append(component)
+    require(result, "R1 query contains only prohibited control terms")
+    validate_terms(result, control_terms)
+    return result
 
 
 def validate_terms(components, control_terms):
@@ -82,7 +99,7 @@ def memory_context(memories, linked_ids, questions):
         if memory.id not in linked_ids:
             continue
         for unit in memory.units:
-            if unit.kind == "equation":
+            if unit.kind in {"equation", "image"}:
                 continue
             fields = unit.fields
             text = fields.get("Proposition", fields.get("Question", ""))
@@ -115,12 +132,18 @@ def memory_context(memories, linked_ids, questions):
     return result
 
 
-def context(state, memories, files, node_id, control_terms=()):
-    node = state["nodes"][node_id]
-    question = node["question"]
+def question_context(state, node_id):
+    question = state["nodes"][node_id]["question"]
     additional = unique([state["nodes"][state["root_id"]]["question"],
                          *[state["nodes"][i]["question"] for i in tree.ancestors(state, node_id)]])
     additional = [q for q in additional if normalized(q) != normalized(question)]
+    return additional
+
+
+def context(state, memories, files, node_id, control_terms=()):
+    node = state["nodes"][node_id]
+    question = node["question"]
+    additional = question_context(state, node_id)
     previous = []
     events = []
     for path, raw in files.items():

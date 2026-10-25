@@ -15,9 +15,9 @@ class ValidationError(ValueError):
 
 
 DOC_ID = re.compile(r"[rs][1-9a-z][0-9a-z]*\Z")
-ANCHOR = re.compile(r"[fqe][1-9a-z][0-9a-z]*\Z")
+ANCHOR = re.compile(r"[fqei][1-9a-z][0-9a-z]*\Z")
 EQ_ID = re.compile(r"e_[rs][1-9a-z][0-9a-z]*_[1-9][0-9]*\Z")
-KINDS = {"observation", "claim", "inference", "hypothesis", "synthesis"}
+KINDS = {"finding", "observation", "claim", "inference", "hypothesis", "synthesis"}
 EVIDENCE = {"unverified", "supported", "disputed", "inconclusive"}
 QUESTION_STATES = {"open", "partially_answered", "answered", "superseded"}
 STATUSES = {"unverified", "proposed", "reviewed", "rejected"}
@@ -69,7 +69,7 @@ class Unit:
 
     @property
     def kind(self):
-        return {"f": "finding", "q": "question", "e": "equation"}[self.anchor[0]]
+        return {"f": "finding", "q": "question", "e": "equation", "i": "image"}[self.anchor[0]]
 
     @property
     def revision(self):
@@ -127,6 +127,7 @@ class Memory:
     relationships: list[Relationship] = field(default_factory=list)
 
     def allocate(self, prefix):
+        if prefix == "i": self.next_ids.setdefault("i", 1)
         value = self.next_ids[prefix]
         self.next_ids[prefix] += 1
         return prefix + base36(value)
@@ -170,7 +171,7 @@ def render(memory):
     for unit in memory.units:
         parts += [f"[#{unit.anchor}] {unit.label}", ""]
         for key, value in unit.fields.items():
-            parts += [f"**{key}:** {value}", ""]
+            parts += [f"**{key}:**" + ("\n\n" if key in {"Expression", "Variables"} else " ") + value, ""]
     parts += ["## Relationships", "", "```json",
               dumps({"version": 1, "relationships": [r.payload() for r in memory.relationships]}).rstrip(), "```", ""]
     text = "\n".join(parts)
@@ -211,7 +212,7 @@ def parse(text):
     markers = []
     for i, line in visible.items():
         if re.search(r"(?<!\\)(?:\\\\)*\[#", line):
-            match = re.fullmatch(r"\[#([fqe][1-9a-z][0-9a-z]*)\] ([^\n]+)\n?", body_lines[i])
+            match = re.fullmatch(r"\[#([fqei][1-9a-z][0-9a-z]*)\] ([^\n]+)\n?", body_lines[i])
             require(match is not None and len(re.findall(r"(?<!\\)(?:\\\\)*\[#", line)) == 1, "malformed reserved anchor")
             markers.append((i, match[1], match[2]))
     require(not body[:sum(len(s) for s in body_lines[:markers[0][0]])].strip() if markers else not body.strip(),
@@ -223,9 +224,9 @@ def parse(text):
         raw_lines = body_lines[line + 1:stop]
         starts = []
         for pos, value in field_lines.items():
-            match = re.match(r"^\*\*([^*\n]+):\*\* (.*)", raw_lines[pos])
+            match = re.match(r"^\*\*([^*\n]+):\*\*(?: (.*)|$)", raw_lines[pos])
             if match:
-                starts.append((pos, match[1], match[2]))
+                starts.append((pos, match[1], match[2] or ""))
         require(starts and not "".join(raw_lines[:starts[0][0]]).strip(), "unit fields required")
         fields = {}
         for j, (pos, key, first) in enumerate(starts):
@@ -249,7 +250,7 @@ def validate_memory(memory):
     require("\n" not in memory.title, "multiline title")
     require(type(memory.revision) is int and memory.revision > 0, "positive revision required")
     require(isinstance(memory.metadata, dict), "metadata object required")
-    require(isinstance(memory.next_ids, dict) and set(memory.next_ids) == {"f", "q", "e"}, "allocator fields")
+    require(isinstance(memory.next_ids, dict) and set(memory.next_ids) in ({"f", "q", "e"}, {"f", "q", "e", "i"}), "allocator fields")
     require(all(type(v) is int and v > 0 for v in memory.next_ids.values()), "invalid allocator")
     seen = set()
     for unit in memory.units:
@@ -264,8 +265,10 @@ def validate_memory(memory):
             require(unit.fields["Kind"] in KINDS and unit.fields["Evidence status"] in EVIDENCE, "finding vocabulary")
         elif unit.kind == "question":
             require(set(unit.fields) == {"Question", "State"} and unit.fields["State"] in QUESTION_STATES, "question fields/state")
+        elif unit.kind == "equation":
+            require(set(unit.fields) in ({"Equation"}, {"Equation", "Description", "Expression", "Variables", "Provenance"}) and EQ_ID.fullmatch(unit.fields["Equation"]), "equation reference")
         else:
-            require(set(unit.fields) == {"Equation"} and EQ_ID.fullmatch(unit.fields["Equation"]), "equation reference")
+            require(set(unit.fields) == {"Image", "Figure reference", "Provenance"}, "image fields")
 
 
 def external(ref):
@@ -297,6 +300,8 @@ def validate_corpus(memories, equations):
                 target = unit.fields["Equation"]
                 require(target in eqs, "missing equation: " + target)
                 referenced.add(target)
+                if "Expression" in unit.fields:
+                    require(unit.fields == equation_fields(eqs[target]), "equation presentation differs from definition")
     require(referenced == set(eqs), "orphan equation definition")
     seen = set()
     for memory in memories:
@@ -312,13 +317,24 @@ def validate_corpus(memories, equations):
             if edge.type != "CITES":
                 require(not external(edge.target), "external targets require CITES")
                 require(target_unit is not None or edge.target in eqs, "conceptual target must be a unit")
-            if edge.type in {"SUPPORTS", "CONTRADICTS", "QUALIFIES", "BUILDS_ON", "SYNTHESIZES", "INFLUENCED_BY"}:
+            if edge.type in {"SUPPORTS", "CONTRADICTS", "QUALIFIES", "BUILDS_ON", "INFLUENCED_BY"}:
                 require(source_unit.kind == "finding" and target_unit is not None and target_unit.kind == "finding", "relationship requires finding endpoints")
             if edge.type == "SYNTHESIZES":
-                require(source_unit.fields["Kind"] == "synthesis", "SYNTHESIZES source must be a synthesis finding")
+                require(source_unit.kind == "finding" and source_unit.fields["Kind"] == "synthesis", "SYNTHESIZES source must be a synthesis finding")
+                require(target_unit is not None and target_unit.kind in {"finding", "equation", "image"}, "invalid synthesis result target")
             ends = tuple(sorted((source, edge.target))) if edge.type == "RELATED_TO" else (source, edge.target)
             key = (edge.type, ends)
             require(key not in seen, "duplicate relationship")
             seen.add(key)
             edges.append({**edge.payload(), "from": source, "owner": memory.id})
     return docs, eqs, units, edges
+
+
+def equation_fields(equation):
+    def escape(value):
+        return re.sub(r"([\\`*{}_\[\]#!])", r"\\\1", value.replace("<", "&lt;").replace(">", "&gt;"))
+    variables = "\n".join("- " + escape(symbol) + ": " + escape(description) + " (units: " + escape(equation.units.get(symbol, "not supplied")) + ")"
+                          for symbol, description in sorted(equation.variables.items()))
+    return {"Equation": equation.id, "Description": escape(equation.label),
+            "Expression": "$$\n" + equation.expression + "\n$$", "Variables": variables,
+            "Provenance": escape(equation.provenance)}

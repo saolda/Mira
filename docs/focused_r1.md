@@ -1,5 +1,9 @@
 # Focused R1 search planning
 
+Historical implementation report. The later [R1 control correction](ordered_r3.md)
+replaces the empty default with fixed prohibited heading words and filters useful
+components rather than rejecting the entire component.
+
 R1 now uses the exact requested `prompt_templates/R1.txt`. R3, R4 and S2 templates,
 response contracts, context construction and scheduling are unchanged. No new
 model call, dependency, database schema or research-state migration was added.

@@ -31,7 +31,7 @@ async function select(i){if(i<0||i>=timeline.length)return;selected=i;const seq=
  if(t.kind!=='decision'){if(data.event.tree)renderTree(data.event.tree,'Recorded tree AFTER selected action');showJSON('Recorded action',data.event,data.notice);showJSON('Retrieved from external sources',data.retrieved_evidence,'Available external evidence is not automatically included in later model requests.');return;}
  const input=data.inputs;
  $('inspection').append(el('p',data.input_source,'notice'));
- showJSON('Research objective and selected node',{root_question:input.root_question,node:input.node,ancestor_questions:input.ancestor_questions},'These fields come from verified saved template bindings or historical request JSON. Missing means absent.');
+ showJSON('Research objective and selected node',{question:input.question,question_context:input.question_context,root_question:input.root_question,node:input.node,ancestor_questions:input.ancestor_questions},'These fields come from verified saved template bindings or historical request JSON. Missing means absent.');
  const templateSection=section('Filled prompt templates actually sent',data.template_verification.notice);
  if(data.prompt_template){
   templateSection.append(jsonView({action:data.prompt_template.action,request_sha256:data.prompt_template.serialized_request_sha256,redaction_applied:data.prompt_template.redaction_applied,verification:data.template_verification},'Recorded template identity',true));
@@ -46,7 +46,7 @@ async function select(i){if(i<0||i>=timeline.length)return;selected=i;const seq=
  if(input.system_messages)messages('Historical system message — exact sent text',input.system_messages);if(input.developer_messages)messages('Historical developer message — exact sent text',input.developer_messages);messages('User message — exact sent text',input.user_messages);
  showJSON('Structured context actually supplied',data.structured_context);
  memoryList('Existing memories actually supplied',input.existing_memories,'Complete recorded contents. No additional corpus memories are inserted here.');
- showJSON('Search evidence actually supplied',input.search_evidence,'If absent, the model did not receive a search_evidence field. Prior retrieval is shown separately below.');
+ showJSON('Search evidence actually supplied',input.search_evidence,'Recorded research or search_evidence values only. Prior retrieval is shown separately below.');
  if(input.output_contract)showJSON('Historical output contract',input.output_contract);
  showJSON('Model and generation settings',{requested_model:data.model,reported_model:data.reported_model,settings:data.generation_settings});
  showJSON('Token usage and context estimate',{reported_token_usage:data.usage,context_utilisation:data.context_estimate.fraction===null?'Not recorded':(100*data.context_estimate.fraction).toFixed(1)+'%',estimate:data.context_estimate},'Usage is server-reported when available. UTF-8 byte estimates are conservative and are not measured token counts.');

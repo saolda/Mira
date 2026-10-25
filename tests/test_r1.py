@@ -65,11 +65,11 @@ class R1Tests(unittest.TestCase):
                  "research/results/failed.json": dumps({"query": "do not split this joined string", "status": "failed"})}
         result = self.context(files=files)
         self.assertEqual(result["previous_search_terms"], ["insulation", "heat transfer", "thermal resistance"])
-        self.assertEqual(result["control_terms"], [])
+        self.assertEqual(result["control_terms"], r1.CONTROL_TERMS)
 
     def test_control_terms_default_explicit_and_validation(self):
-        self.assertEqual(self.context()["control_terms"], [])
-        self.assertEqual(self.context(control_terms=["solar", "Monte Carlo", "solar"])["control_terms"], ["solar", "Monte Carlo"])
+        self.assertEqual(self.context()["control_terms"], r1.CONTROL_TERMS)
+        self.assertEqual(self.context(control_terms=["solar", "Monte Carlo", "solar"])["control_terms"], [*r1.CONTROL_TERMS, "solar", "Monte Carlo"])
         r1.validate_terms(["particle", "thermal"], ["art"])
         with self.assertRaises(ValueError): r1.validate_terms(["MONTE", "CARLO estimates"], ["Monte Carlo"])
         with self.assertRaises(ValueError): r1.controls("not a list")
@@ -135,11 +135,11 @@ class R1Tests(unittest.TestCase):
             self.assertEqual({s["name"] for s in viewed["prompt_slots"]}, set(self.context()))
             self.assertTrue(viewed["template_verification"]["matches_recorded_request"])
             self.assertEqual(viewed["plain_text_prompt"], loads(llm.requests[0])["messages"][0]["content"])
-            self.assertEqual(viewed["structured_context"]["control_terms"], ["solar"])
+            self.assertEqual(viewed["structured_context"]["control_terms"], [*r1.CONTROL_TERMS, "solar"])
 
     def test_control_term_rejected_before_downstream_query(self):
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["solar", "thermal"]}])
+            llm = ScriptedLLM([{"keywords": ["solar", "metadata"]}])
             research = Research(directory, llm, {}, control_terms=["solar"])
             research.initialize("Thermal question?", ["fixture"])
             event = research.step()

@@ -229,9 +229,10 @@ class Inspector:
         reserve = selection.get("output_reserve", config.get("output_reserve"))
         estimated = len(serialized.encode("utf-8")) if isinstance(serialized, str) else None
         estimate_total = estimated + reserve if estimated is not None and isinstance(reserve, int) else None
-        inputs = {"root_question": context.get("root_question"), "node": context.get("node"),
+        inputs = {"root_question": context.get("root_question"), "question": context.get("question"),
+            "question_context": context.get("question_context"), "node": context.get("node"),
             "ancestor_questions": context.get("ancestor_questions"), "existing_memories": supplied or None,
-            "search_evidence": context.get("search_evidence"), "children": context.get("children"),
+            "search_evidence": context.get("research", context.get("search_evidence")), "children": context.get("children"),
             "equations": context.get("equations"), "output_contract": structured.get("output_contract"),
             "system_messages": [m for m in messages if isinstance(m, dict) and m.get("role") == "system"] or None,
             "developer_messages": [m for m in messages if isinstance(m, dict) and m.get("role") == "developer"] or None,

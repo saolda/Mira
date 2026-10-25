@@ -20,9 +20,9 @@ def evidence():
 
 
 def draft(label="A"):
-    return {"title": label, "summary": "Fictional fixture result " + label, "findings": [{"label": "Finding " + label,
-        "kind": "claim", "proposition": "The fixture describes " + label, "explanation": "Synthetic evidence only.",
-        "provenance": "Controlled fixture-1; no real experiment.", "evidence_ids": ["fixture-1"]}]}
+    return {"type": "claim", "text": "The fixture describes " + label,
+            "qualification": "Controlled synthetic fixture; no real experiment.",
+            "source_ids": ["fixture-1"], "related_to": None}
 
 
 def decision(kind="exhaust", children=None):
@@ -52,7 +52,7 @@ class ResearchTests(unittest.TestCase):
         return loads((self.root / "research/state.json").read_text())
 
     def test_deterministic_r1_r2_r3_r4_restart_and_transcript(self):
-        r = self.make([{"keywords": ["barrier", "heat"]}, {"memories": [draft()], "no_finding_reason": None}, decision()], [evidence()])
+        r = self.make([{"keywords": ["barrier", "heat"]}, {"results": [draft()]}, decision()], [evidence()])
         self.assertEqual(r.step()["action"], "R1")
         self.assertEqual(r.step()["action"], "R2")
         pending = self.state()["nodes"]["q1"]["pending_results"]
@@ -88,7 +88,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(self.llm.requests), 1)
 
     def test_prompts_supply_search_history_evidence_and_provider_by_named_slots(self):
-        r = self.make([{"keywords": ["heat"]}, {"memories": [draft()], "no_finding_reason": None}, decision()],
+        r = self.make([{"keywords": ["heat"]}, {"results": [draft()]}, decision()],
             [{"status": "failed", "results": [], "error": "offline"},
              {**evidence(), "raw_api_response": "Raw provider feed is retained outside prompts."}])
         self.assertEqual(r.step()["status"], "committed")
@@ -102,9 +102,10 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r1["question"], self.state()["nodes"]["q1"]["question"])
         self.assertEqual(r1["question_context"], [])
         self.assertEqual(r1["previous_search_terms"], [])
-        self.assertEqual(r1["control_terms"], [])
+        from mira.r1 import CONTROL_TERMS
+        self.assertEqual(r1["control_terms"], CONTROL_TERMS)
         r3 = prompts["R3"]["context"]
-        self.assertEqual(r3["search_evidence"]["results"], evidence()["results"])
+        self.assertEqual(r3["research"]["results"], evidence()["results"])
         r4 = prompts["R4"]["context"]
         self.assertIsNone(r4["next_database"])
         self.assertEqual([s["status"] for s in r4["search_history"]], ["failed", "ok"])
@@ -157,18 +158,15 @@ class ResearchTests(unittest.TestCase):
         self.assertIn("{not JSON", transcript(self.root, full=True))
 
     def test_unsupported_evidence_no_second_llm_pass(self):
-        bad = draft(); bad["findings"][0]["evidence_ids"] = ["invented"]
-        r = self.make([{"keywords": ["heat"]}, {"memories": [bad], "no_finding_reason": None}], [evidence()])
+        bad = draft(); bad["source_ids"] = ["invented"]
+        r = self.make([{"keywords": ["heat"]}, {"results": [bad]}], [evidence()])
         r.step(); r.step(); self.assertEqual(r.step()["status"], "rejected")
         self.assertEqual(len(self.llm.requests), 2)
         self.assertEqual(r.knowledge.validate()["documents"], 0)
-        # A schema-valid draft can still fail canonical Markdown admission after
-        # allocation. The outcome must not advertise unpublished IDs as committed.
-        invalid_markdown = draft(); invalid_markdown["title"] = "Bad\nTitle"
-        r.llm = ScriptedLLM([{"memories": [invalid_markdown], "no_finding_reason": None}])
+        # Old memory proposals are rejected, not silently migrated or admitted.
+        r.llm = ScriptedLLM([{"memories": [], "no_finding_reason": "Old contract"}])
         event = r.step()
         self.assertEqual(event["status"], "rejected")
-        self.assertEqual(event["proposed_memory_ids"], ["r1"])
         self.assertNotIn("memory_ids", event)
         self.assertEqual(read_records(self.root)[-1]["outcome"]["memory_ids"], [])
         self.assertEqual(r.knowledge.validate()["documents"], 0)
@@ -186,7 +184,7 @@ class ResearchTests(unittest.TestCase):
         r = self.make([{"keywords": ["heat"]}], context_budget=100, output_reserve=50)
         self.assertEqual(r.step()["status"], "rejected"); self.assertFalse(self.llm.requests)
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat"]}, {"memories": [], "no_finding_reason": "No relevant supported finding."}])
+            llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": []}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])}); r.initialize("Q?", ["fixture"], context_budget=12000)
             for _ in range(3): self.assertEqual(r.step()["status"], "committed")
             self.assertEqual(r.knowledge.validate()["documents"], 0)

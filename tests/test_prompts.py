@@ -80,7 +80,7 @@ class PromptTests(unittest.TestCase):
             messages, snapshot = PromptTemplates().render(action, context)
             self.assertEqual(len(messages), 1)
             self.assertEqual(messages[0]["role"], "user")
-            self.assertTrue(messages[0]["content"].startswith("Generate concise, targeted search terms" if action == "R1" else action + ":"))
+            self.assertTrue(messages[0]["content"].startswith("Generate concise, targeted search terms" if action == "R1" else "Review the retrieved research" if action == "R3" else action + ":"))
             self.assertIn("Return JSON only", messages[0]["content"])
             self.assertNotIn('"$schema"', messages[0]["content"])
             self.assertEqual(snapshot["bindings"]["context"], context)
