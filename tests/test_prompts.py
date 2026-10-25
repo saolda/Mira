@@ -53,12 +53,13 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(seen, set(ACTIONS))
 
     def test_source_hashes_and_literal_context_not_recursively_templated(self):
-        context = {"question": 'Literal {{ unknown }} ${name} "quoted" \n text'}
         for action in ACTIONS:
+            context = dict.fromkeys(SLOTS[action], None)
+            context["question"] = 'Literal {{ unknown }} ${name} "quoted" \n Unicode 温度'
             messages, metadata = PromptTemplates().render(action, context)
-            bound = {key: context.get(key) for key in SLOTS[action]}
-            self.assertEqual(loads(messages[1]["content"])["context"], bound)
-            self.assertEqual(metadata["bindings"]["context"], bound)
+            self.assertEqual([m["role"] for m in messages], ["user"])
+            self.assertIn(dumps(context["question"]).rstrip("\n"), messages[0]["content"])
+            self.assertEqual(metadata["bindings"]["context"], context)
             for file in metadata["files"]:
                 self.assertEqual(file["sha256"], digest(file["source"]))
 
@@ -73,27 +74,37 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(data["filled_prompt_messages"], loads(wire)["messages"])
         self.assertEqual(file_hashes(root), before)
 
-    def test_every_state_has_a_task_named_slots_and_precise_output_schema(self):
-        tasks = {"R1": "search query", "R3": "search evidence", "R4": "disposition", "S2": "Synthesize"}
-        fields = {"R1": ["keywords"], "R3": ["memories", "no_finding_reason"],
-                  "R4": ["decision", "keywords", "children", "rationale"], "S2": ["title", "summary", "findings"]}
+    def test_every_action_has_an_independent_plain_text_prompt(self):
         for action in ACTIONS:
             context = {key: {"marker": key} for key in SLOTS[action]}
             messages, snapshot = PromptTemplates().render(action, context)
-            user = loads(messages[-1]["content"])
-            self.assertIn(tasks[action], user["task"])
-            self.assertGreater(len(user["instructions"]), 2)
-            self.assertIn("JSON only", user["output_requirements"])
-            self.assertEqual(user["context"], context)
-            schema = user["output_contract"]
-            self.assertEqual(schema["required"], fields[action])
-            self.assertEqual(set(schema["properties"]), set(fields[action]))
-            self.assertFalse(schema["additionalProperties"])
-            self.assertEqual(schema["type"], "object")
-            source = snapshot["files"][1]["source"]
-            for key in SLOTS[action]: self.assertIn("{{ " + key + "_json }}", source)
-        self.assertEqual(PromptTemplates().render("R4", {})[1]["bindings"]["output_contract"]["properties"]["decision"]["enum"],
-                         ["kill", "exhaust", "retry", "retry_split", "exhaust_split"])
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0]["role"], "user")
+            self.assertTrue(messages[0]["content"].startswith(action + ":"))
+            self.assertIn("Return JSON only", messages[0]["content"])
+            self.assertNotIn('"$schema"', messages[0]["content"])
+            self.assertEqual(snapshot["bindings"]["context"], context)
+            self.assertEqual(len(snapshot["files"]), 1)
+            self.assertEqual(snapshot["files"][0]["path"], "prompt_templates/" + action + ".txt")
+            for key in SLOTS[action]:
+                self.assertIn("{{" + key + "}}", snapshot["files"][0]["source"])
+                self.assertIn(dumps(context[key]).rstrip("\n"), messages[0]["content"])
+        r4 = PromptTemplates().sources("R4")[0]["source"]
+        for decision in ("kill", "exhaust", "retry", "retry_split", "exhaust_split"):
+            self.assertIn("- " + decision + ":", r4)
+
+    def test_surrounding_text_crlf_and_empty_values_preserved_exactly(self):
+        source = "Prefix 温度\r\n" + " / ".join("{{" + key + "}}" for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
+        (self.templates / "R1.txt").write_bytes(source.encode())
+        context = dict.fromkeys(SLOTS["R1"], None)
+        context.update(question="", children=[], node={}, root_question="first\nsecond {{question}}")
+        messages, metadata = PromptTemplates().render("R1", context)
+        expected = "Prefix 温度\r\n" + " / ".join(dumps(context[key]).rstrip("\n") for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
+        self.assertEqual(messages[0]["content"], expected)
+        self.assertEqual(metadata["files"][0]["source"], source)
+        self.assertIn('""', expected)
+        with self.assertRaisesRegex(ValueError, "missing prompt values"):
+            PromptTemplates().render("R1", {k: v for k, v in context.items() if k != "question"})
 
     def test_unknown_context_fields_cannot_be_silently_omitted(self):
         self.assertRaisesRegex(ValueError, "no declared prompt slot", PromptTemplates().render, "R4", {"unbound_evidence": "important"})
@@ -101,7 +112,7 @@ class PromptTests(unittest.TestCase):
     def test_template_edit_changes_only_new_calls_and_preserves_old_provenance(self):
         root, wire, file, original = self.call("before")
         before = file_hashes(root)
-        system = self.templates / "system.txt"
+        system = self.templates / "R1.txt"
         system.write_bytes(system.read_bytes() + b"\r\nAn explicit new local instruction.\r\n")
         _, next_wire, _, new = self.call("after")
         self.assertNotEqual(next_wire, wire)
@@ -114,14 +125,19 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(file_hashes(root), before)
 
     def test_unknown_placeholder_missing_context_and_missing_file_fail_closed(self):
-        user = self.templates / "R1.user.json"
+        user = self.templates / "R1.txt"
         original = user.read_text()
-        user.write_text(original.replace("question_json", "typo_context"))
-        self.assertRaisesRegex(ValueError, "unknown prompt placeholder", PromptTemplates().render, "R1", {})
-        user.write_text('{"action":"R1"}')
-        self.assertRaisesRegex(ValueError, "missing slot", PromptTemplates().render, "R1", {})
+        context = dict.fromkeys(SLOTS["R1"], None)
+        for wrong in ("typo_context", "question_json"):
+            user.write_text(original.replace("{{question}}", "{{" + wrong + "}}"))
+            self.assertRaisesRegex(ValueError, "unknown prompt placeholder", PromptTemplates().render, "R1", context)
+        for wrong in ("{{Question}}", "{{question.name}}", "{{question", "question}}"):
+            user.write_text(original.replace("{{question}}", wrong))
+            self.assertRaisesRegex(ValueError, "malformed prompt placeholder", PromptTemplates().render, "R1", context)
+        user.write_text("R1: No slots")
+        self.assertRaisesRegex(ValueError, "missing slot", PromptTemplates().render, "R1", context)
         user.unlink()
-        self.assertRaises(FileNotFoundError, PromptTemplates().render, "R1", {})
+        self.assertRaises(FileNotFoundError, PromptTemplates().render, "R1", context)
         self.assertRaises(ValueError, PromptTemplates().render, "R2", {})
 
     def test_historical_calls_without_snapshot_are_not_backfilled(self):
@@ -140,4 +156,34 @@ class PromptTests(unittest.TestCase):
         data = Inspector(self.catalog.home).decision("mismatch", file.parent.name)
         self.assertFalse(data["template_verification"]["matches_recorded_request"])
         self.assertTrue(data["warnings"])
+        self.assertEqual(data["filled_prompt_messages"], loads(wire)["messages"])
+
+    def test_historical_json_template_snapshot_still_displays_exactly(self):
+        root, _, file, record = self.call("old-json-snapshot")
+        old_user = {"context": {"question": "Historical question", "children": []},
+                    "task": "Original task", "instructions": ["Original instruction"],
+                    "output_contract": {"keywords": ["terms"]}}
+        messages = [{"role": "system", "content": "Original instruction\r\n"},
+                    {"role": "user", "content": dumps(old_user)}]
+        wire = dumps({"model": "historical", "messages": messages})
+        record.update(serialized_request=wire, request=loads(wire), prompt_template={
+            "version": 1, "filled_messages": messages, "serialized_request_sha256": digest(wire),
+            "files": [{"path": "prompt_templates/R1.user.json", "source": "Original JSON template", "sha256": digest("Original JSON template")}],
+            "bindings": {"context": old_user["context"]}})
+        file.write_text(dumps(record))
+        before = file_hashes(root)
+        data = Inspector(self.catalog.home).decision("old-json-snapshot", file.parent.name)
+        self.assertEqual(data["serialized_request"], wire)
+        self.assertEqual(data["filled_prompt_messages"], messages)
+        self.assertEqual(data["task_instructions"]["task"], "Original task")
+        self.assertTrue(data["template_verification"]["matches_recorded_request"])
+        self.assertEqual(file_hashes(root), before)
+
+    def test_tampered_plain_text_bindings_do_not_become_actual_input(self):
+        root, wire, file, record = self.call("changed-bindings")
+        record["prompt_template"]["bindings"]["context"]["question"] = "Wrong question"
+        file.write_text(dumps(record))
+        data = Inspector(self.catalog.home).decision("changed-bindings", file.parent.name)
+        self.assertFalse(data["template_verification"]["matches_recorded_request"])
+        self.assertIsNone(data["structured_context"])
         self.assertEqual(data["filled_prompt_messages"], loads(wire)["messages"])

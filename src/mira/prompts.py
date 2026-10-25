@@ -1,11 +1,10 @@
-"""Editable on-disk prompt templates with immutable per-call provenance."""
-import json
+"""Small plain-text renderer with immutable per-call source and binding snapshots."""
 from pathlib import Path
 import os
 import re
 import sys
 
-from .format import digest, dumps, loads, require
+from .format import digest, dumps, require
 
 ACTIONS = ("R1", "R3", "R4", "S2")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
@@ -29,46 +28,28 @@ class PromptTemplates:
 
     def sources(self, action):
         require(action in ACTIONS, "unknown LLM action")
-        result = []
-        for name in ("system.txt", action + ".user.json", action + ".contract.json"):
-            source = (self.directory / name).read_bytes().decode("utf-8")
-            result.append({"path": "prompt_templates/" + name, "sha256": digest(source), "source": source})
-        return result
+        name = action + ".txt"
+        source = (self.directory / name).read_bytes().decode("utf-8")
+        return [{"path": "prompt_templates/" + name, "sha256": digest(source), "source": source}]
 
     def render(self, action, context):
         sources = self.sources(action)
-        contract = loads(sources[2]["source"])
-        require(isinstance(contract, dict), "prompt contract must be an object")
-        require(not (set(context) - set(SLOTS[action])), "context has no declared prompt slot: " + str(set(context) - set(SLOTS[action])))
-        # Every named slot is explicit; missing values become null, never inferred.
-        bound_context = {key: context.get(key) for key in SLOTS[action]}
-        values = {key + "_json": value for key, value in bound_context.items()}
-        values["output_contract_json"] = contract
-        source = sources[1]["source"]
+        declared = set(SLOTS[action])
+        require(not (set(context) - declared), "context has no declared prompt slot: " + str(set(context) - declared))
+        source = sources[0]["source"]
         placeholders = {match[1] for match in PLACEHOLDER.finditer(source)}
-        require(placeholders == set(values), "template must include every declared slot exactly by name; unknown prompt placeholder or missing slot")
-        def fill(match):
-            key = match[1]
-            # Compact schema avoids spending the input budget on schema indentation;
-            # source schema files stay readable. Context indentation follows its slot.
-            if key == "output_contract_json":
-                return json.dumps(values[key], ensure_ascii=False, separators=(",", ":"))
-            line_start = source.rfind("\n", 0, match.start()) + 1
-            indent = re.match(r"[ \t]*", source[line_start:]).group()
-            return dumps(values[key]).rstrip("\n").replace("\n", "\n" + indent)
-        user = PLACEHOLDER.sub(fill, source)
-        filled = loads(user)
-        require(isinstance(filled, dict) and filled.get("action") == action and
-                filled.get("context") == bound_context and filled.get("output_contract") == contract and
-                isinstance(filled.get("task"), str) and filled["task"].strip() and
-                isinstance(filled.get("instructions"), list) and filled["instructions"] and
-                all(isinstance(item, str) and item.strip() for item in filled["instructions"]) and
-                isinstance(filled.get("output_requirements"), str) and filled["output_requirements"].strip(),
-                "template must preserve task, instructions, complete context and output_contract")
-        messages = [{"role": "system", "content": sources[0]["source"]}, {"role": "user", "content": user}]
-        return messages, {"version": 1, "action": action, "files": sources,
-            "bindings": {"context": bound_context, "output_contract": contract, "slots": bound_context}, "filled_messages": messages}
+        require(not (placeholders - declared), "unknown prompt placeholder: " + str(placeholders - declared))
+        # Check all double-braced expressions, including misspellings outside the
+        # supported variable grammar. Substitution examines source only, once.
+        remainder = PLACEHOLDER.sub("", source)
+        require("{{" not in remainder and "}}" not in remainder, "malformed prompt placeholder")
+        require(placeholders == declared, "template has missing slot: " + str(declared - placeholders))
+        require(not (declared - set(context)), "missing prompt values: " + str(declared - set(context)))
+        values = {key: context[key] for key in SLOTS[action]}
+        filled = PLACEHOLDER.sub(lambda match: dumps(values[match[1]]).rstrip("\n"), source)
+        messages = [{"role": "user", "content": filled}]
+        return messages, {"version": 2, "format": "text", "action": action, "files": sources,
+                          "bindings": {"context": values}, "filled_messages": messages}
 
     def catalog(self):
-        return [{"action": action, "files": self.sources(action),
-                 "variables": [key + "_json" for key in SLOTS[action]] + ["output_contract_json"]} for action in ACTIONS]
+        return [{"action": action, "files": self.sources(action), "variables": list(SLOTS[action])} for action in ACTIONS]

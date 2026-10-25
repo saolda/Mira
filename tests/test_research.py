@@ -94,8 +94,9 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r.step()["status"], "committed")
         self.assertEqual(r.step()["status"], "search_failed")
         for _ in range(3): self.assertEqual(r.step()["status"], "committed")
-        prompts = {loads(loads(wire)["messages"][-1]["content"])["action"]:
-                   loads(loads(wire)["messages"][-1]["content"]) for wire in self.llm.requests}
+        from mira.interactions import read_records
+        prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
+                   for record in read_records(self.root)}
         r1 = prompts["R1"]["context"]
         self.assertEqual(r1["question"], r1["node"]["question"])
         self.assertEqual(r1["next_database"], "fixture")

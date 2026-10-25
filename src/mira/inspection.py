@@ -5,7 +5,8 @@ from pathlib import Path
 import re
 
 from .experiments import Experiments, confined, NAME
-from .format import digest, loads, require
+from .format import digest, dumps, loads, require
+from .prompts import PLACEHOLDER
 
 
 def read_text(root, relative):
@@ -176,6 +177,17 @@ class Inspector:
         if isinstance(template, dict):
             matches = (isinstance(serialized, str) and template.get("serialized_request_sha256") == digest(serialized)
                        and template.get("filled_messages") == messages)
+            if template.get("version") == 2:
+                files = template.get("files", [])
+                bindings = template.get("bindings", {}).get("context")
+                try:
+                    raw = files[0]["source"]
+                    reproduced = PLACEHOLDER.sub(lambda m: dumps(bindings[m[1]]).rstrip("\n"), raw)
+                    matches = (matches and len(files) == 1 and digest(raw) == files[0]["sha256"]
+                               and bindings == req.get("context")
+                               and messages == [{"role": "user", "content": reproduced}])
+                except (KeyError, IndexError, TypeError):
+                    matches = False
             template_check.update(matches_recorded_request=matches,
                                   notice="Filled templates match the recorded request." if matches else "Template snapshot does not match the saved request; use the saved request as authority.")
             if not matches: warnings.append(template_check["notice"])
@@ -188,6 +200,13 @@ class Inspector:
                 except (ValueError, TypeError): pass
         structured = next((v for v in user_payloads if "context" in v), {})
         context = structured.get("context") if isinstance(structured.get("context"), dict) else {}
+        plain_text_prompt = None
+        context_recorded = "context" in structured
+        if isinstance(template, dict) and template.get("version") == 2:
+            if template_check["matches_recorded_request"]:
+                context = template["bindings"]["context"]
+                context_recorded = True
+            plain_text_prompt = next((m.get("content") for m in messages if isinstance(m, dict) and m.get("role") == "user"), None)
         corpus, historic_state = self._historical(root, journals, event.get("journal_sequence") if event else None, warnings)
         before = historic_state.get("nodes") if historic_state else None
         supplied = list(context.get("linked_memories") or []) + list(context.get("input_memories") or [])
@@ -220,14 +239,15 @@ class Inspector:
         return {"id": identity, "experiment": name, "status": self._status(record, event), "record": record,
             "input_source": source, "serialized_request": serialized, "inputs": inputs,
             "prompt_template": template, "template_verification": template_check,
-            "filled_prompt_messages": messages,
+            "filled_prompt_messages": messages, "plain_text_prompt": plain_text_prompt,
             "task_instructions": {key: structured.get(key) for key in
                 ("task", "instructions", "information_rules", "output_requirements")},
             "prompt_slots": [{"name": key, "value": value,
                 "status": "Explicit null" if value is None else
-                          "Empty collection" if value == [] or value == {} else "Supplied"}
-                for key, value in context.items()] if "context" in structured else None,
-            "structured_context": context if "context" in structured else None,
+                          "Empty collection" if value == [] or value == {} else
+                          "Empty string" if value == "" else "Supplied"}
+                for key, value in context.items()] if context_recorded else None,
+            "structured_context": context if context_recorded else None,
             "model": payload.get("model") if payload else None,
             "generation_settings": {k: v for k, v in payload.items() if k not in {"model", "messages"}} if payload else None,
             "reported_model": body.get("model"), "usage": usage, "raw_response": (record.get("response") or {}).get("raw"),

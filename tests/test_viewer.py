@@ -113,8 +113,8 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(data["serialized_request"], original_request["serialized_request"])
         self.assertEqual(data["raw_response"], original_response["raw"])
         payload = loads(data["serialized_request"])
-        self.assertEqual(data["inputs"]["system_messages"][0], payload["messages"][0])
-        self.assertEqual(data["inputs"]["user_messages"][0], payload["messages"][1])
+        self.assertIsNone(data["inputs"]["system_messages"])
+        self.assertEqual(data["inputs"]["user_messages"][0], payload["messages"][0])
         self.assertIsNone(data["inputs"]["developer_messages"])
         self.assertEqual(data["inputs"]["search_evidence"][0]["results"], evidence()["results"])
         self.assertEqual(len(data["inputs"]["existing_memories"]), 1)
@@ -140,10 +140,11 @@ class ViewerTests(unittest.TestCase):
 
     def test_task_and_slot_panels_use_only_actual_recorded_messages(self):
         data = self.inspector.decision("run-a", self.r4)
-        actual = loads(loads(data["serialized_request"])["messages"][-1]["content"])
-        self.assertEqual(data["task_instructions"], {key: actual[key] for key in
-            ("task", "instructions", "information_rules", "output_requirements")})
-        self.assertEqual({slot["name"]: slot["value"] for slot in data["prompt_slots"]}, actual["context"])
+        actual = loads(data["serialized_request"])["messages"]
+        self.assertEqual([m["role"] for m in actual], ["user"])
+        self.assertEqual(data["plain_text_prompt"], actual[0]["content"])
+        self.assertEqual({slot["name"]: slot["value"] for slot in data["prompt_slots"]},
+                         data["record"]["request"]["prompt_template"]["bindings"]["context"])
         slots = {slot["name"]: slot for slot in data["prompt_slots"]}
         self.assertEqual(slots["next_database"]["status"], "Explicit null")
         self.assertEqual(slots["equations"]["status"], "Empty collection")
@@ -225,7 +226,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         data = json.loads(content)
         self.assertEqual({entry["action"] for entry in data}, {"R1", "R3", "R4", "S2"})
-        self.assertEqual(len(data[0]["files"]), 3)
+        self.assertEqual(len(data[0]["files"]), 1)
         status, content, _ = self.request("GET", f"/api/experiments/run-a/decisions/{self.r4}")
         self.assertTrue(json.loads(content)["template_verification"]["matches_recorded_request"])
         self.assertEqual(file_hashes(self.root), before)

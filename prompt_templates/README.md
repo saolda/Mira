@@ -1,114 +1,83 @@
-# Mira LLM prompt templates
+# Plain-text task prompts
 
-These files supply the actual model messages. Every state has a complete task,
-step-specific instructions, named information slots and a precise output format.
-They are not example prompts or summaries reconstructed after a call.
+Edit `R1.txt`, `R3.txt`, `R4.txt` or `S2.txt` directly. Each is a complete,
+independent task with its own context, decision criteria and concise JSON output
+example. New calls reload the selected file. There is no shared prompt, persona,
+system message or developer message. The HTTP transport receives one user message.
+R2 is a deterministic provider call; S1 selects synthesis inputs without an LLM.
 
-| File | Task |
+Python response validators remain authoritative and unchanged. The templates do
+not contain JSON Schema or ask the model to assign IDs, priorities, relationship
+records or consumption marks. R4 retains kill, exhaust, retry, retry_split and
+exhaust_split with their existing conditional keywords/children requirements.
+S2 still requires exact supplied finding references and coverage of every input.
+
+## Variables
+
+Use `{{question}}`, for example. Variables are declared in `src/mira/prompts.py`:
+
+| Actions | Variables |
 | --- | --- |
-| `system.txt` | Shared system message: JSON only, evidence grounding, no invented IDs. |
-| `R1.user.json`, `R1.contract.json` | Generate focused search-query components; return `keywords`. |
-| `R3.user.json`, `R3.contract.json` | Interpret supplied evidence; return supported memory drafts or an explicit no-finding reason. |
-| `R4.user.json`, `R4.contract.json` | Evaluate this research direction and choose one of the five dispositions, with rationale and conditional keywords/children. |
-| `S2.user.json`, `S2.contract.json` | Integrate at least two selected memories with finding-level source references. |
+| R1, R3, R4 | root_question, question, node, ancestor_questions, linked_memories, children, strategy, next_database, search_history, equations |
+| R3, R4 additionally | search_evidence |
+| S2 | root_question, question, node, ancestor_questions, input_memories, equations |
 
-The complete prompt is the shared system message plus the filled state user
-message. No developer message is currently sent. R2 performs a provider search
-without an LLM; S1 selects synthesis deterministically, so neither has a prompt.
+Each template includes all its declared variables; duplicate occurrences are
+allowed. Unknown/malformed placeholders, omitted slots, undeclared context fields
+and missing values fail before dispatch. Missing is never silently turned into
+null. Explicit None becomes `null`; empty strings, arrays and objects become
+`""`, `[]` and `{}` respectively. Every value is serialized as consistent sorted,
+indented JSON with Unicode preserved. This applies to scalar strings too, so
+multiline strings retain their exact value as escaped JSON newlines; structured
+values span readable lines. Surrounding template text and line endings are kept
+exactly. Substitution runs once over the source: braces in inserted evidence are
+literal data and never recursively evaluated.
 
-## Tasks and exact outputs
+R3 receives the pending normalized result batch; R4 receives this node's result
+batches, unsuccessful attempts and linked findings. Full provider feeds remain on
+disk and are not inserted. S2 receives complete selected unconsumed memories,
+including a synthesis's own finding IDs when it is an input. These data-selection
+rules, scheduling and synthesis cadence are unchanged.
 
-Each user file contains `task`, `instructions`, `information_rules`,
-`output_requirements`, `context` and `output_contract`. Contract files are JSON
-Schemas with required fields, nested types, enums and no extra output fields.
-R3 specifies the relationship between empty memories and `no_finding_reason`;
-R4 specifies when keywords and child questions are required or forbidden. S2
-requires finding references and explains that every selected input must contribute.
-IDs, consumption marks, priorities, relationships and state transitions belong to
-the harness; the model proposes only the fields specified for its task.
+## Recorded provenance and historical inspection
 
-The Python admission validators remain authoritative, including checking source
-IDs against actual supplied evidence and synthesis coverage of all consumed
-memories. Editing a contract does not change those validators. Changes to accepted
-fields or dispositions must be coordinated with code. No dependency on a JSON
-Schema library or model-specific structured-output API is introduced.
+Every call saves version-2 text-template provenance: source path/text/hash, bound
+values, filled message and serialized-request digest. Existing request/response,
+validation and outcome recording and credential redaction remain in place.
+The viewer shows raw source, exact filled user text, each variable/value, the full
+model response, validation and resulting action. New text bindings are checked
+against the saved source, filled message and separately recorded context before
+being labelled as actual inputs. The saved HTTP body remains authoritative.
 
-## Named information slots
+Old JSON-template snapshots and calls without snapshots keep their original
+messages and schemas. No historical requests, research data or transcripts are
+rewritten. The current template catalog is separate from saved call provenance.
 
-Every placeholder is a complete JSON value, for example
-`"question": {{ question_json }}`. It is deliberately unquoted in the source.
-All slots below must occur in their state template. Unknown/missing slot names,
-undeclared context fields, invalid JSON and missing task instructions fail before
-model dispatch. Values are substituted once: apparent placeholders inside source
-text, memory contents or questions remain literal data.
+`MIRA_PROMPT_TEMPLATES` can select another directory. Otherwise the repository's
+`prompt_templates/` is used, with `share/mira/prompt_templates` for installed
+packages. A missing file fails rather than falling back to an embedded prompt.
+No new dependency or transport-specific system-message requirement was introduced.
 
-| Slot | Supplied information |
-| --- | --- |
-| `root_question_json` | Overall objective. |
-| `question_json` | Selected node's research question, explicitly. |
-| `node_json` | Full selected-node record, including keywords, pointer, lifecycle, priorities and counts. |
-| `ancestor_questions_json` | Question path from root through the selected node, inclusive. |
-| `linked_memories_json` | Directly linked memory IDs and complete canonical Markdown (R1/R3/R4). |
-| `children_json` | Existing direct child-node records (R1/R3/R4). |
-| `strategy_json` | Active strategy ID and ordered provider list (R1/R3/R4). |
-| `next_database_json` | Next provider, or null when the pass is finished (R1/R3/R4). |
-| `search_history_json` | This node's recorded queries, provider, status, errors, timestamps and result references (R1/R3/R4). |
-| `search_evidence_json` | R3: the pending result batch. R4: all this node's recorded batches, including failed/empty attempts and normalized result text. |
-| `input_memories_json` | S2: complete selected unconsumed memories and their IDs, including descendant material selected by the gardener. |
-| `equations_json` | Definitions referenced by the supplied memories. |
-| `output_contract_json` | The corresponding contract file, inserted as a JSON Schema. |
+The existing UTF-8 request-byte budget and synthesis complete-input selection
+still apply. Shorter prompts may naturally allow more inputs to fit the same
+budget. Only the scripted demo's explicit fixture budget was adjusted from 11500
+to 10000 to retain its three-level synthesis-descent test; runtime defaults and
+scheduler logic are unchanged.
 
-A null slot means unavailable/not supplied; an empty array means an explicitly
-empty collection. Full provider feeds are retained on disk but excluded from
-prompts. Normalized evidence includes provider-supplied abstracts/excerpts, source
-IDs and truncation metadata; this does not imply full papers were supplied.
-Other nodes' memories are not automatically inserted into research decisions.
-The viewer shows available corpus material separately from model inputs.
+## Verification and bounded real evaluation
 
-R4 now receives this node's search evidence and search outcomes as well as its
-linked memories. Earlier R4 calls lacked this evidence; their saved requests
-remain unchanged. The new R4 instructions explain all five dispositions and ask
-for a rationale considering what was tried, evidence and remaining gaps. Running
-out of databases is not itself evidence that no productive direction remains.
-These are explicit prompt changes; no improvement in real research quality has
-been measured by the scripted demonstration.
-
-## Editing, budgets and recorded provenance
-
-Edit the files directly in the IDE. Subsequent calls reload them from disk.
-Source text is preserved, including line endings; contract JSON is compacted when
-inserted to reduce request overhead. The default directory is this repository's
-`prompt_templates/`; installed packages include `share/mira/prompt_templates`.
-`MIRA_PROMPT_TEMPLATES` selects an explicit alternative. Missing files never
-silently fall back to older or embedded prompts.
-
-Full instructions, schemas and evidence count toward the existing conservative
-UTF-8 request-byte budget. Defaults remain configurable **8192** total and **2048**
-output reserve; larger requests need an explicit larger `--context-budget` (for
-example `16000`). Oversized research contexts are blocked before dispatch instead
-of silently dropping evidence. Synthesis still selects bounded complete-memory
-batches. The fixture demonstration uses an explicit **11500 / 2048** budget to fit
-its research prompts while exercising synthesis descent through three levels.
-
-Click **Prompt templates** in the HTML viewer to inspect current source files.
-Select a recorded decision to see **State task and exact output instructions**,
-**Filled information slots**, filled messages, source snapshots and the exact
-serialized request. Null/empty slots are labelled explicitly. These panels use the
-saved request, never the current state or today's templates.
-
-Before dispatch, records save template sources and hashes, filled values/messages
-and the request-body digest. The viewer verifies the snapshot against the saved
-body; known credential redaction still applies. Older calls are displayed exactly
-as recorded, with absent instructions/provenance labelled rather than backfilled.
-
-A new isolated, scripted example can be created with:
+Run `PYTHONPATH=src python3 -m unittest discover -s tests -v`.
+[Prompt refactor results](../docs/plain_text_prompts.md) records tests, preservation
+checks and the four-call real-model evaluation. To repeat the evaluation using an
+already running localhost model, choose a fresh experiment name:
 
 ```bash
-PYTHONPATH=src python3 -m mira research-demo --experiment state-prompt-check
-PYTHONPATH=src python3 -m mira transcript --experiment state-prompt-check --full
+PYTHONPATH=src python3 examples/plain_prompt_check.py \
+  --endpoint http://127.0.0.1:8090 --experiment my-new-prompt-check
 PYTHONPATH=src python3 -m mira viewer
 ```
 
-Select **state-prompt-check** and inspect R1, R3, R4 and S2. Existing experiment
-names are not overwritten. This fictional example verifies prompts, bookkeeping
-and inspection, not LLM research quality.
+The evaluator uses authored synthetic evidence, validates all four real outputs,
+and records audit events without applying proposals to research state or memories.
+It starts no model service. This is a format/grounding spot-check, not an autonomous
+research benchmark or proof of improved research quality.

@@ -19,4 +19,4 @@ where = ["src"]
 mira = ["viewer_assets/*.html", "viewer_assets/*.js", "viewer_assets/*.css"]
 
 [tool.setuptools.data-files]
-"share/mira/prompt_templates" = ["prompt_templates/*.txt", "prompt_templates/*.json", "prompt_templates/README.md"]
+"share/mira/prompt_templates" = ["prompt_templates/*.txt", "prompt_templates/README.md"]

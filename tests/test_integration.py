@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 
 from mira.clients import HTTPModel, CallError
 from mira.decisions import request, ScriptedLLM
+from mira.prompts import SLOTS
 from mira.format import loads, dumps
 from mira.interactions import read_records
 from mira.research import Research
@@ -60,7 +61,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_http_sends_exact_serialization_with_auth_outside_body(self):
         model = HTTPModel("http://localhost:8090/v1", "test-model", api_key="private-key", no_thinking=True)
-        serialized = request(model.model, model.settings, "R1", {"question": "Q?"})
+        serialized = request(model.model, model.settings, "R1", {**dict.fromkeys(SLOTS["R1"], None), "question": "Q?"})
         captured = []
         class Opener:
             def open(self, req, timeout): captured.append(req); return BytesIO(b'{"raw":"complete"}')
