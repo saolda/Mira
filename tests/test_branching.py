@@ -196,6 +196,8 @@ class BranchingTests(unittest.TestCase):
         from mira.research_demo import DemoLLM
         self.make()
         self.r.llm = DemoLLM()
+        from mira.research_demo import evidence as demo_evidence
+        self.r.adapters = {'fixture':FixtureSearch([demo_evidence('fixture-'+str(i)) for i in range(1,11)])}
         self.change(lambda s, *_: s.update(research_capacity_tokens=6000, synthesis_interval=3))
         actions = set()
         for _ in range(35):
@@ -308,10 +310,11 @@ class BranchingTests(unittest.TestCase):
         self.assertEqual(ArxivSearch.query(['id:physics/0306182v1']), 'id:physics/0306182v1')
         self.assertEqual(ArxivSearch.query(['"recurrent dropout"']), 'all:"recurrent" AND all:"dropout"')
         self.assertRaises(ValueError, ArxivSearch.query, ['!!!'])
-        self.make([{'keywords': ['recurrent dropout', 'neural networks']}])
+        self.llm = ScriptedLLM([{'keywords': ['recurrent dropout', 'neural networks']}])
+        self.r = Research(self.root, self.llm, {})
+        self.r.initialize('Question?', ['arxiv'], context_budget=20000)
         search = FixtureSearch([{'status': 'empty', 'results': []}])
         self.r.adapters = {'arxiv': search}
-        self.change(lambda s, *_: s['strategies'][0].update(databases=['arxiv']))
         self.r.step(); event = self.r.step()
         self.assertEqual(event['query'], 'all:"recurrent" AND all:"dropout" AND all:"neural" AND all:"networks"')
         self.assertEqual(search.queries, [event['query']])

@@ -76,22 +76,27 @@ class ResearchTests(unittest.TestCase):
         (self.root / "research/state.json").unlink()
         self.assertIn("serialized_request", transcript(self.root, full=True))
 
-    def test_failed_and_empty_searches_do_not_share_pointer_semantics(self):
-        r = self.make([{"keywords": ["heat"]}], [{"status": "failed", "results": [], "error": "network"}, {"status": "empty", "results": []}])
-        r.step(); before = self.state()
-        self.assertEqual(r.step()["status"], "search_failed")
-        self.assertEqual(self.state(), before)
-        self.assertEqual(r.step()["action"], "R2")
+    def test_failed_and_empty_searches_both_advance_and_record_distinct_outcomes(self):
+        self.llm = ScriptedLLM([{"keywords": ["heat"]}, decision()])
+        r = Research(self.root, self.llm, {"offline":FixtureSearch([{"status":"failed","results":[],"error":"network"}]),
+             "empty":FixtureSearch([{"status":"empty","results":[]}])})
+        r.initialize("Question?", ["offline","empty"])
+        r.step()
+        failed = r.step(); self.assertEqual(failed["status"], "committed")
+        self.assertEqual(failed["search_status"], "failed")
         self.assertEqual(self.state()["nodes"]["q1"]["next_database_index"], 1)
-        self.assertIsNone(self.state()["nodes"]["q1"]["pending_results"])
-        self.assertEqual(len(self.llm.requests), 1)
+        self.assertEqual(r.step()["search_status"], "empty")
+        self.assertEqual(self.state()["nodes"]["q1"]["next_database_index"], 2)
+        self.assertEqual(r.step()["action"], "R4")
+        self.assertEqual(len(self.llm.requests), 2)
 
     def test_prompts_supply_search_history_evidence_and_provider_by_named_slots(self):
-        r = self.make([{"keywords": ["heat"]}, {"results": [draft()]}, decision()],
-            [{"status": "failed", "results": [], "error": "offline"},
-             {**evidence(), "raw_api_response": "Raw provider feed is retained outside prompts."}])
+        self.llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft()]}, decision()])
+        r = Research(self.root, self.llm, {"offline":FixtureSearch([{"status":"failed","results":[],"error":"offline"}]),
+            "fixture":FixtureSearch([{**evidence(), "raw_api_response":"Raw provider feed is retained outside prompts."}])})
+        r.initialize("How does the fictional barrier affect heat?", ["offline","fixture"], context_budget=12000)
         self.assertEqual(r.step()["status"], "committed")
-        self.assertEqual(r.step()["status"], "search_failed")
+        self.assertEqual(r.step()["status"], "committed")
         for _ in range(3): self.assertEqual(r.step()["status"], "committed")
         from mira.interactions import read_records
         prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
@@ -112,7 +117,8 @@ class ResearchTests(unittest.TestCase):
         self.assertIn("r1", [m["id"] for m in r4["research_results"]["memories"]])
         self.assertNotIn("raw_api_response", dumps(prompts))
         files = r.store._files()
-        self.assertTrue(any("Raw provider feed" in raw for path, raw in files.items() if path.startswith("research/results/")))
+        self.assertFalse(any("Raw provider feed" in raw for raw in files.values()))
+        self.assertTrue(list((self.root / "retrieved").glob("*.json")))
 
     def test_all_dispositions_retry_to_r1_and_sustained_priority(self):
         for kind in ("kill", "answered", "retry"):

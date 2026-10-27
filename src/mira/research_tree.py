@@ -179,6 +179,15 @@ def validate(state, memories, files):
     require(type(state["strategy_index"]) is int and 0 <= state["strategy_index"] < len(state["strategies"]), "invalid strategy")
     databases = state["strategies"][state["strategy_index"]]["databases"]
     require(databases and len(databases) == len(set(databases)) and all(isinstance(d, str) and d for d in databases), "invalid databases")
+    if "strategy_selection" in state:
+        selection = state["strategy_selection"]
+        require(isinstance(selection, dict) and selection.get("method") in {"r0","explicit","databases"}
+                and selection.get("strategy") == state["strategies"][state["strategy_index"]]["id"]
+                and isinstance(selection.get("reason"),str) and selection["reason"].strip(), "missing/invalid persisted strategy selection")
+    require(isinstance(state.get("source_index", {}), dict), "invalid source index")
+    for source in state.get("source_index", {}).values():
+        require(isinstance(source,dict) and isinstance(source.get("identifiers"),dict) and source["identifiers"]
+                and isinstance(source.get("source"),dict) and isinstance(source.get("evidence_ref"),str), "invalid processed source")
     linked, orders = [], []
     for identity, n in nodes.items():
         require(re.fullmatch(r"q[1-9][0-9]*", identity) and n["id"] == identity and
@@ -238,6 +247,11 @@ def metrics(state):
             "synthesis_cycles": state["synthesis_cycles"], "max_depth": max(depths.values()),
             "living_by_depth": dict(sorted(living.items())), "nodes": state["nodes"],
             "candidates": state["synthesis_candidate_order"],
+            "strategy": state["strategies"][state["strategy_index"]],
+            "strategy_selection": state.get("strategy_selection"),
+            "processed_source_count": len(state.get("source_index", {})),
+            "provider_cooldowns": state.get("provider_cooldowns", {}),
+            "retrieval_storage": state.get("retrieval_storage", "legacy_canonical"),
             "status_totals": {s: sum(n["status"] == s for n in state["nodes"].values())
                               for s in ("living", "exhausted", "answered", "killed", "split")},
             "nodes_by_depth": dict(sorted(all_depths.items())),
@@ -253,6 +267,12 @@ def validate_transition(before, after):
     """A durable split receipt cannot be cleared or replayed by any writer."""
     if before.get("mira_research") != 2: return
     require(after.get("mira_research") == 2, "cannot downgrade research state")
+    if "strategy_selection" in before:
+        require(after.get("strategy_selection") == before["strategy_selection"] and after["strategies"] == before["strategies"]
+                and after["strategy_index"] == before["strategy_index"], "experiment strategy is immutable")
+    for key, source in before.get("source_index", {}).items():
+        require(key in after.get("source_index", {}) and all(after["source_index"][key]["identifiers"].get(k) == v
+                for k,v in source["identifiers"].items()), "cannot forget a processed source")
     allowed = {"living": {"living", "answered", "killed", "exhausted"},
                "exhausted": {"exhausted", "split"}, "answered": {"answered"},
                "killed": {"killed"}, "split": {"split"}}

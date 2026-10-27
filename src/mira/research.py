@@ -10,6 +10,9 @@ from .live import LiveStore
 from .interactions import Interactions, now, read_records
 from . import decisions, research_tree as tree, r1, r3, branching
 from .search import validate_search, ArxivSearch
+from . import strategies, sources
+import time
+from email.utils import parsedate_to_datetime
 
 
 class Research:
@@ -18,19 +21,55 @@ class Research:
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
         self.control_terms = r1.controls(control_terms)
-        self.trace = Interactions(self.store, getattr(llm, "secrets", ()))
+        self.trace = Interactions(self.store, tuple(getattr(llm, "secrets", ())) +
+            tuple(secret for adapter in adapters.values() for secret in getattr(adapter, "secrets", ())))
 
-    def initialize(self, question, databases, **config):
+    def initialize(self, question, databases=None, *, strategy=None, registry=None, fault=None, **config):
         with self.store.lock():
             token, memories, equations, ledger = self.store.read()
-            require(not self.store._files(), "research initialization requires an empty isolated corpus")
-            state = tree.initial(question, databases, **config)
-            branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
+            require(not self.store._files() and not read_records(self.store.root), "research initialization requires an empty isolated corpus")
+            require(not (databases is not None and strategy is not None), "choose a strategy or explicit databases")
+            values = strategies.registry(registry) if databases is None else None
+            chosen = strategies.select(values, strategy) if strategy is not None else None
+            state = tree.initial(question, databases or (chosen["databases"] if chosen else ["selection_pending"]), **config)
+            state.update(source_index={}, provider_cooldowns={}, retrieval_storage="temporary")
             event = {"run_id": state["run_id"], "timestamp": now(), "cycle": 0, "action": "initialize",
-                     "node_id": "q1", "question": question, "databases": databases, "config": config}
-            self.store.publish(memories, equations, ledger, token, files={
-                "research/state.json": dumps(state), "events/initialize.json": dumps(event)}, operation_type="initialize")
+                     "node_id": "q1", "question": question, "config": config}
+            extras = {}
+            if chosen is None and databases is None:
+                event.update(action="R0", status="committed")
+                try:
+                    value = self._model(event, "R0", {"question": question, "strategies": values}, state)
+                    decisions.validate("R0", value, values)
+                    chosen = strategies.select(values, value["strategy"])
+                    event.update(decision=value, action_committed="R0")
+                    state["strategy_selection"] = {"method":"r0", **value, "interaction_id":event["interaction_id"]}
+                except Exception as exc:
+                    identity = event.get("interaction_id")
+                    if identity:
+                        self.trace.write(identity, "validation", {"timestamp":now(), "accepted":False, "action":"R0", "error":str(exc)})
+                        self.trace.write(identity, "outcome", {"timestamp":now(), "status":"rejected", "action_committed":None, "error":str(exc)})
+                    raise
+            elif chosen is not None:
+                state["strategy_selection"] = {"method":"explicit", "strategy":chosen["id"], "reason":"Operator-selected strategy."}
+            else:
+                chosen = {"id":"custom", "name":"Custom", "description":"Operator-supplied database sequence.", "databases":list(databases)}
+                state["strategy_selection"] = {"method":"databases", "strategy":"custom", "reason":"Explicit database compatibility path."}
+            state["strategies"] = [deepcopy(chosen)]
+            event.update(databases=chosen["databases"], strategy=chosen)
+            branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
+            tree.validate(state, memories, {})
+            identity = event.get("interaction_id")
+            if identity:
+                self.trace.write(identity, "validation", {"timestamp":now(), "accepted":True, "action":"R0"})
+            extras.update({"research/state.json":dumps(state), "events/initialize.json":dumps(event)})
+            self.store.publish(memories, equations, ledger, token, files=extras, operation_type="initialize", fault=fault)
+            if identity:
+                self.trace.write(identity, "outcome", {"timestamp":now(), "status":"committed", "action_committed":"R0", "event_ref":"events/initialize.json"})
             return state
+
+    def prune_retrievals(self, *, apply=False):
+        return sources.prune(self.store, apply=apply)
 
     def inspect(self):
         with self.store.lock():
@@ -50,7 +89,7 @@ class Research:
                 if result.get("node_id") == node_id:
                     searches.append({key: value for key, value in result.items() if key != "raw_api_response"})
         searches.sort(key=lambda item: (item.get("timestamp", ""), item.get("reference", "")))
-        history = [{key: value for key, value in result.items() if key != "results"} for result in searches]
+        history = [{key: value for key, value in result.items() if key not in {"results", "duplicates", "payload_ref", "payload_sha256"}} for result in searches]
         return {"root_question": state["nodes"][state["root_id"]]["question"], "question": n["question"],
                 "node": deepcopy(n),
                 "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, node_id)],
@@ -112,42 +151,80 @@ class Research:
             query = ArxivSearch.query(n["keywords"]) if provider == "arxiv" else " ".join(n["keywords"])
             evidence_ref = "research/results/" + uuid.uuid4().hex + ".json"
             event.update(provider=provider, query=query, evidence_ref=evidence_ref)
-            try:
-                result = validate_search(self.adapters[provider].search(query))
-            except Exception as exc:
-                result = {"status": "failed", "results": [], "error": self.trace.clean(str(exc)), "error_type": type(exc).__name__}
-            evidence = {**result, "provider": provider, "query": query, "timestamp": now(), "node_id": identity, "reference": evidence_ref}
-            # Sanitize known transport credentials even if an adapter echoes them.
-            evidence = loads(self.trace.clean(dumps(evidence)))
+            cooldowns = state.setdefault("provider_cooldowns", {})
+            if cooldowns.get(provider, 0) > time.time():
+                result = {"status":"rate_limited", "results":[], "skipped":"provider_cooldown", "retry_at":cooldowns[provider]}
+            else:
+                try:
+                    result = validate_search(self.adapters[provider].search(query))
+                except Exception as exc:
+                    result = {"status":"failed", "results":[], "error":self.trace.clean(str(exc)), "error_type":type(exc).__name__}
+            result = loads(self.trace.clean(dumps(result)))
+            unique, duplicates = sources.unique(result["results"], state.setdefault("source_index", {}))
+            sources.reconcile(state["source_index"], duplicates)
+            evidence = {**{k:v for k,v in result.items() if k not in {"results","raw_api_response"}},
+                "provider":provider, "query":query, "timestamp":now(), "node_id":identity,
+                "round":n.get("search_round",0), "reference":evidence_ref,
+                "results":unique, "duplicates":duplicates}
+            if state.get("retrieval_storage") == "temporary":
+                evidence["results"] = [sources.descriptor(row) for row in unique]
+                if unique:
+                    evidence.update(sources.save_payload(self.store, evidence_ref.split('/')[-1][:-5], unique))
+            elif "raw_api_response" in result:
+                evidence["raw_api_response"] = result["raw_api_response"]  # Preserve old experiment policy.
             extras[evidence_ref] = dumps(evidence)
-            event["search_status"] = evidence["status"]
-            if evidence["status"] in {"failed", "rate_limited"}:
-                event["status"] = "search_failed"
-                return extras, False
+            event.update(search_status=result["status"], duplicate_count=len(duplicates), unique_source_count=len(unique))
             n["next_database_index"] += 1
-            if evidence["status"] == "ok": n["pending_results"] = evidence_ref
+            outcomes = n.setdefault("round_outcomes", [])
+            outcomes.append(result["status"])
+            if result["status"] in {"failed","rate_limited"} and not result.get("skipped"):
+                delay = 60
+                retry = result.get("retry_after")
+                if retry:
+                    try: delay = max(1, int(retry))
+                    except (TypeError,ValueError):
+                        try: delay = max(1, parsedate_to_datetime(retry).timestamp() - time.time())
+                        except (TypeError,ValueError,OverflowError): pass
+                cooldowns[provider] = max(cooldowns.get(provider, 0), time.time() + delay)
+                event["retry_at"] = cooldowns[provider]
+            if result["status"] in {"ok","empty"}: cooldowns.pop(provider, None)
+            if unique: n["pending_results"] = evidence_ref
+            if n["next_database_index"] == len(databases) and outcomes and all(o in {"failed","rate_limited"} for o in outcomes):
+                event.update(status="providers_unavailable", reason="All databases were unavailable this round; progress saved for explicit resumption.")
         else:
             if action == "R1":
                 context = r1.context(state, memories, files, identity, self.control_terms)
             elif action == "R3":
-                evidence = loads(files[n["pending_results"]])
+                evidence = sources.hydrate(self.store, loads(files[n["pending_results"]]))
+                evidence["results"], duplicates = sources.unique(evidence["results"], state.setdefault("source_index", {}))
+                event["duplicate_count"] = len(duplicates)
                 context = r3.context(state, identity, evidence)
             else:
                 old_context, searches = self._context(state, memories, equations, files, identity)
                 context = {k: v for k, v in branching.context(state, memories, equations, identity).items() if k != "max_children"}
                 context = {**context,
                            "search_history": old_context["search_history"]}
-            evidence = loads(files[n["pending_results"]]) if action == "R3" else None
             if action == "R3":
                 event["evidence_ref"] = n["pending_results"]
-            value = self._model(event, action, context, state)
-            decisions.validate(action, value, evidence)
+            if action == "R3" and not evidence["results"]:
+                value = {"results": []}
+                event["reason"] = "All pending sources were processed by another node."
+            else:
+                value = self._model(event, action, context, state)
+            decisions.validate(action, value, evidence if action == "R3" else None)
             if action == "R1":
                 accepted = r1.filter_terms(value["keywords"], self.control_terms)
                 event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
                 n["keywords"] = accepted
+                n["search_round"] = n.get("search_round",0) + 1
+                n["round_outcomes"] = []
             elif action == "R3":
                 output = r3.create_memory(state, memories, equations, ledger, identity, value["results"], evidence)
+                sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
+                sources.reconcile(state["source_index"], evidence.get("duplicates", []))
+                if output is not None:
+                    cited = {source for result in value["results"] for source in result["source_ids"]}
+                    output.metadata["sources"] = [sources.descriptor(row) for row in evidence["results"] if row["id"] in cited]
                 event["memory_ids"] = [output.id] if output is not None else []
                 event["generated_memories"] = [render(m) for m in memories if m.id in event["memory_ids"]]
                 n["pending_results"] = None
@@ -159,6 +236,7 @@ class Research:
                     n["previous_search_terms"] = r1.unique(n["previous_search_terms"] + n["keywords"])
                     n["keywords"] = None
                     n["next_database_index"] = 0
+                    n["round_outcomes"] = []
                 event["decision"] = value
         for i in before_nodes:
             other = state["nodes"][i]
@@ -210,6 +288,15 @@ class Research:
             require(not self._unresolved(files), "interrupted/unknown model call: inspect transcript and explicitly acknowledge before retry")
             original = deepcopy((state, memories, equations, ledger))
             state = tree.upgrade(state, memories)
+            if "source_index" not in state:
+                state["source_index"] = {}
+                for path, raw in files.items():
+                    if not path.startswith("events/"): continue
+                    past = loads(raw)
+                    ref = past.get("evidence_ref")
+                    if past.get("action_committed") == "R3" and ref in files:
+                        old_evidence = loads(files[ref])
+                        sources.processed(state["source_index"], old_evidence["results"], ref)
             event_id = uuid.uuid4().hex
             event = {"run_id": state["run_id"], "timestamp": now(),
                      "cycle": state["research_cycles"] + state["synthesis_cycles"] + state["branching_cycles"] + 1,

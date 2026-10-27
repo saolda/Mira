@@ -1,16 +1,25 @@
 # Plain-text task prompts
 
-Edit `R1.txt`, `R3.txt`, `R4.txt`, `R5.txt` and `S2.txt` independently. Each call
+Edit `R0.txt`, `R1.txt`, `R3.txt`, `R4.txt`, `R5.txt` and `S2.txt` independently. Each call
 reloads its file and sends one user message. No generic system/developer prompt,
 JSON Schema or hidden model pass is added. R2 and S1 are deterministic.
 
 | Action | Strict variables | Response |
 | --- | --- | --- |
+| R0 | question, strategies | strategy identifier and brief reason |
 | R1 | question, question_context, previous_search_terms, control_terms, memory_context | keywords list |
 | R3 | question, question_context, research | ordered results list |
 | R4 | question, question_context, research_results, search_history | decision and reason |
 | R5 | question, question_context, research_results, max_children | ordered questions list (possibly empty) |
 | S2 | root_question, question, node, ancestor_questions, input_memories, equations | title, summary, findings with exact input references |
+
+R0 runs once during initialization when neither a named strategy nor an explicit
+compatibility database list is supplied. Its available strategies include identifiers,
+names, descriptions and ordered database lists. Python rejects unknown IDs or extra
+response fields; failed selection leaves no initialized research state. Explicit
+strategy initialization calls no LLM. R0 does not consume a research cycle and
+never repeats for children. Its request, response, validation and outcome use the
+same immutable interaction records as the other calls.
 
 R1 uses relevant bounded untrusted memory excerpts. Earlier terms are soft guidance;
 Python prohibits control terms. It requests one or two literal topic phrases;
@@ -35,8 +44,12 @@ Surrounding source text and line endings are preserved exactly.
 Each interaction retains source text/hash, bound context, filled messages and the
 serialized request hash. The viewer verifies historical snapshots against actual
 saved request bytes. Editing templates affects future calls only; historical JSON
-and plain-text records remain readable. Raw provider feeds stay on disk rather
-than being duplicated into model context.
+and plain-text records remain readable. New runs discard raw API envelopes. Unique normalized retrievals are temporary,
+hash-checked files under `retrieved/`; compact provenance and source-processing
+records remain canonical. Pending inputs survive restarts and journal recovery.
+Completed retrievals can be pruned with the CLI. Exact model request snapshots
+remain essential audit records and therefore still include the supplied excerpts.
+Older canonical evidence and historical requests remain readable unchanged.
 
 Set `MIRA_PROMPT_TEMPLATES=/absolute/path` for a separate template directory.
 Otherwise templates load from the checkout or installed

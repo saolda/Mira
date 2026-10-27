@@ -99,7 +99,11 @@ class IntegrationTests(unittest.TestCase):
             self.assertNotIn("raw_api_response", llm.requests[-1])
             self.assertIn("abstract", llm.requests[-1])
             ref = r.knowledge.document("r1").metadata["evidence_ref"]
-            self.assertIn("raw_api_response", loads(Path(root, ref).read_text()))
+            saved = loads(Path(root, ref).read_text())
+            self.assertNotIn("raw_api_response", saved)
+            self.assertNotIn("content", saved["results"][0])
+            self.assertIn("abstract", Path(root, saved["payload_ref"]).read_text())
+            self.assertEqual(r.knowledge.document("r1").metadata["sources"][0]["id"], result["results"][0]["id"])
             self.assertEqual(r.knowledge.relationships("r1#f1")[0]["target"], result["results"][0]["url"])
 
     def test_server_usage_identifier_and_rejected_complete_response_retained(self):

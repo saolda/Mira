@@ -36,7 +36,12 @@ def proposal(raw):
 
 
 def validate(action, value, evidence=None):
-    if action == "R1":
+    if action == "R0":
+        fields(value, ["strategy", "reason"])
+        text(value["strategy"]); text(value["reason"])
+        from .strategies import select
+        select(evidence, value["strategy"])
+    elif action == "R1":
         fields(value, ["keywords"]); keywords(value["keywords"])
     elif action == "R4":
         fields(value, ["decision", "reason"])

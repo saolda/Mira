@@ -7,16 +7,16 @@ from .research import Research
 from .search import FixtureSearch
 
 
-def evidence():
-    return {"status": "ok", "results": [{"id": "fixture-1", "url": "https://example.org/mira-heat-fixture",
+def evidence(source_id="fixture-1"):
+    return {"status": "ok", "results": [{"id": source_id, "url": "https://example.org/mira-heat-" + source_id,
         "title": "Fictional barrier measurements", "content_kind": "fixture", "truncated": False,
         "content": "Fictional data: sample A transferred 4 heat units; sample B transferred 8 under equal imposed conditions. No real experiment occurred."}]}
 
 
-def finding(label):
+def finding(label, source_id="fixture-1"):
     return {"type": "claim", "text": "The fictional fixture reports " + label + ".",
             "qualification": "No real-world conclusion follows from this artificial fixture.",
-            "source_ids": ["fixture-1"], "related_to": None}
+            "source_ids": [source_id], "related_to": None}
 
 
 class DemoLLM(ScriptedLLM):
@@ -30,7 +30,10 @@ class DemoLLM(ScriptedLLM):
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
         if action == "R1": value = {"keywords": ["fictional", "heat", "barrier"]}
-        elif action == "R3": value = {"results": [finding("A transfers 4 units"), finding("B transfers 8 units")]}
+        elif action == "R3":
+            supplied = decoder.raw_decode(content.split("RETRIEVED RESEARCH\n", 1)[1])[0]
+            source_id = supplied["results"][0]["id"]
+            value = {"results": [finding("A transfers 4 units", source_id), finding("B transfers 8 units", source_id)]}
         elif action == "R4":
             value = {"decision": "retry", "reason": "Scripted second research batch; the question remains relevant."}
         elif action == "R5":
@@ -51,7 +54,7 @@ class DemoLLM(ScriptedLLM):
 
 def demonstrate(root, *, max_cycles=50):
     llm = DemoLLM()
-    r = Research(root, llm, {"fixture": FixtureSearch([evidence() for _ in range(8)])})
+    r = Research(root, llm, {"fixture": FixtureSearch([evidence("fixture-" + str(i)) for i in range(1,9)])})
     # Explicit fixture budget fits complete research prompts and forces synthesis
     # descent through all three levels. The runtime default remains configurable.
     r.initialize("What can the fictional heat-barrier fixture tell us?", ["fixture"], synthesis_interval=100,

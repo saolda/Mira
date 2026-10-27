@@ -1,0 +1,12 @@
+R0: Select the most appropriate research strategy for the root question.
+
+Choose exactly one identifier from the available strategies. Each strategy lists its name, purpose and ordered research databases. Do not invent a strategy or change its databases.
+
+ROOT RESEARCH QUESTION
+{{question}}
+
+AVAILABLE STRATEGIES
+{{strategies}}
+
+Return JSON only, containing the selected identifier and a brief justification:
+{"strategy":"engineering","reason":"The question concerns technical methods and implementation."}

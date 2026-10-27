@@ -13,7 +13,10 @@ from .format import require
 def register(sub):
     init = sub.add_parser("research-init")
     init.add_argument("question")
-    init.add_argument("--database", action="append", required=True)
+    selection = init.add_mutually_exclusive_group()
+    selection.add_argument("--database", action="append", help="explicit database sequence (compatibility)")
+    selection.add_argument("--strategy", help="named strategy; omit for mandatory R0 selection")
+    init.add_argument("--strategies", help="JSON strategy registry (or MIRA_RESEARCH_STRATEGIES)")
     init.add_argument("--synthesis-interval", type=int, default=5)
     init.add_argument("--context-budget", type=int, default=8192)
     init.add_argument("--output-reserve", type=int, default=2048)
@@ -21,15 +24,16 @@ def register(sub):
     init.add_argument("--branching-interval", type=int, default=5, help="minimum direct research actions between R5 attempts while living nodes exist")
     init.add_argument("--max-children", type=int, default=3)
     run = sub.add_parser("research-run")
-    run.add_argument("--script", help="JSON with responses and provider fixtures")
-    run.add_argument("--llm-url", help="HTTP model base URL; credentials must use environment variable")
-    run.add_argument("--model", help="model identifier reported by /v1/models")
-    run.add_argument("--api-key-env", default="MIRA_LLM_API_KEY")
-    run.add_argument("--temperature", type=float, default=0)
-    run.add_argument("--max-tokens", type=int, default=2048)
-    run.add_argument("--timeout", type=float, default=120)
-    run.add_argument("--no-thinking", action="store_true", help="llama.cpp/Qwen enable_thinking=false")
-    run.add_argument("--plain-output", action="store_true", help="omit JSON response-format hint")
+    for command in (init, run):
+        command.add_argument("--script", help="JSON fixture responses/provider results for deterministic testing")
+        command.add_argument("--llm-url", help="model URL (or MIRA_LLM_URL; default localhost:8090)")
+        command.add_argument("--model", help="model identifier (or MIRA_LLM_MODEL; discover a single served model)")
+        command.add_argument("--api-key-env", default="MIRA_LLM_API_KEY")
+        command.add_argument("--temperature", type=float, default=0)
+        command.add_argument("--max-tokens", type=int, default=2048)
+        command.add_argument("--timeout", type=float, default=120)
+        command.add_argument("--no-thinking", action="store_true", help="Qwen enable_thinking=false")
+        command.add_argument("--plain-output", action="store_true", help="omit JSON response-format hint")
     run.add_argument("--control-term", action="append", default=[], help="literal term forbidden in the next R1 query; repeat for multiple terms")
     run.add_argument("--search-limit", type=int, default=2)
     run.add_argument("--max-cycles", type=int, default=20)
@@ -37,6 +41,8 @@ def register(sub):
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
     state = sub.add_parser("research-state")
+    prune = sub.add_parser("research-prune")
+    prune.add_argument("--apply", action="store_true", help="discard completed temporary retrievals; default dry run")
     viewer = sub.add_parser("viewer")
     viewer.add_argument("--port", type=int, default=8767)
     importer = sub.add_parser("research-import")
@@ -47,7 +53,7 @@ def register(sub):
     show.add_argument("--full", action="store_true")
     show.add_argument("--concise", action="store_true")
     show.add_argument("--output", help="optional export path; catalog runs also export under memory/transcripts/")
-    for command in (init, run, demo, state, show):
+    for command in (init, run, demo, state, show, prune):
         command.add_argument("--experiment", help="persistent experiment name")
 
 
@@ -79,29 +85,43 @@ def execute(args):
             from .experiments import atomic_text
             atomic_text(Path(args.output), result)
         return result
-    if args.command == "research-run":
-        require(bool(args.script) != bool(args.llm_url), "choose --script or --llm-url")
+    automatic = args.command == "research-init" and args.strategy is None and args.database is None
+    if args.command == "research-run" or automatic:
+        require(not (args.script and args.llm_url), "choose --script or --llm-url")
         if args.script:
             script = loads(Path(args.script).read_text())
             llm = ScriptedLLM(script["responses"])
-            adapters = {key: FixtureSearch(rows) for key, rows in script["providers"].items()}
+            adapters = {key: FixtureSearch(rows) for key, rows in script.get("providers", {}).items()}
         else:
             import os
             from .clients import HTTPModel
-            from .search import ArxivSearch
-            llm = HTTPModel(args.llm_url, args.model, api_key=os.environ.get(args.api_key_env),
+            from .providers import adapters as make_adapters
+            endpoint = args.llm_url or os.environ.get("MIRA_LLM_URL", "http://127.0.0.1:8090")
+            model = args.model or os.environ.get("MIRA_LLM_MODEL")
+            if not model:
+                from urllib.request import Request, urlopen
+                headers = {}
+                if os.environ.get(args.api_key_env): headers["Authorization"] = "Bearer " + os.environ[args.api_key_env]
+                url = endpoint.rstrip("/") + ("/models" if endpoint.rstrip("/").endswith("/v1") else "/v1/models")
+                with urlopen(Request(url, headers=headers), timeout=args.timeout) as response:
+                    served = loads(response.read().decode())["data"]
+                require(len(served) == 1, "specify --model when multiple models are served")
+                model = served[0]["id"]
+            llm = HTTPModel(endpoint, model, api_key=os.environ.get(args.api_key_env),
                 temperature=args.temperature, max_tokens=args.max_tokens, timeout=args.timeout,
                 no_thinking=args.no_thinking, json_output=not args.plain_output)
-            adapters = {"arxiv": ArxivSearch(limit=args.search_limit)}
+            adapters = make_adapters(limit=getattr(args,"search_limit",2))
     else:
         llm, adapters = ScriptedLLM([]), {}
     research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []))
     if args.command == "research-init":
         result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve,
+            strategy=args.strategy, registry=args.strategies,
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
             max_children=args.max_children)
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
+    if args.command == "research-prune": return research.prune_retrievals(apply=args.apply)
     if args.acknowledge_interrupted: research.acknowledge_interrupted()
     return research.run(args.max_cycles)

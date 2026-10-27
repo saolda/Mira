@@ -1,6 +1,6 @@
 # Mira
 
-A local, inspectable autonomous researcher with persistent R1–R5 research, branching and synthesis.
+A local, inspectable autonomous researcher with persistent R0 strategy selection, multi-database R1–R5 research, branching and synthesis.
 Canonical Markdown and equation JSON remain authoritative; SQLite full-text,
 relationship and vector indexes can be rebuilt.
 
@@ -33,4 +33,4 @@ The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.
 
 Start a real session using the exact [Fractal launch commands](docs/research_execution.md#start-a-sustained-session).
-See [current validation results and limits](docs/revised_architecture_results.md).
+See [strategy/provider verification and limits](docs/research_execution.md#bounded-real-model-verification).
