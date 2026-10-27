@@ -135,7 +135,31 @@ The controller selects one action per cycle from persisted state, with at most o
 
 Mira must support safe pause, shutdown, recovery and resumption. Autonomous actions require bounded resource budgets and explicit permissions.
 
-### 7A. Research memories and presentation outputs
+### 7A. Research strategies and source retention
+
+A **research strategy** is a predefined, ordered list of external research
+databases suitable for a question domain, such as humanities or engineering.
+One strategy is selected for the entire experiment, either explicitly on the
+command line or by an optional one-time R0 LLM selection before research starts.
+All nodes inherit that strategy, while each independently tracks its next database.
+A set of R1 keywords is tried against the strategy's database sequence; after
+that round, R4 may request new keywords and restart the sequence. Unresponsive
+providers are recorded and skipped, not allowed to stall research indefinitely.
+The exact controller contract belongs in [architecture.md](architecture.md).
+
+The system should avoid repeatedly processing the same publication across
+providers. Prefer stable scholarly identifiers, with conservative title/author
+matching when needed. Keep unique retrieved research-source content during early
+testing so extraction and citations can be checked. Once the implementation is
+validated, do not indefinitely accumulate downloaded source payloads: retain
+canonical research/synthesis memories and sufficient source identifiers/URLs to
+re-download and check provenance when necessary. Essential persistence, audit
+and crash-recovery information must still be preserved. The historical
+`../autonomous_ai/src/actions.py` offers provider adapters for Wikipedia,
+arXiv, PubMed, Crossref, Europe PMC, ERIC and OpenAlex; these are reference
+implementations, not evidence that every provider is already integrated.
+
+### 7B. Research memories and presentation outputs
 
 Canonical research and synthesis memories are **agent-oriented knowledge documents**, designed for accurate retrieval, evidence tracking, reuse and further synthesis. They need not themselves be polished publications.
 
