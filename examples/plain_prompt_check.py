@@ -1,6 +1,6 @@
 """Real model calls, recorded in a new experiment without applying proposals.
 
-By default evaluates four actions; --r1-only performs one focused R1 call.
+By default evaluates five actions; --r1-only performs one focused R1 call.
 
 Uses synthetic source material (not external research). No scripted model outputs,
 service lifecycle changes or modifications to existing experiments.
@@ -10,7 +10,7 @@ import json
 import uuid
 from urllib.request import urlopen
 
-from mira import gardener, research_tree as tree, r1, r3
+from mira import gardener, research_tree as tree, r1, r3, branching
 from mira.clients import HTTPModel
 from mira.decisions import validate
 from mira.experiments import Experiments
@@ -52,7 +52,7 @@ def main():
         tree.refresh(state, memories)
         research.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)}, operation_type="evaluation_seed")
     outcomes = []
-    for action in (("R1",) if args.r1_only else ("R1", "R3", "R4", "S2")):
+    for action in (("R1",) if args.r1_only else ("R1", "R3", "R4", "R5", "S2")):
         print("Calling " + action + " on " + model, flush=True)
         with research.store.lock():
             token, memories, equations, ledger = research.store.read()
@@ -65,14 +65,10 @@ def main():
             elif action == "S2":
                 context = gardener.context(state, memories, equations, "q1", memories)
             else:
-                context, _ = research._context(state, memories, equations, files, "q1")
-                if action == "R3": context["search_evidence"] = evidence
+                context = branching.context(state, memories, equations, "q1")
                 if action == "R4":
-                    context["next_database"] = None
-                    context["node"]["keywords"] = ["insulation", "synthetic", "test"]
-                    context["node"]["next_database_index"] = 1
-                    context["search_history"] = [{"query": "insulation generic", "provider": "fixture", "status": "empty", "results": []}]
-                    context["search_evidence"] = [{"status": "empty", "results": [], "query": "insulation generic"}, evidence]
+                    context.pop("max_children")
+                    context["search_history"] = [{"query": "insulation generic", "provider": "fixture", "status": "empty"}]
             event = {"timestamp": now(), "run_id": state["run_id"], "action": action, "node_id": "q1", "question": context["question"],
                      "evaluation_only": True, "action_committed": None, "note": "Model proposal evaluated only; no research transition or model-generated memory applied."}
             value = None

@@ -5,11 +5,11 @@ from collections import Counter
 import uuid
 
 from .api import Knowledge
-from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
+from .format import digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
-from . import decisions, research_tree as tree, r1, r3
-from .search import validate_search
+from . import decisions, research_tree as tree, r1, r3, branching
+from .search import validate_search, ArxivSearch
 
 
 class Research:
@@ -25,6 +25,7 @@ class Research:
             token, memories, equations, ledger = self.store.read()
             require(not self.store._files(), "research initialization requires an empty isolated corpus")
             state = tree.initial(question, databases, **config)
+            branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
             event = {"run_id": state["run_id"], "timestamp": now(), "cycle": 0, "action": "initialize",
                      "node_id": "q1", "question": question, "databases": databases, "config": config}
             self.store.publish(memories, equations, ledger, token, files={
@@ -108,7 +109,7 @@ class Research:
         extras = {}
         if action == "R2":
             provider = databases[n["next_database_index"]]
-            query = " ".join(n["keywords"])
+            query = ArxivSearch.query(n["keywords"]) if provider == "arxiv" else " ".join(n["keywords"])
             evidence_ref = "research/results/" + uuid.uuid4().hex + ".json"
             event.update(provider=provider, query=query, evidence_ref=evidence_ref)
             try:
@@ -132,12 +133,13 @@ class Research:
                 evidence = loads(files[n["pending_results"]])
                 context = r3.context(state, identity, evidence)
             else:
-                context, searches = self._context(state, memories, equations, files, identity)
+                old_context, searches = self._context(state, memories, equations, files, identity)
+                context = {k: v for k, v in branching.context(state, memories, equations, identity).items() if k != "max_children"}
+                context = {**context,
+                           "search_history": old_context["search_history"]}
             evidence = loads(files[n["pending_results"]]) if action == "R3" else None
             if action == "R3":
                 event["evidence_ref"] = n["pending_results"]
-            elif action == "R4":
-                context["search_evidence"] = searches
             value = self._model(event, action, context, state)
             decisions.validate(action, value, evidence)
             if action == "R1":
@@ -151,21 +153,35 @@ class Research:
                 n["pending_results"] = None
             else:
                 decision = value["decision"]
-                if decision in {"kill", "exhaust", "exhaust_split"}:
-                    n["status"] = "killed" if decision == "kill" else "exhausted"
-                if decision.startswith("retry"):
-                    n["keywords"] = value["keywords"]; n["next_database_index"] = 0
-                for question in value["children"]:
-                    child_id = "q" + str(state["next_node"]); state["next_node"] += 1
-                    child = tree.node(child_id, question, identity)
-                    state["nodes"][child_id] = child; n["child_ids"].append(child_id)
+                if decision in {"kill", "answered"}:
+                    n["status"] = "killed" if decision == "kill" else "answered"
+                if decision == "retry":
+                    n["previous_search_terms"] = r1.unique(n["previous_search_terms"] + n["keywords"])
+                    n["keywords"] = None
+                    n["next_database_index"] = 0
                 event["decision"] = value
         for i in before_nodes:
             other = state["nodes"][i]
             if i == identity: other["priority"] = max(0, other["priority"] - 1)
             elif other["status"] == "living": other["priority"] = min(10, other["priority"] + 1)
         state["research_cycles"] += 1; state["research_cycles_since_synthesis"] += 1
+        state["research_cycles_since_branching"] += 1
         return extras, True
+
+    def _branching(self, state, memories, equations, event, event_id):
+        identity = state["ripeness_order"][0]
+        n = state["nodes"][identity]
+        require(n["status"] == "exhausted" and n["split_attempt"] is None, "R5 requires exhausted node")
+        event.update(action="R5", node_id=identity, question=n["question"],
+            selection={"ripeness_order": list(state["ripeness_order"]), "ripeness": n["ripeness"],
+                       "counts": deepcopy(n["ripeness_counts"]), "capacity": deepcopy(n["research_capacity"]),
+                       "branching_interval": state["branching_interval"]})
+        value = self._model(event, "R5", branching.context(state, memories, equations, identity), state)
+        decisions.validate("R5", value)
+        event["branching"] = branching.apply(state, identity, value, event_id)
+        # Branching also uses a work slot in the synthesis cadence.
+        state["research_cycles_since_synthesis"] += 1
+        return True
 
     def _synthesis(self, state, memories, equations, ledger, event):
         from . import gardener
@@ -193,24 +209,33 @@ class Research:
             tree.validate(state, memories, files)
             require(not self._unresolved(files), "interrupted/unknown model call: inspect transcript and explicitly acknowledge before retry")
             original = deepcopy((state, memories, equations, ledger))
+            state = tree.upgrade(state, memories)
             event_id = uuid.uuid4().hex
             event = {"run_id": state["run_id"], "timestamp": now(),
-                     "cycle": state["research_cycles"] + state["synthesis_cycles"] + 1,
+                     "cycle": state["research_cycles"] + state["synthesis_cycles"] + state["branching_cycles"] + 1,
                      "research_cycle": state["research_cycles"] + 1,
                      "node_id": state["active_node_id"], "action": "select", "status": "committed"}
             extras = {}
             try:
-                if state["active_node_id"] is None:
+                event["exhaustion"] = branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
+                if original[0]["mira_research"] == 1: event["state_upgrade"] = {"from": 1, "to": 2}
+                if state["research_cycles_since_synthesis"] >= state["synthesis_interval"]:
+                    success = self._synthesis(state, memories, equations, ledger, event)
+                elif branching.due(state):
+                    success = self._branching(state, memories, equations, event, event_id)
+                elif state["active_node_id"] is None:
                     if not state["synthesis_candidate_order"]:
                         return {"status": "finished", "research_cycles": state["research_cycles"], "synthesis_cycles": state["synthesis_cycles"]}
                     success = self._synthesis(state, memories, equations, ledger, event)
-                elif state["research_cycles_since_synthesis"] >= state["synthesis_interval"]:
-                    success = self._synthesis(state, memories, equations, ledger, event)
                 else:
                     extras, success = self._research(state, memories, equations, ledger, files, event)
+                event["exhaustion"].extend(branching.assess(state, memories, equations, self.llm.model, self.llm.settings))
                 tree.refresh(state, memories)
+                if success:
+                    state["recent_activity"] = (state["recent_activity"] + [{"cycle": event["cycle"],
+                        "action": event["action"], "node_id": event["node_id"], "timestamp": event["timestamp"]}])[-20:]
                 event["tree"] = deepcopy(state["nodes"])
-                if state["active_node_id"] is None and state["terminal_event"] is None:
+                if state["active_node_id"] is None and not state["ripeness_order"] and state["terminal_event"] is None:
                     terminal_id = "terminal_" + event_id
                     state["terminal_event"] = terminal_id
                     terminal = {"run_id": state["run_id"], "timestamp": now(), "cycle": event["cycle"],
@@ -253,7 +278,7 @@ class Research:
             if interaction:
                 self.trace.write(interaction, "outcome", {"timestamp": now(), "status": event["status"],
                     "action_committed": event["action_committed"], "event_ref": "events/" + event_id + ".json",
-                    "memory_ids": event.get("memory_ids", []), "tree_changes": event.get("decision"), "error": event.get("error")})
+                    "memory_ids": event.get("memory_ids", []), "tree_changes": event.get("branching", event.get("decision")), "error": event.get("error")})
             return event
 
     def run(self, max_cycles):

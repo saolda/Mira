@@ -144,7 +144,7 @@ def context(state, memories, files, node_id, control_terms=()):
     node = state["nodes"][node_id]
     question = node["question"]
     additional = question_context(state, node_id)
-    previous = []
+    previous = list(node.get("previous_search_terms", []))
     events = []
     for path, raw in files.items():
         if path.startswith("events/"):

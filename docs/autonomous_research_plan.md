@@ -1,5 +1,10 @@
 # Mira 2: Increment 1 investigation and approval proposal
 
+> Historical milestone report. The current R1–R5 contract, three-way R4,
+> question provenance and branching/synthesis policies are documented in
+> [architecture](../architecture.md) and [execution](research_execution.md).
+
+
 Status: approved by the owner on 24 October 2026, with two clarifications:
 killed nodes may contribute existing memories but only exhausted nodes qualify
 for the 1000-point terminal bonus; 8192 context tokens and 2048 output tokens are

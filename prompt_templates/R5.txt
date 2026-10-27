@@ -1,0 +1,21 @@
+R5: Develop useful child research questions for the selected exhausted node.
+
+Examine all supplied research in the context of the selected question and its parent and root questions.
+Identify important gaps, unresolved questions, hypotheses, contradictions and opportunities for deeper investigation.
+Derive specific, independently investigable questions that meaningfully advance the wider research.
+Use your own judgment. You may develop questions not explicitly suggested in the research.
+Avoid duplicates and irrelevant questions. Do not generate questions merely to increase the size of the tree.
+Return at most {{max_children}} questions.
+An empty list is acceptable if no useful child questions are warranted.
+
+SELECTED QUESTION
+{{question}}
+
+QUESTION CONTEXT
+{{question_context}}
+
+ACCUMULATED RESEARCH
+{{research_results}}
+
+Return JSON only:
+{"questions":["A specific research question?","Another useful research question?"]}

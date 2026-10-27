@@ -46,6 +46,18 @@ class ArxivSearch:
         self.limit, self.timeout, self.max_abstract_chars = limit, timeout, max_abstract_chars
         self.opener = opener or urlopen
 
+    @staticmethod
+    def query(terms):
+        """arXiv defaults to OR across bare words; require the generated topic words."""
+        require(isinstance(terms, list) and terms and all(isinstance(t, str) and t.strip() for t in terms), "arXiv search phrases required")
+        import re
+        # Preserve the existing operator-supplied exact-paper evaluation path.
+        if len(terms) == 1 and re.fullmatch(r"id:(?:[a-zA-Z.-]+/)?[0-9]+(?:\.[0-9]+)?(?:v[0-9]+)?", terms[0]):
+            return terms[0]
+        words = list(dict.fromkeys(word for term in terms for word in re.findall(r"[\w-]+", term, flags=re.UNICODE)))
+        require(words, "arXiv query has no searchable words")
+        return " AND ".join('all:"' + word + '"' for word in words)
+
     def search(self, query):
         import re
         import time

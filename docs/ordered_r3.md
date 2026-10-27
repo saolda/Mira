@@ -1,5 +1,10 @@
 # Ordered R3 extraction and R1 heading controls
 
+> Historical milestone report. The current R1–R5 contract, three-way R4,
+> question provenance and branching/synthesis policies are documented in
+> [architecture](../architecture.md) and [execution](research_execution.md).
+
+
 R3 extracts research information. Python creates and manages memories. This
 implementation keeps that boundary explicit: the model supplies one ordered array,
 not memory drafts or permanent IDs. R4 is unchanged. The only S2 changes allow its

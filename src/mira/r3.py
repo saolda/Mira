@@ -39,6 +39,7 @@ def validate(value, evidence):
         common = {"type", "text", "source_ids", "related_to"}
         optional = set()
         if kind in TEXT_TYPES: fields = common | {"qualification"}
+        elif kind == "question": fields = common | {"qualification", "origin"}
         elif kind == "equation":
             fields = common | {"latex", "variables"}
             optional = {"origin"}
@@ -52,6 +53,9 @@ def validate(value, evidence):
         ref = result["related_to"]
         require(ref is None or type(ref) is int and 0 <= ref < len(results), "invalid related_to index")
         if kind in TEXT_TYPES: text(result["qualification"], allow_empty=True)
+        elif kind == "question":
+            text(result["qualification"], allow_empty=True)
+            require(isinstance(result["origin"], str) and result["origin"] in {"source", "derived"}, "question origin must be source or derived")
         elif kind == "equation":
             text(result["latex"])
             require(not any(c in result["latex"] for c in ("$$", "```", "[#")), "unsafe equation delimiters")
@@ -109,13 +113,16 @@ def create_memory(state, memories, equations, ledger, node_id, results, evidence
     anchors = []
     for result in results:
         kind = result["type"]
-        anchor = memory.allocate("e" if kind == "equation" else "i" if kind == "image" else "f")
+        anchor = memory.allocate("e" if kind == "equation" else "i" if kind == "image" else "q" if kind == "question" else "f")
         anchors.append(anchor)
         provenance = "Supplied source identifiers: " + ", ".join(result["source_ids"]) + ". Model extraction; not independently verified."
         if kind in TEXT_TYPES:
             unit = Unit(anchor, label(result["text"]), {"Kind": kind, "Evidence status": "unverified",
                 "Proposition": prose(result["text"]), "Explanation": prose(result["qualification"]) or "No qualification supplied; not independent verification.",
                 "Provenance": prose(provenance)})
+        elif kind == "question":
+            unit = Unit(anchor, label(result["text"]), {"Question": prose(result["text"]), "State": "open",
+                "Origin": result["origin"], "Qualification": prose(result["qualification"]) or "No qualification supplied.", "Provenance": prose(provenance)})
         elif kind == "equation":
             origin = result.get("origin") or "unspecified"
             equation = Equation(f"e_{identity}_{int(anchor[1:], 36)}", identity, result["text"].strip(), result["latex"],

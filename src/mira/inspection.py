@@ -209,7 +209,7 @@ class Inspector:
             plain_text_prompt = next((m.get("content") for m in messages if isinstance(m, dict) and m.get("role") == "user"), None)
         corpus, historic_state = self._historical(root, journals, event.get("journal_sequence") if event else None, warnings)
         before = historic_state.get("nodes") if historic_state else None
-        supplied = list(context.get("linked_memories") or []) + list(context.get("input_memories") or [])
+        supplied = list(context.get("linked_memories") or []) + list(context.get("input_memories") or []) + list((context.get("research_results") or {}).get("memories", []))
         supplied_ids = {m.get("id") for m in supplied if isinstance(m, dict)}
         if corpus is not None:
             for m in corpus: m["included_in_request"] = m["id"] in supplied_ids
@@ -229,7 +229,7 @@ class Inspector:
         reserve = selection.get("output_reserve", config.get("output_reserve"))
         estimated = len(serialized.encode("utf-8")) if isinstance(serialized, str) else None
         estimate_total = estimated + reserve if estimated is not None and isinstance(reserve, int) else None
-        inputs = {"root_question": context.get("root_question"), "question": context.get("question"),
+        inputs = {"root_question": context.get("root_question", (context.get("question_context") or [context.get("question")])[0]), "question": context.get("question"),
             "question_context": context.get("question_context"), "node": context.get("node"),
             "ancestor_questions": context.get("ancestor_questions"), "existing_memories": supplied or None,
             "search_evidence": context.get("research", context.get("search_evidence")), "children": context.get("children"),

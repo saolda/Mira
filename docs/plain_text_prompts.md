@@ -1,5 +1,10 @@
 # Plain-text prompt refactor
 
+> Historical milestone report. The current R1–R5 contract, three-way R4,
+> question provenance and branching/synthesis policies are documented in
+> [architecture](../architecture.md) and [execution](research_execution.md).
+
+
 Completed 25 October 2026 on `main`. The prompt layer now sends one plain-text
 user message per model call. There is no shared system/developer prompt or persona.
 

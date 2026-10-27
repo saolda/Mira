@@ -25,9 +25,8 @@ def draft(label="A"):
             "source_ids": ["fixture-1"], "related_to": None}
 
 
-def decision(kind="exhaust", children=None):
-    return {"decision": kind, "keywords": ["changed", "query"] if kind.startswith("retry") else None,
-            "children": children or [], "rationale": "Scripted research disposition."}
+def decision(kind="answered"):
+    return {"decision": kind, "reason": "Scripted research disposition."}
 
 
 def interrupted_model(root):
@@ -60,7 +59,7 @@ class ResearchTests(unittest.TestCase):
         r = Research(self.root, self.llm, {"fixture": self.adapter})
         self.assertEqual(r.step()["action"], "R3")
         self.assertEqual(r.step()["action"], "R4")
-        state = self.state(); self.assertEqual(state["nodes"]["q1"]["status"], "complete")
+        state = self.state(); self.assertEqual(state["nodes"]["q1"]["status"], "answered")
         self.assertEqual(state["research_cycles"], 4); self.assertEqual(len(self.llm.requests), 3)
         self.assertEqual(r.step()["status"], "finished")
         self.assertEqual(self.adapter.queries, ["barrier heat"])
@@ -107,32 +106,34 @@ class ResearchTests(unittest.TestCase):
         r3 = prompts["R3"]["context"]
         self.assertEqual(r3["research"]["results"], evidence()["results"])
         r4 = prompts["R4"]["context"]
-        self.assertIsNone(r4["next_database"])
         self.assertEqual([s["status"] for s in r4["search_history"]], ["failed", "ok"])
         self.assertEqual([s["query"] for s in r4["search_history"]], ["heat", "heat"])
-        self.assertEqual(r4["search_evidence"][1]["results"], evidence()["results"])
-        self.assertEqual(r4["search_evidence"][0]["error"], "offline")
-        self.assertIn("r1", [m["id"] for m in r4["linked_memories"]])
+        self.assertEqual(r4["search_history"][0]["error"], "offline")
+        self.assertIn("r1", [m["id"] for m in r4["research_results"]["memories"]])
         self.assertNotIn("raw_api_response", dumps(prompts))
         files = r.store._files()
         self.assertTrue(any("Raw provider feed" in raw for path, raw in files.items() if path.startswith("research/results/")))
 
-    def test_all_dispositions_children_zero_and_sustained_priority(self):
-        for kind in ("kill", "exhaust", "retry", "retry_split", "exhaust_split"):
+    def test_all_dispositions_retry_to_r1_and_sustained_priority(self):
+        for kind in ("kill", "answered", "retry"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
-                llm = ScriptedLLM([{"keywords": ["heat"]}, decision(kind, ["Child A", "Child B"] if kind.endswith("split") else [])])
+                llm = ScriptedLLM([{"keywords": ["heat"]}, decision(kind), {"keywords": ["thermal transfer"]}])
                 r = Research(directory, llm, {"fixture": FixtureSearch([{"status": "empty", "results": []}])})
                 r.initialize("Question?", ["fixture"])
                 for _ in range(3): self.assertEqual(r.step()["status"], "committed")
                 state = loads((Path(directory) / "research/state.json").read_text()); root = state["nodes"]["q1"]
-                if kind.startswith("retry"):
-                    self.assertEqual(root["next_database_index"], 0); self.assertEqual(root["priority"], 7)
+                self.assertEqual(root["child_ids"], [])
+                if kind == "retry":
+                    self.assertEqual(root["next_database_index"], 0)
+                    self.assertEqual(root["priority"], 7)
                     self.assertEqual(state["active_node_id"], "q1")
-                if kind.endswith("split"):
-                    self.assertEqual(state["nodes"]["q2"]["priority"], 0)
-                    self.assertEqual(state["nodes"]["q3"]["priority"], 0)
-                if kind == "exhaust_split": self.assertEqual(state["active_node_id"], "q2")
-                if kind == "kill": self.assertEqual(root["status"], "killed")
+                    self.assertIsNone(root["keywords"])
+                    self.assertEqual(root["previous_search_terms"], ["heat"])
+                    self.assertEqual(root["status"], "living")
+                    self.assertEqual(r.step()["action"], "R1")
+                    self.assertEqual(read_records(directory)[-1]["request"]["context"]["previous_search_terms"], ["heat"])
+                else:
+                    self.assertEqual(root["status"], "killed" if kind == "kill" else "answered")
 
     def test_priority_cap_oldest_tie_and_no_preemption(self):
         state = tree.initial("Root", ["fixture"])

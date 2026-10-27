@@ -29,19 +29,16 @@ class DemoLLM(ScriptedLLM):
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
-        identity = decoder.raw_decode(content.split("Selected node:\n", 1)[1])[0]["id"] if action not in {"R1", "R3"} else None
         if action == "R1": value = {"keywords": ["fictional", "heat", "barrier"]}
         elif action == "R3": value = {"results": [finding("A transfers 4 units"), finding("B transfers 8 units")]}
         elif action == "R4":
-            supplied_node = decoder.raw_decode(content.split("Selected node:\n", 1)[1])[0]
-            if len(supplied_node["memory_ids"]) < 2:
-                return dumps({"model": self.model, "choices": [{"finish_reason": "stop", "message": {"content": dumps({
-                    "decision": "retry", "keywords": ["fictional", "second", "measurement"], "children": [],
-                    "rationale": "Scripted second batch to exercise one-memory-per-R3 synthesis inputs."})}}], "usage": None})
-            children = {"q1": ["How do fixture conditions matter?", "What uncertainties remain?"],
-                        "q2": ["What measurement assumptions apply?"]}.get(identity, [])
-            value = {"decision": "exhaust_split" if children else "exhaust", "children": children,
-                     "keywords": None, "rationale": "Prewritten demonstration branch; no model judgment occurred."}
+            value = {"decision": "retry", "reason": "Scripted second research batch; the question remains relevant."}
+        elif action == "R5":
+            question = decoder.raw_decode(content.split("SELECTED QUESTION\n", 1)[1])[0]
+            children = {"What can the fictional heat-barrier fixture tell us?":
+                        ["How do fixture conditions matter?", "What uncertainties remain?"],
+                        "How do fixture conditions matter?": ["What measurement assumptions apply?"]}.get(question, [])
+            value = {"questions": children}
         else:
             # Stable fixtures reference exactly the selected inputs; text is prewritten.
             value = {"title": "Fixture synthesis", "summary": "Synthetic comparison with uncertainty.",
@@ -58,7 +55,7 @@ def demonstrate(root, *, max_cycles=50):
     # Explicit fixture budget fits complete research prompts and forces synthesis
     # descent through all three levels. The runtime default remains configurable.
     r.initialize("What can the fictional heat-barrier fixture tell us?", ["fixture"], synthesis_interval=100,
-                 context_budget=12000, output_reserve=2048)
+                 context_budget=12000, output_reserve=2048, research_capacity_tokens=6000)
     outcome = r.run(max_cycles)
     return {"status": outcome["status"], "metrics": r.inspect(), "model_calls": len(llm.requests),
             "knowledge": r.knowledge.validate(), "root": str(r.store.root)}

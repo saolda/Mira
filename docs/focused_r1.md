@@ -1,5 +1,10 @@
 # Focused R1 search planning
 
+> Historical milestone report. The current R1–R5 contract, three-way R4,
+> question provenance and branching/synthesis policies are documented in
+> [architecture](../architecture.md) and [execution](research_execution.md).
+
+
 Historical implementation report. The later [R1 control correction](ordered_r3.md)
 replaces the empty default with fixed prohibited heading words and filters useful
 components rather than rejecting the entire component.

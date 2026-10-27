@@ -116,7 +116,7 @@ class ViewerTests(unittest.TestCase):
         self.assertIsNone(data["inputs"]["system_messages"])
         self.assertEqual(data["inputs"]["user_messages"][0], payload["messages"][0])
         self.assertIsNone(data["inputs"]["developer_messages"])
-        self.assertEqual(data["inputs"]["search_evidence"][0]["results"], evidence()["results"])
+        self.assertIn("The fixture describes", data["structured_context"]["research_results"]["memories"][0]["markdown"])
         self.assertEqual(len(data["inputs"]["existing_memories"]), 1)
         self.assertEqual(len(data["retrieved_before_decision"]), 1)
         self.assertEqual(data["tree_before"]["q1"]["status"], "living")
@@ -146,9 +146,9 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual({slot["name"]: slot["value"] for slot in data["prompt_slots"]},
                          data["record"]["request"]["prompt_template"]["bindings"]["context"])
         slots = {slot["name"]: slot for slot in data["prompt_slots"]}
-        self.assertEqual(slots["next_database"]["status"], "Explicit null")
-        self.assertEqual(slots["equations"]["status"], "Empty collection")
-        self.assertEqual(slots["linked_memories"]["status"], "Supplied")
+        self.assertEqual(slots["question_context"]["status"], "Empty collection")
+        self.assertEqual(slots["research_results"]["value"]["equations"], [])
+        self.assertEqual(slots["research_results"]["status"], "Supplied")
 
     def test_missing_and_interrupted_record_is_visible_without_state(self):
         path = self.root / "interactions" / "00000004-interrupted"
@@ -225,7 +225,7 @@ class ViewerTests(unittest.TestCase):
         status, content, _ = self.request("GET", "/api/prompt-templates")
         self.assertEqual(status, 200)
         data = json.loads(content)
-        self.assertEqual({entry["action"] for entry in data}, {"R1", "R3", "R4", "S2"})
+        self.assertEqual({entry["action"] for entry in data}, {"R1", "R3", "R4", "R5", "S2"})
         self.assertEqual(len(data[0]["files"]), 1)
         status, content, _ = self.request("GET", f"/api/experiments/run-a/decisions/{self.r4}")
         self.assertTrue(json.loads(content)["template_verification"]["matches_recorded_request"])

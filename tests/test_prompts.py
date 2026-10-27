@@ -50,7 +50,7 @@ class PromptTests(unittest.TestCase):
             if record["action"] == "R4": self.assertIsNone(data["inputs"]["search_evidence"])
             self.assertEqual(file_hashes(root), before)
             seen.add(record["action"])
-        self.assertEqual(seen, set(ACTIONS))
+        self.assertEqual(seen, set(ACTIONS) - {"R5"})
 
     def test_source_hashes_and_literal_context_not_recursively_templated(self):
         for action in ACTIONS:
@@ -90,7 +90,7 @@ class PromptTests(unittest.TestCase):
                 self.assertIn("{{" + key + "}}", snapshot["files"][0]["source"])
                 self.assertIn(dumps(context[key]).rstrip("\n"), messages[0]["content"])
         r4 = PromptTemplates().sources("R4")[0]["source"]
-        for decision in ("kill", "exhaust", "retry", "retry_split", "exhaust_split"):
+        for decision in ("kill", "answered", "retry"):
             self.assertIn("- " + decision + ":", r4)
 
     def test_surrounding_text_crlf_and_empty_values_preserved_exactly(self):

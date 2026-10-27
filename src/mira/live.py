@@ -62,7 +62,7 @@ def decode(files):
     validate_lineage(documents)
     if "research/state.json" in files:
         state = loads(files["research/state.json"])
-        if state.get("mira_research") == 1:
+        if "mira_research" in state:
             from .research_tree import validate
             validate(state, documents, files)
     return documents, equations, ledger
@@ -238,6 +238,9 @@ class LiveStore:
         proposed.update({"equations/" + e.id + ".json": dumps(asdict(e)) for e in equations})
         proposed["identity.json"] = dumps(ledger)
         decode(proposed)
+        if "research/state.json" in old and "mira_research" in loads(old["research/state.json"]):
+            from .research_tree import validate_transition as validate_tree_transition
+            validate_tree_transition(loads(old["research/state.json"]), loads(proposed["research/state.json"]))
         for old_doc in old_docs:
             new_doc = next(d for d in documents if d.id == old_doc.id)
             if new_doc != old_doc:

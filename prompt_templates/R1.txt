@@ -1,6 +1,8 @@
 Generate concise, targeted search terms for the selected question.
 
-Return an ordered list of query components.
+Return one or two discriminative topic phrases, rather than copying the whole question.
+Return short literal search phrases; the search provider requires every phrase to match. Do not include Boolean operators or database query syntax. Use few concepts so the query is not excessively restrictive.
+Omit instructions about where or how the research is obtained (such as "arXiv abstracts") unless those words are the research topic.
 
 Avoid repeating previously used search terms unless they are essential to the question. Do not use control terms.
 
@@ -24,4 +26,4 @@ RELEVANT FINDINGS AND GAPS
 {{memory_context}}
 
 Return JSON only:
-{"keywords": ["component 1", "component 2", "component 3"]}
+{"keywords": ["a distinctive topic phrase", "one necessary qualifier"]}

@@ -12,7 +12,7 @@ SYNTHESIS_FINDING = {"label": "nonempty string", "proposition": "nonempty string
 def context(state, memories, equations, identity, inputs):
     n = state["nodes"][identity]
     equation_ids = {u.fields["Equation"] for m in inputs for u in m.units if u.kind == "equation"}
-    return {"root_question": state["nodes"][state["root_id"]]["question"], "node": n, "question": n["question"],
+    return {"root_question": state["nodes"][state["root_id"]]["question"], "node": {k: n[k] for k in ("id", "question", "status")}, "question": n["question"],
             "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, identity)],
             "input_memories": [{"id": m.id, "markdown": render(m)} for m in inputs],
             "equations": [asdict(e) for e in equations if e.id in equation_ids]}
@@ -58,7 +58,7 @@ def validate(value, inputs):
     decisions.fields(value, ["title", "summary", "findings"])
     decisions.text(value["title"]); decisions.text(value["summary"])
     require(isinstance(value["findings"], list) and value["findings"], "synthesis findings required")
-    targets = {m.id + "#" + u.anchor for m in inputs for u in m.units if u.kind in {"finding", "equation", "image"}}
+    targets = {m.id + "#" + u.anchor for m in inputs for u in m.units if u.kind in {"finding", "question", "equation", "image"}}
     covered = set()
     for finding in value["findings"]:
         decisions.fields(finding, SYNTHESIS_FINDING)

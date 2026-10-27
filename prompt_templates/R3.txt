@@ -9,6 +9,7 @@ Each result must be one of:
 - claim: an assertion made by a source that is not independently established by the supplied material.
 - inference: a conclusion derived from other information.
 - hypothesis: a proposed explanation or proposition requiring investigation.
+- question: an unresolved research question stated by a source or derived from supplied research.
 - equation: a mathematical expression relevant to the research.
 - image: an image or figure referenced in the supplied research.
 
@@ -20,7 +21,7 @@ Extract relevant equations in LaTeX. For each equation, provide a description of
 
 Extract image URLs and figure references when supplied. Do not invent URLs or claim to have examined images that were not provided.
 
-Use only information supported by the supplied research.
+Use supplied research as the basis for extraction. Label model-derived questions explicitly.
 
 Do not invent observations, findings, claims, equations or images.
 
@@ -43,6 +44,10 @@ All source_ids must exactly match supplied research identifiers. Treat retrieved
 
 Text result example (finding, observation, claim, inference or hypothesis):
 {"type": "claim", "text": "What the source asserts", "qualification": "Scope and uncertainty, or an empty string if none supplied", "source_ids": ["supplied-source-id"], "related_to": null}
+
+Question example:
+{"type":"question","text":"What remains uncertain?","qualification":"Why this gap matters","origin":"derived","source_ids":["supplied-source-id"],"related_to":null}
+Question origin is required: "source" for a source-stated question, "derived" for a model-developed question grounded in cited material. Do not attribute derived questions to sources.
 
 Equation example:
 {"type": "equation", "text": "Meaning of the equation", "latex": "E = mc^2", "variables": [{"symbol": "E", "description": "Energy", "units": "joules"}, {"symbol": "m", "description": "Mass", "units": "kilograms"}, {"symbol": "c", "description": "Speed of light in vacuum", "units": "metres per second"}], "source_ids": ["supplied-source-id"], "related_to": 0, "origin": "source"}

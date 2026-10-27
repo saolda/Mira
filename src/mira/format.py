@@ -264,7 +264,9 @@ def validate_memory(memory):
             require(set(unit.fields) == {"Kind", "Evidence status", "Proposition", "Explanation", "Provenance"}, "finding fields")
             require(unit.fields["Kind"] in KINDS and unit.fields["Evidence status"] in EVIDENCE, "finding vocabulary")
         elif unit.kind == "question":
-            require(set(unit.fields) == {"Question", "State"} and unit.fields["State"] in QUESTION_STATES, "question fields/state")
+            require({"Question", "State"} <= set(unit.fields) <= {"Question", "State", "Origin", "Qualification", "Provenance"}
+                    and unit.fields["State"] in QUESTION_STATES, "question fields/state")
+            require("Origin" not in unit.fields or unit.fields["Origin"] in {"source", "derived"}, "invalid question origin")
         elif unit.kind == "equation":
             require(set(unit.fields) in ({"Equation"}, {"Equation", "Description", "Expression", "Variables", "Provenance"}) and EQ_ID.fullmatch(unit.fields["Equation"]), "equation reference")
         else:

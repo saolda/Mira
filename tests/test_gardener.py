@@ -27,7 +27,7 @@ def seed(r, *, own=2, child=2, leaf=2, killed=False):
         state = loads(r.store._files()["research/state.json"])
         state["nodes"].update(q2=tree.node("q2", "Child?", "q1"), q3=tree.node("q3", "Leaf?", "q2"))
         state["nodes"]["q1"]["child_ids"] = ["q2"]; state["nodes"]["q2"]["child_ids"] = ["q3"]; state["next_node"] = 4
-        for n in state["nodes"].values(): n["status"] = "exhausted"
+        for n in state["nodes"].values(): n["status"] = "answered"
         if killed: state["nodes"]["q3"]["status"] = "killed"
         for identity, count in [("q1", own), ("q2", child), ("q3", leaf)]:
             for _ in range(count):
@@ -54,22 +54,23 @@ class GardenerTests(unittest.TestCase):
     def test_terminal_bonus_killed_material_and_completed_exclusion(self):
         seed(self.r, killed=True)
         state = self.state()
-        self.assertEqual(state["nodes"]["q1"]["synthesis_score"], 1006)
-        self.assertEqual(state["nodes"]["q2"]["synthesis_score"], 1004)
-        self.assertEqual(state["nodes"]["q3"]["synthesis_score"], 2)
+        self.assertEqual(state["nodes"]["q1"]["synthesis_score"], 1004)
+        self.assertEqual(state["nodes"]["q2"]["synthesis_score"], 1002)
+        self.assertEqual(state["nodes"]["q3"]["synthesis_score"], 0)
         out = self.r.run(20); self.assertEqual(out["status"], "finished")
         state = self.state(); self.assertEqual(state["nodes"]["q3"]["status"], "killed")
-        self.assertEqual(state["nodes"]["q1"]["status"], "complete")
+        self.assertEqual(state["nodes"]["q1"]["status"], "answered")
+        self.assertTrue(state["nodes"]["q1"]["synthesis_complete"])
         self.assertEqual(state["nodes"]["q2"]["unsynthesized_memory_count"], 0)
         self.assertEqual(state["synthesis_candidate_order"], [])
-        self.assertEqual(self.r.knowledge.document("r5").metadata["synthesized_by"][0], "s")
+        self.assertIsNone(self.r.knowledge.document("r5").metadata["synthesized_by"])
         calls = len(self.llm.requests); self.assertEqual(self.r.step()["status"], "finished")
         self.assertEqual(calls, len(self.llm.requests))
 
     def test_zero_and_one_inputs_complete_without_llm(self):
         seed(self.r, own=0, child=0, leaf=1)
         state = self.state()
-        self.assertTrue(all(n["status"] == "complete" for n in state["nodes"].values()))
+        self.assertTrue(all(n["synthesis_complete"] for n in state["nodes"].values()))
         self.assertEqual(state["nodes"]["q1"]["unsynthesized_memory_count"], 1)
         self.assertEqual(self.r.step()["status"], "finished"); self.assertFalse(self.llm.requests)
 
@@ -77,7 +78,7 @@ class GardenerTests(unittest.TestCase):
         seed(self.r)
         with self.r.store.lock():
             token, memories, equations, ledger = self.r.store.read()
-            state = self.state(); state["context_budget"] = 2100
+            state = self.state(); state["context_budget"] = 2100; state["research_capacity_tokens"] = 2000
             self.r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
         event = self.r.step()
         self.assertEqual(event["status"], "blocked_synthesis")
@@ -92,7 +93,7 @@ class GardenerTests(unittest.TestCase):
             self.assertEqual(result["status"], "finished")
             state = loads(Path(directory, "research/state.json").read_text())
             self.assertEqual(state["research_cycles"], 28)
-            self.assertTrue(all(n["status"] == "complete" for n in state["nodes"].values()))
+            self.assertTrue(all(n["synthesis_complete"] for n in state["nodes"].values()))
             records = read_records(directory)
             syntheses = [r for r in records if r["request"]["action"] == "S2"]
             self.assertTrue({"q1", "q2", "q4"} <= {r["request"]["node_id"] for r in syntheses})
@@ -109,11 +110,11 @@ class GardenerTests(unittest.TestCase):
     def test_five_research_actions_then_one_synthesis_same_process(self):
         with tempfile.TemporaryDirectory() as directory:
             llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft(), draft("B")]},
-                decision("retry"), {"results": []}])
+                decision("retry"), {"keywords": ["thermal"]}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
             r.initialize("Q?", ["fixture"], context_budget=12000)
             actions = [r.step()["action"] for _ in range(5)]
-            self.assertEqual(actions, ["R1", "R2", "R3", "R4", "R2"])
+            self.assertEqual(actions, ["R1", "R2", "R3", "R4", "R1"])
             with r.store.lock():
                 token, memories, equations, ledger = r.store.read()
                 state = loads(r.store._files()["research/state.json"])

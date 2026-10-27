@@ -7,7 +7,7 @@ reported evidence from new inference. Do not manufacture agreement or treat
 repeated claims as independent confirmation. Unverified inputs remain unverified.
 
 For every synthesis finding, cite exact finding IDs from input_memories in
-source_findings (for example r1#f1 or s2#f1). For equation- or image-only inputs,
+source_findings (for example r1#f1 or s2#f1). For question-only inputs, reference question anchors (such as r1#q1) and preserve their unresolved status. For equation- or image-only inputs,
 reference their supplied stable equation/image anchors (such as r1#e1 or r1#i1). Every selected input memory must
 contribute at least one referenced finding; cover at least two distinct memories.
 When an input is already a synthesis, reference its supplied findings without

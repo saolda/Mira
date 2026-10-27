@@ -17,6 +17,9 @@ def register(sub):
     init.add_argument("--synthesis-interval", type=int, default=5)
     init.add_argument("--context-budget", type=int, default=8192)
     init.add_argument("--output-reserve", type=int, default=2048)
+    init.add_argument("--research-capacity-tokens", type=int, help="R5 estimated total that exhausts direct research; default 75%% of context budget")
+    init.add_argument("--branching-interval", type=int, default=5, help="minimum direct research actions between R5 attempts while living nodes exist")
+    init.add_argument("--max-children", type=int, default=3)
     run = sub.add_parser("research-run")
     run.add_argument("--script", help="JSON with responses and provider fixtures")
     run.add_argument("--llm-url", help="HTTP model base URL; credentials must use environment variable")
@@ -95,7 +98,9 @@ def execute(args):
     research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []))
     if args.command == "research-init":
         result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
-            context_budget=args.context_budget, output_reserve=args.output_reserve)
+            context_budget=args.context_budget, output_reserve=args.output_reserve,
+            research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
+            max_children=args.max_children)
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.acknowledge_interrupted: research.acknowledge_interrupted()

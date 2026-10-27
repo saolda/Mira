@@ -39,16 +39,13 @@ def validate(action, value, evidence=None):
     if action == "R1":
         fields(value, ["keywords"]); keywords(value["keywords"])
     elif action == "R4":
-        fields(value, ["decision", "keywords", "children", "rationale"])
-        decision = value["decision"]
-        require(decision in {"kill", "exhaust", "retry", "retry_split", "exhaust_split"}, "invalid node decision")
-        text(value["rationale"])
-        if decision in {"retry", "retry_split"}: keywords(value["keywords"])
-        else: require(value["keywords"] is None, "keywords only allowed for retries")
-        require(isinstance(value["children"], list), "children list required")
-        require(bool(value["children"]) == decision.endswith("split"), "split requires child questions")
-        for question in value["children"]: text(question)
-        require(len(value["children"]) == len(set(value["children"])), "duplicate child question")
+        fields(value, ["decision", "reason"])
+        require(isinstance(value["decision"], str) and value["decision"] in {"kill", "answered", "retry"}, "invalid node decision")
+        text(value["reason"])
+    elif action == "R5":
+        fields(value, ["questions"])
+        require(isinstance(value["questions"], list), "questions list required")
+        for question in value["questions"]: text(question)
     elif action == "R3":
         from .r3 import validate
         validate(value, evidence)
