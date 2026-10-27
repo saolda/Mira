@@ -65,13 +65,15 @@ implementation as candidates to integrate and validate. No unimplemented provide
 is implied to be available today.
 
 Exactly **one strategy is selected per experiment**, before the first R1 action.
-The operator may specify a named strategy at initialization, or request an optional
-one-time **R0** LLM selection using the root question and the predefined named
-strategies with their descriptions and ordered database lists. R0 must use a
+The operator may specify a named strategy at initialization. **If no strategy is
+specified, R0 runs by default** as a one-time LLM selection using the root question
+and the predefined named strategies with their descriptions and ordered database
+lists. R0 must use a
 separate editable plain-text template (`prompt_templates/R0.txt`) consistent with
 the other templates, return a structured strategy ID and brief rationale, and be
 validated by Python. R0 is not a recurring research cycle, does not invent
-strategies, and is skipped when the operator selects a strategy explicitly.
+strategies, and is skipped only when the operator selects a strategy explicitly.
+**Research must not begin until a valid strategy has been selected and persisted.**
 The selected strategy and its ordered databases are persisted and inherited by
 all R5 children; R1–R5 do not change the strategy. Explicit database lists remain
 supported for compatibility. Selection failures must be reported, not silently
