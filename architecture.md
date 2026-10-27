@@ -55,21 +55,69 @@ memories are never deleted as a consequence of a research-status transition.
 
 ## Per-node research progression
 
-The strategy is a configured ordered list of database IDs, with one pointer per
-node. The CLI currently supplies arXiv; fixture providers support deterministic
-tests. R2 calls no model. Action selection for a living node is:
+A **research strategy** is a named, ordered list of external research database IDs,
+chosen to suit a question domain (for example, general, humanities, engineering,
+biomedical or education). This term denotes a database sequence, **not** an LLM
+research method or a new decision-making layer. Strategies are configured centrally;
+the available providers initially include arXiv, with Wikipedia, PubMed, Crossref,
+Europe PMC, ERIC and OpenAlex identified in the historical `../autonomous_ai`
+implementation as candidates to integrate and validate. No unimplemented provider
+is implied to be available today.
+
+Exactly **one strategy is selected per experiment**, before the first R1 action.
+The operator may specify a named strategy at initialization, or request an optional
+one-time **R0** LLM selection using the root question and the predefined named
+strategies with their descriptions and ordered database lists. R0 must use a
+separate editable plain-text template (`prompt_templates/R0.txt`) consistent with
+the other templates, return a structured strategy ID and brief rationale, and be
+validated by Python. R0 is not a recurring research cycle, does not invent
+strategies, and is skipped when the operator selects a strategy explicitly.
+The selected strategy and its ordered databases are persisted and inherited by
+all R5 children; R1–R5 do not change the strategy. Explicit database lists remain
+supported for compatibility. Selection failures must be reported, not silently
+replaced with a different strategy.
+
+Each node independently stores a **next database index**, not a last-used database.
+The pointer survives scheduling switches. One set of R1 keywords is searched
+against the complete strategy sequence before R4 evaluates that round. R2 calls
+no model. Action selection for a living node is:
 
 | Action | Predicate | Result | Model calls |
 | --- | --- | --- | --- |
 | R1 | No keywords and no pending results | Generate targeted terms, apply deterministic control filter, persist terms | 1 |
-| R2 | Keywords, no pending results, database pointer within strategy | Search next database; save evidence and advance on success/empty | 0 |
+| R2 | Keywords, no pending results, database pointer within strategy | Search current database; record outcome and advance the node's next-database pointer, including on empty, failed or rate-limited responses; save nonduplicate results for R3 | 0 |
 | R3 | Pending results | Validate ordered extraction; create a memory for a nonempty batch; clear pending reference | 1 |
 | R4 | Keywords, no pending results, all databases tried | Evaluate direct research in question context | 1 |
 | R5 | Selected exhausted node, no committed split receipt | Develop children, persist IDs and receipt; mark split even if empty | 1 |
 
-An empty search skips R3. Failed/rate-limited searches retain the database pointer,
-record the failure and stop the current bounded run. They do not kill the question.
-Per-node keywords, pointer, pending results and history survive scheduling switches.
+An empty search skips R3. A non-responsive, failed or rate-limited database is
+recorded distinctly and **skipped for the current round**, allowing the next
+configured database to be searched; a failed retrieval is not evidence that the
+source has no relevant material. The pointer advances once per attempted provider.
+Respect provider rate limits and avoid repeated immediate calls to unavailable
+providers; keep failures inspectable. If every provider is unavailable, report a
+clear degraded/blocked outcome rather than silently spinning or claiming that
+research was answered. Per-node keywords, pointer, pending results and history
+survive scheduling switches.
+
+### Research source deduplication and retention
+
+Maintain a small **experiment-wide seen-source index**. Prefer stable publication
+identifiers (DOI, PMID, arXiv ID or canonical source ID), with a normalized
+(title, author) fingerprint as a conservative fallback; reconcile aliases across
+providers where defensible. Previously accepted sources should be excluded from
+later R3 extraction, including when another provider returns the same paper.
+Avoid false matches between different versions or works; ambiguous identities
+should not be silently discarded. During initial validation, retain **unique
+retrieved source results** and enough identifiers/URLs to check provenance by
+re-downloading the source. Do **not** require indefinite archival of full raw
+provider responses or duplicate retrieval records: once the system is tested and
+running, the intended normal policy is to discard cached research-source payloads
+that are no longer needed, while keeping canonical research/synthesis memories,
+source citations/identifiers and essential decision/recovery records. Retrieval
+and retention policy must not break pending R3 processing, crash recovery or
+existing experiments. This is a design target for implementation, not a claim
+that current retention already behaves this way.
 
 ### R1: targeted terms
 
