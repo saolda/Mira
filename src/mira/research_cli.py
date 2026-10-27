@@ -18,8 +18,9 @@ def register(sub):
     selection.add_argument("--strategy", help="named strategy; omit for mandatory R0 selection")
     init.add_argument("--strategies", help="JSON strategy registry (or MIRA_RESEARCH_STRATEGIES)")
     init.add_argument("--synthesis-interval", type=int, default=5)
-    init.add_argument("--context-budget", type=int, default=8192)
+    init.add_argument("--context-budget", type=int, help="model token budget; default to the active server context window")
     init.add_argument("--output-reserve", type=int, default=2048)
+    init.add_argument("--synthesis-output-reserve", type=int, help="optional separate reserve for synthesis output")
     init.add_argument("--research-capacity-tokens", type=int, help="R5 estimated total that exhausts direct research; default 75%% of context budget")
     init.add_argument("--branching-interval", type=int, default=5, help="minimum direct research actions between R5 attempts while living nodes exist")
     init.add_argument("--max-children", type=int, default=3)
@@ -85,8 +86,7 @@ def execute(args):
             from .experiments import atomic_text
             atomic_text(Path(args.output), result)
         return result
-    automatic = args.command == "research-init" and args.strategy is None and args.database is None
-    if args.command == "research-run" or automatic:
+    if args.command in {"research-init", "research-run"}:
         require(not (args.script and args.llm_url), "choose --script or --llm-url")
         if args.script:
             script = loads(Path(args.script).read_text())
@@ -119,7 +119,7 @@ def execute(args):
             context_budget=args.context_budget, output_reserve=args.output_reserve,
             strategy=args.strategy, registry=args.strategies,
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
-            max_children=args.max_children)
+            max_children=args.max_children, synthesis_output_reserve=args.synthesis_output_reserve)
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.command == "research-prune": return research.prune_retrievals(apply=args.apply)

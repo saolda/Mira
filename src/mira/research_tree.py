@@ -17,7 +17,7 @@ def node(identity, question, parent=None):
 
 
 def initial(question, databases, *, synthesis_interval=5, context_budget=8192, output_reserve=2048,
-            research_capacity_tokens=None, branching_interval=5, max_children=3):
+            research_capacity_tokens=None, branching_interval=5, max_children=3, synthesis_output_reserve=None):
     require(isinstance(question, str) and question.strip(), "research question required")
     require(databases and len(set(databases)) == len(databases) and
             all(isinstance(d, str) and d.strip() for d in databases), "ordered database IDs required")
@@ -29,6 +29,8 @@ def initial(question, databases, *, synthesis_interval=5, context_budget=8192, o
             "research capacity must be positive and no larger than context budget")
     require(type(branching_interval) is int and branching_interval > 0, "positive branching interval required")
     require(type(max_children) is int and max_children > 0, "positive child limit required")
+    require(synthesis_output_reserve is None or type(synthesis_output_reserve) is int and
+            0 < synthesis_output_reserve < context_budget, "invalid synthesis output reserve")
     root = node("q1", question); root["priority"] = 10
     state = {"mira_research": 2, "run_id": uuid.uuid4().hex, "root_id": "q1", "strategy_index": 0,
             "strategies": [{"id": "selected", "databases": list(databases)}], "active_node_id": "q1",
@@ -42,6 +44,7 @@ def initial(question, databases, *, synthesis_interval=5, context_budget=8192, o
             "ripeness_weights": {"findings": 1, "hypotheses": 2, "questions": 2, "depth": -1},
             "ripeness_order": [], "recent_activity": []}
 
+    if synthesis_output_reserve is not None: state["synthesis_output_reserve"] = synthesis_output_reserve
     refresh(state, [])
     return state
 
@@ -162,6 +165,8 @@ def validate(state, memories, files):
         from .research_tree_v1 import validate as legacy_validate
         return legacy_validate(state, memories, files)
     require(isinstance(state, dict) and state.get("mira_research") == 2, "invalid research state version")
+    require("synthesis_output_reserve" not in state or type(state["synthesis_output_reserve"]) is int and
+            0 < state["synthesis_output_reserve"] < state["context_budget"], "invalid synthesis output reserve")
     for key in ("branching_interval", "max_children", "research_capacity_tokens"):
         require(type(state[key]) is int and state[key] > 0, "invalid branching configuration: " + key)
     require(state["research_capacity_tokens"] <= state["context_budget"], "capacity exceeds context budget")
@@ -260,6 +265,8 @@ def metrics(state):
             "branching_policy": {k: state.get(k) for k in ("branching_interval", "max_children", "research_cycles_since_branching")},
             "research_capacity_tokens": state.get("research_capacity_tokens"),
             "context_budget": state["context_budget"], "output_reserve": state["output_reserve"],
+            "synthesis_output_reserve": state.get("synthesis_output_reserve", state["output_reserve"]),
+            "synthesis_deferred": state.get("synthesis_deferred"),
             "ripeness_weights": state.get("ripeness_weights"), "recent_activity": state.get("recent_activity", [])}
 
 

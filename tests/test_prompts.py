@@ -32,7 +32,7 @@ class PromptTests(unittest.TestCase):
         return root, llm.requests[0], file, loads(file.read_text())
 
     def test_historical_fixture_prompts_are_displayed_without_new_instructions(self):
-        path = Path(__file__).resolve().parents[1] / "docs/examples/full_research_transcript.md"
+        path = Path(__file__).parent / "fixtures/full_research_transcript.txt"
         records = [loads(m[1]) for m in re.finditer(r"Actual request record:\n```json\n(.*?)\n```", path.read_text(), re.S)]
         self.assertGreater(len(records), 10)
         root = self.catalog.create("historical")

@@ -68,7 +68,8 @@ class ViewerTests(unittest.TestCase):
 
     def test_persistent_default_cli_storage_and_phase1_default_unchanged(self):
         env = {**os.environ, "MIRA_MEMORY_DIR": str(self.home)}
-        output = subprocess.check_output([sys.executable, "-m", "mira", "research-init", "Persistent?", "--database", "fixture", "--experiment", "cli-run"], env=env, text=True)
+        script=Path(self.temp.name)/'script.json'; script.write_text(dumps({'responses':[]}))
+        output = subprocess.check_output([sys.executable, "-m", "mira", "research-init", "Persistent?", "--database", "fixture", "--experiment", "cli-run", "--script", str(script)], env=env, text=True)
         state = loads(output)
         self.assertEqual(Path(state["storage_root"]), self.home / "research/cli-run")
         self.assertTrue(Path(state["storage_root"], "journal").is_dir())

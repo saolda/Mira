@@ -150,7 +150,7 @@ class R1Tests(unittest.TestCase):
             self.assertIn("control term", record["validation"]["error"])
 
     def test_old_text_template_transcript_still_uses_saved_variables(self):
-        artifact = loads(Path('docs/examples/plain_text_prompt_check.json').read_text())
+        artifact = loads((Path(__file__).parent / 'fixtures/plain_text_prompt_check.json').read_text())
         old = next(c for c in artifact["calls"] if c["action"] == "R1")
         with tempfile.TemporaryDirectory() as directory:
             catalog = Experiments(directory)

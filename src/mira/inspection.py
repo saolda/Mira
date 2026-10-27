@@ -229,6 +229,11 @@ class Inspector:
         reserve = selection.get("output_reserve", config.get("output_reserve"))
         estimated = len(serialized.encode("utf-8")) if isinstance(serialized, str) else None
         estimate_total = estimated + reserve if estimated is not None and isinstance(reserve, int) else None
+        recorded_usage = req.get("context_usage")
+        if isinstance(recorded_usage, dict):
+            reserve = recorded_usage["output_reserve"]
+            limit = recorded_usage["context_budget"]
+            estimate_total = recorded_usage["estimated_tokens"]
         inputs = {"root_question": context.get("root_question", (context.get("question_context") or [context.get("question")])[0]), "question": context.get("question"),
             "question_context": context.get("question_context"), "node": context.get("node"),
             "ancestor_questions": context.get("ancestor_questions"), "existing_memories": supplied or None,
@@ -257,9 +262,9 @@ class Inspector:
             "tree_before": before, "tree_after": event.get("tree") if event else None,
             "historical_corpus": corpus, "retrieved_before_decision": retrieved if event else None,
             "generated_memories": event.get("generated_memories") if event else None,
-            "context_estimate": {"request_bytes": estimated, "output_reserve": reserve, "budget": limit,
+            "context_estimate": {**(recorded_usage or {}), "request_bytes": estimated, "output_reserve": reserve, "budget": limit,
                 "estimated_total": estimate_total, "fraction": estimate_total / limit if estimate_total is not None and limit else None,
-                "basis": "Conservative UTF-8 request bytes plus reserve; budget from recorded selection or historical journal state, never current state."},
+                "basis": recorded_usage["estimator"] if recorded_usage else "Conservative UTF-8 request bytes plus reserve; budget from recorded selection or historical journal state, never current state."},
             "warnings": warnings}
 
     def action(self, name, identity):

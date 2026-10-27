@@ -323,7 +323,7 @@ def validate_corpus(memories, equations):
                 require(source_unit.kind == "finding" and target_unit is not None and target_unit.kind == "finding", "relationship requires finding endpoints")
             if edge.type == "SYNTHESIZES":
                 require(source_unit.kind == "finding" and source_unit.fields["Kind"] == "synthesis", "SYNTHESIZES source must be a synthesis finding")
-                require(target_unit is not None and target_unit.kind in {"finding", "equation", "image"}, "invalid synthesis result target")
+                require(target_unit is not None and target_unit.kind in {"finding", "question", "equation", "image"}, "invalid synthesis result target")
             ends = tuple(sorted((source, edge.target))) if edge.type == "RELATED_TO" else (source, edge.target)
             key = (edge.type, ends)
             require(key not in seen, "duplicate relationship")

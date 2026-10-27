@@ -13,6 +13,7 @@ from .search import validate_search, ArxivSearch
 from . import strategies, sources
 import time
 from email.utils import parsedate_to_datetime
+from .budget import measure
 
 
 class Research:
@@ -31,6 +32,10 @@ class Research:
             require(not (databases is not None and strategy is not None), "choose a strategy or explicit databases")
             values = strategies.registry(registry) if databases is None else None
             chosen = strategies.select(values, strategy) if strategy is not None else None
+            if config.get("context_budget") is None:
+                config["context_budget"] = getattr(self.llm, "context_window", 8192)
+            require(config["context_budget"] <= getattr(self.llm, "context_window", config["context_budget"]),
+                    "configured context budget exceeds the active model context window")
             state = tree.initial(question, databases or (chosen["databases"] if chosen else ["selection_pending"]), **config)
             state.update(source_index={}, provider_cooldowns={}, retrieval_storage="temporary")
             event = {"run_id": state["run_id"], "timestamp": now(), "cycle": 0, "action": "initialize",
@@ -57,7 +62,7 @@ class Research:
                 state["strategy_selection"] = {"method":"databases", "strategy":"custom", "reason":"Explicit database compatibility path."}
             state["strategies"] = [deepcopy(chosen)]
             event.update(databases=chosen["databases"], strategy=chosen)
-            branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
+            branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
             tree.validate(state, memories, {})
             identity = event.get("interaction_id")
             if identity:
@@ -115,14 +120,15 @@ class Research:
             return [r["id"] for r in records]
 
     def _model(self, event, action, context, state):
-        require(0 < self.llm.settings["max_tokens"] <= state["output_reserve"], "generation limit exceeds output reserve")
+        reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
+        require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
         unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
         serialized = self.trace.clean(unredacted)
         template["redaction_applied"] = serialized != unredacted
         template["filled_messages"] = loads(serialized)["messages"]
         template["serialized_request_sha256"] = digest(serialized)
-        # Byte count is a deliberately conservative token estimate, including JSON overhead.
-        require(len(serialized.encode("utf-8")) + state["output_reserve"] <= state["context_budget"],
+        event["context_usage"] = measure(serialized, reserve, state["context_budget"], getattr(self.llm, "count_tokens", None))
+        require(not event["context_usage"]["over_context_budget"],
                 "blocked_context_budget: full decision context does not fit")
         identity = self.trace.start(event, serialized, context, template=template)
         event["interaction_id"] = identity
@@ -246,10 +252,13 @@ class Research:
         state["research_cycles_since_branching"] += 1
         return extras, True
 
-    def _branching(self, state, memories, equations, event, event_id):
-        identity = state["ripeness_order"][0]
+    def _branching(self, state, memories, equations, event, event_id, identity=None):
+        identity = identity or state["ripeness_order"][0]
         n = state["nodes"][identity]
         require(n["status"] == "exhausted" and n["split_attempt"] is None, "R5 requires exhausted node")
+        if getattr(self.llm, "count_tokens", None):
+            require(n["research_capacity"]["estimated_tokens"] >= n["research_capacity"]["threshold"],
+                    "R5 node is below current token capacity; inspect its prior exhaustion before resuming")
         event.update(action="R5", node_id=identity, question=n["question"],
             selection={"ripeness_order": list(state["ripeness_order"]), "ripeness": n["ripeness"],
                        "counts": deepcopy(n["ripeness_counts"]), "capacity": deepcopy(n["research_capacity"]),
@@ -263,17 +272,28 @@ class Research:
 
     def _synthesis(self, state, memories, equations, ledger, event):
         from . import gardener
-        identity, inputs, context, selection = gardener.select(state, memories, equations, self.llm.model, self.llm.settings)
+        identity, inputs, context, selection = gardener.select(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
         event["selection"] = selection
         if identity is None:
             event.update(action="S1", reason="no_candidate")
+            state.pop("synthesis_deferred", None)
         elif len(inputs) < 2:
-            event.update(action="S1", node_id=identity, status="blocked_synthesis", reason="no_fitting_pair")
+            # A collection that cannot currently fit must not starve direct work.
+            # Retry on the normal cadence, recording persistent, visible deferrals.
+            previous = state.get("synthesis_deferred", {})
+            signature = digest(dumps(selection["attempts"]))
+            deferred = {"node_id": identity, "reason": "no_fitting_collection", "signature": signature,
+                        "attempts": previous.get("attempts", 0) + 1 if previous.get("signature") == signature else 1}
+            state["synthesis_deferred"] = deferred
+            event.update(action="S1", node_id=identity, reason="no_fitting_collection", deferred=deferred)
+            if not state["living_priority_order"] and not state["ripeness_order"]:
+                event["status"] = "blocked_synthesis"
         else:
             event.update(action="S2", node_id=identity, question=state["nodes"][identity]["question"], input_ids=[m.id for m in inputs])
             value = self._model(event, "S2", context, state)
-            gardener.validate(value, inputs)
-            output = gardener.apply(state, memories, ledger, identity, inputs, value)
+            gardener.validate(value, inputs, context["input_memories"])
+            output = gardener.apply(state, memories, ledger, identity, inputs, value, context["input_memories"])
+            state.pop("synthesis_deferred", None)
             event.update(memory_ids=[output.id], generated_memories=[render(output)])
         state["synthesis_cycles"] += 1; state["research_cycles_since_synthesis"] = 0
         return True
@@ -304,19 +324,31 @@ class Research:
                      "node_id": state["active_node_id"], "action": "select", "status": "committed"}
             extras = {}
             try:
-                event["exhaustion"] = branching.assess(state, memories, equations, self.llm.model, self.llm.settings)
+                event["exhaustion"] = branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
                 if original[0]["mira_research"] == 1: event["state_upgrade"] = {"from": 1, "to": 2}
                 if state["research_cycles_since_synthesis"] >= state["synthesis_interval"]:
                     success = self._synthesis(state, memories, equations, ledger, event)
                 elif branching.due(state):
-                    success = self._branching(state, memories, equations, event, event_id)
+                    # Publish a newly observed exhaustion before granting its R5
+                    # opportunity; living -> exhausted -> split are durable transitions.
+                    ready = next((i for i in state["ripeness_order"]
+                                  if original[0]["nodes"][i]["status"] == "exhausted" or original[0]["mira_research"] == 1), None)
+                    if ready:
+                        success = self._branching(state, memories, equations, event, event_id, ready)
+                    elif state["active_node_id"] is not None:
+                        extras, success = self._research(state, memories, equations, ledger, files, event)
+                    else:
+                        event.update(action="S1", reason="capacity_transition")
+                        state["synthesis_cycles"] += 1
+                        state["research_cycles_since_synthesis"] = 0
+                        success = True
                 elif state["active_node_id"] is None:
                     if not state["synthesis_candidate_order"]:
                         return {"status": "finished", "research_cycles": state["research_cycles"], "synthesis_cycles": state["synthesis_cycles"]}
                     success = self._synthesis(state, memories, equations, ledger, event)
                 else:
                     extras, success = self._research(state, memories, equations, ledger, files, event)
-                event["exhaustion"].extend(branching.assess(state, memories, equations, self.llm.model, self.llm.settings))
+                event["exhaustion"].extend(branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None)))
                 tree.refresh(state, memories)
                 if success:
                     state["recent_activity"] = (state["recent_activity"] + [{"cycle": event["cycle"],

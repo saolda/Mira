@@ -191,7 +191,7 @@ class R3Tests(unittest.TestCase):
         validate_corpus(docs,eq)
 
     def test_historical_r3_memory_proposals_remain_inspectable(self):
-        old=loads(Path('docs/examples/plain_text_prompt_check.json').read_text())
+        old=loads((Path(__file__).parent / 'fixtures/plain_text_prompt_check.json').read_text())
         call=next(c for c in old['calls'] if c['action']=='R3')
         with tempfile.TemporaryDirectory() as directory:
             catalog=Experiments(directory);root=catalog.create('old-r3')

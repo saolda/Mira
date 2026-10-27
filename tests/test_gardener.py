@@ -21,13 +21,14 @@ def crash_gardener(root):
     Research(root, DemoLLM(), {}).step(fault=fault)
 
 
-def seed(r, *, own=2, child=2, leaf=2, killed=False):
+def seed(r, *, own=2, child=2, leaf=2, killed=False, living=()):
     with r.store.lock():
         token, memories, equations, ledger = r.store.read()
         state = loads(r.store._files()["research/state.json"])
         state["nodes"].update(q2=tree.node("q2", "Child?", "q1"), q3=tree.node("q3", "Leaf?", "q2"))
         state["nodes"]["q1"]["child_ids"] = ["q2"]; state["nodes"]["q2"]["child_ids"] = ["q3"]; state["next_node"] = 4
         for n in state["nodes"].values(): n["status"] = "answered"
+        for identity in living: state["nodes"][identity]["status"] = "living"
         if killed: state["nodes"]["q3"]["status"] = "killed"
         for identity, count in [("q1", own), ("q2", child), ("q3", leaf)]:
             for _ in range(count):
@@ -74,7 +75,7 @@ class GardenerTests(unittest.TestCase):
         self.assertEqual(state["nodes"]["q1"]["unsynthesized_memory_count"], 1)
         self.assertEqual(self.r.step()["status"], "finished"); self.assertFalse(self.llm.requests)
 
-    def test_no_fitting_pair_is_explicit_and_does_not_consume(self):
+    def test_no_fitting_collection_without_research_is_explicit_and_does_not_consume(self):
         seed(self.r)
         with self.r.store.lock():
             token, memories, equations, ledger = self.r.store.read()
@@ -82,7 +83,7 @@ class GardenerTests(unittest.TestCase):
             self.r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
         event = self.r.step()
         self.assertEqual(event["status"], "blocked_synthesis")
-        self.assertEqual(event["reason"], "no_fitting_pair")
+        self.assertEqual(event["reason"], "no_fitting_collection")
         self.assertFalse(self.llm.requests)
         self.assertEqual(self.state()["nodes"]["q1"]["unsynthesized_memory_count"], 6)
         self.assertEqual(self.r.knowledge.validate()["documents"], 6)
@@ -96,7 +97,8 @@ class GardenerTests(unittest.TestCase):
             self.assertTrue(all(n["synthesis_complete"] for n in state["nodes"].values()))
             records = read_records(directory)
             syntheses = [r for r in records if r["request"]["action"] == "S2"]
-            self.assertTrue({"q1", "q2", "q4"} <= {r["request"]["node_id"] for r in syntheses})
+            self.assertIn("q1", {r["request"]["node_id"] for r in syntheses})
+            self.assertTrue(any(len(r["request"]["context"]["input_memories"]) > 2 for r in syntheses))
             for record in syntheses:
                 request = record["request"]["serialized_request"]
                 self.assertLessEqual(len(request.encode()) + 2048, state["context_budget"])

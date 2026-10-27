@@ -104,14 +104,14 @@ class StrategyTests(unittest.TestCase):
 
     def test_cli_explicit_automatic_and_compatibility_paths(self):
         script=Path(self.temp.name)/'script.json';script.write_text(dumps({'responses':[{'strategy':'education','reason':'Teaching question.'}]}))
-        for name,options in [('explicit',['--strategy','engineering']),('auto',['--script',str(script)]),('compat',['--database','arxiv'])]:
+        for name,options in [('explicit',['--strategy','engineering','--script',str(script)]),('auto',['--script',str(script)]),('compat',['--database','arxiv','--script',str(script)])]:
             root=Path(self.temp.name)/name
             output=subprocess.check_output([sys.executable,'-m','mira','--root',str(root),'research-init','Which teaching approaches work?',*options],text=True)
             s=loads(output)
             self.assertEqual(s['strategy_selection']['method'],{'explicit':'explicit','auto':'r0','compat':'databases'}[name])
             self.assertEqual(len(read_records(root)),int(name=='auto'))
         root=Path(self.temp.name)/'invalid'
-        result=subprocess.run([sys.executable,'-m','mira','--root',str(root),'research-init','Q?','--strategy','invalid'],capture_output=True)
+        result=subprocess.run([sys.executable,'-m','mira','--root',str(root),'research-init','Q?','--strategy','invalid','--script',str(script)],capture_output=True)
         self.assertNotEqual(result.returncode,0)
         self.assertFalse((root/'research/state.json').exists())
 

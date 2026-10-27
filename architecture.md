@@ -2,8 +2,7 @@
 
 Implemented architecture, 27 October 2026. This document describes the controller
 in `src/mira/research.py`, tree contracts in `research_tree.py`, capacity/branching
-in `branching.py`, and the synthesis gardener. Operational commands and live-run
-evidence are in [research execution](docs/research_execution.md).
+in `branching.py`, and the synthesis gardener.
 
 ## Purpose and canonical knowledge
 
@@ -176,9 +175,9 @@ rejected with their raw output retained.
 `research_capacity_tokens` defaults to 75% of `context_budget`; both and
 `output_reserve` are configurable. It is a threshold on the **estimated total R5
 request**, including prompt/request overhead and the output reserve, rather than
-on the number of memories. The conservative estimator uses UTF-8 request bytes
-as estimated tokens. It intentionally overestimates typical English token counts;
-it is not the server's tokenizer.
+on the number of memories. The HTTP model uses llama.cpp's chat template and
+tokenizer, including special tokens; its active context window is the default
+budget. UTF-8 byte estimates remain a labelled fallback for fixture transports.
 
 Before action selection and after successful actions, Python prepares the actual
 R5 template using the selected model/settings, distinct question context, every
@@ -192,8 +191,9 @@ with summaries to make R5 fit.
 At or above the configured threshold, a living node becomes exhausted and leaves
 direct research scheduling. Pending retrieved evidence is processed before such
 a transition, preserving it across upgrades/configuration changes. The assessment
-stores byte/total estimates, threshold, hard context budget, reserve, direct input
+stores token counts, byte sizes, threshold, hard context budget, reserve, direct input
 IDs, model and request/template hashes. Exhaustion events record the crossing.
+Exhaustion is published before that node's R5 dispatch.
 
 A newly committed memory may overshoot the threshold. The **entire** memory is
 retained and the node is exhausted in that same journaled operation. The default
@@ -229,8 +229,9 @@ depth; research priorities never are. There is no existing-children penalty.
 The depth penalty discourages vertical growth without guaranteeing balance.
 
 R5 sees all the selected node's direct accumulated research, root/parent context
-and a configurable maximum child count (default 3). It may derive novel questions,
-rather than only copying R3 questions/hypotheses. Output is an ordered
+and a configurable maximum child count (default 3). Every child must be grounded
+in specific supplied evidence or an unresolved issue and advance its parent/root.
+Output is an ordered
 `{"questions":["Specific question?", ...]}`; an empty list is valid. Python removes
 normalized duplicates against existing tree questions and within the proposal,
 validates the child limit, allocates IDs and sets initial priority zero. An empty
@@ -287,13 +288,18 @@ the final memory: it remains available to an ancestor.
 
 Candidates need at least two frontier memories. Score is frontier count plus a
 1000 terminal bonus when no living/exhausted eligible work remains below or at the
-node. Candidate ties use creation order. Selection descends to a fitting child if
-needed, then takes the oldest fitting pair and adds complete fitting inputs in
-creation order. All request overhead and reserve are budgeted. No fitting pair
-produces an explicit blocked-synthesis action and stops a bounded run.
+node. Candidate ties use creation order. Selection prefers broad collections;
+when complete memories do not fit, cached deterministic structured summaries
+retain every unit, qualification, source reference and relationship, omitting
+storage bookkeeping. Smaller summaries are packed first when necessary; other
+candidates are tried before deferring. Token counts include chat overhead and a
+configurable synthesis output reserve. S1 records deferrals and retries at the
+normal cadence while other work continues; an explicit blocked outcome is returned
+only when no collection fits and no other research or branching remains.
 
 S2 validates every referenced stable finding/question/equation/image anchor and
-requires coverage of every input. Its new synthesis and input consumption marks
+requires coverage of every supplied input. Input hashes and representation receipts
+record exactly what the model received. Its new synthesis and input consumption marks
 commit atomically with state. It never consumes a single memory, deletes research
 or overwrites originals. Question-only memories are valid synthesis inputs;
 unresolved questions must remain qualified as unresolved.

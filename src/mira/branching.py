@@ -5,6 +5,7 @@ from dataclasses import asdict
 from . import decisions, research_tree as tree
 from .format import digest, render, require
 from .r1 import question_context
+from .budget import measure
 
 
 def context(state, memories, equations, identity):
@@ -23,23 +24,20 @@ def context(state, memories, equations, identity):
                                  "equations": [asdict(e) for e in equations if e.id in equation_ids]}}
 
 
-def assess(state, memories, equations, model, settings):
+def assess(state, memories, equations, model, settings, counter=None):
     """Assess exactly the rendered R5 payload; preserve overshoots for inspection."""
     changes = []
     for identity, n in state["nodes"].items():
         if n["status"] not in {"living", "exhausted"}: continue
         supplied = context(state, memories, equations, identity)
         serialized, template = decisions.prepared_request(model, settings, "R5", supplied)
-        total = len(serialized.encode("utf-8")) + state["output_reserve"]
-        assessment = {"estimated_tokens": total, "request_bytes": len(serialized.encode("utf-8")),
-            "output_reserve": state["output_reserve"], "threshold": state["research_capacity_tokens"],
-            "context_budget": state["context_budget"],
+        usage = measure(serialized, state["output_reserve"], state["context_budget"], counter)
+        assessment = {**usage, "threshold": min(state["research_capacity_tokens"], usage["context_budget"]),
             "memory_ids": [m["id"] for m in supplied["research_results"]["memories"]],
             "request_sha256": digest(serialized), "template_sha256": template["files"][0]["sha256"],
-            "estimator": "UTF-8 request bytes plus output reserve", "model": model,
-            "over_context_budget": total > state["context_budget"]}
+            "model": model}
         n["research_capacity"] = assessment
-        if n["status"] == "living" and n["pending_results"] is None and total >= state["research_capacity_tokens"]:
+        if n["status"] == "living" and n["pending_results"] is None and assessment["memory_ids"] and usage["estimated_tokens"] >= assessment["threshold"]:
             n["status"] = "exhausted"
             changes.append({"node_id": identity, "reason": "research_capacity_reached", **assessment})
     tree.refresh(state, memories)

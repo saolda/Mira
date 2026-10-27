@@ -3,8 +3,10 @@ R5: Develop useful child research questions for the selected exhausted node.
 Examine all supplied research in the context of the selected question and its parent and root questions.
 Identify important gaps, unresolved questions, hypotheses, contradictions and opportunities for deeper investigation.
 Derive specific, independently investigable questions that meaningfully advance the wider research.
-Use your own judgment. You may develop questions not explicitly suggested in the research.
-Avoid duplicates and irrelevant questions. Do not generate questions merely to increase the size of the tree.
+Every child question must arise from a specific finding, uncertainty, contradiction, limitation or unanswered question in the supplied research.
+Advance the parent question, remain relevant to the root objective, and make the evidential connection clear in the question itself.
+Avoid unsupported speculative connections and duplication. Interdisciplinary questions need a clear connection to the evidence.
+Do not generate questions merely to increase the size of the tree.
 Return at most {{max_children}} questions.
 An empty list is acceptable if no useful child questions are warranted.
 
