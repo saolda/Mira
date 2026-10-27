@@ -139,8 +139,10 @@ Mira must support safe pause, shutdown, recovery and resumption. Autonomous acti
 
 A **research strategy** is a predefined, ordered list of external research
 databases suitable for a question domain, such as humanities or engineering.
-One strategy is selected for the entire experiment, either explicitly on the
-command line or by an optional one-time R0 LLM selection before research starts.
+One strategy must be selected for the entire experiment before any research cycle:
+use the named strategy specified on the command line, or, **by default when no
+strategy is specified**, run the one-time R0 LLM selection. Initialization must
+not proceed without a valid, persisted selection.
 All nodes inherit that strategy, while each independently tracks its next database.
 A set of R1 keywords is tried against the strategy's database sequence; after
 that round, R4 may request new keywords and restart the sequence. Unresponsive
