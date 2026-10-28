@@ -294,6 +294,53 @@ or blocked selection; S2 consumes one model call. Branching and synthesis never
 share a cycle with research. A terminal event is recorded only when neither
 living research nor pending R5 remains; zero living nodes alone is not completion.
 
+## Synthesis actions: S1 and S2
+
+### S1: deterministic synthesis selection
+
+S1 decides **whether and what to synthesise**, without an LLM call. At the
+configured synthesis cadence (or during terminal draining), Python evaluates
+eligible tree nodes and their unconsumed frontier memories. A candidate requires
+at least two memories; the frontier may contain both direct research memories
+and earlier synthesis memories. Killed branches and ineligible synthesis lineage
+are excluded.
+
+S1 ranks candidates by frontier count, adding a terminal bonus when the eligible
+subtree has no remaining living or exhausted work; ties follow node creation
+order. It prefers broad collections of complete memories. If the selected inputs
+would exceed the model context budget, S1 can use deterministic structured
+projections that preserve knowledge units, qualifications, source references and
+relationships while omitting storage bookkeeping. Token accounting includes
+chat overhead and the reserved S2 output budget. S1 may try other candidates
+rather than force an oversized request.
+
+**Output:** a validated, budget-fitting selection of at least two frontier
+memories and their representations, or a recorded empty/deferred/blocked outcome.
+S1 does not create a memory, consume inputs, evaluate research questions or
+make an LLM call. Deferrals are revisited at the normal cadence; a terminal
+blocked outcome occurs only when no selection fits and no research or branching
+work remains.
+
+### S2: analytical synthesis
+
+S2 receives the selected S1 inputs and performs **cross-memory analysis** in
+one LLM call. Unlike extractive R3, it integrates findings, evaluates agreements
+and tensions, preserves uncertainty, and develops conclusions or questions
+grounded in the supplied evidence. Source-reported achievements must not be
+silently promoted to independently verified results.
+
+**Output:** one canonical synthesis memory containing anchored knowledge units,
+explicit source-memory lineage and structured relationships. Python validates
+references to stable finding, question, equation and image anchors and requires
+coverage of every selected input. The exact input representations and hashes
+are recorded for auditability.
+
+On successful validation, Python atomically commits the synthesis memory and
+marks its input memories consumed in the relevant synthesis frontier. Originals
+remain stored and traceable; they are not deleted or overwritten. S2 never
+synthesises a single memory. Invalid output does not commit a partial synthesis
+or consume its inputs.
+
 ## Synthesis integration
 
 The frontier consists of unconsumed direct research **and synthesis** memories
