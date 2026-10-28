@@ -111,7 +111,7 @@ class GardenerTests(unittest.TestCase):
 
     def test_five_research_actions_then_one_synthesis_same_process(self):
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft(), draft("B")]},
+            llm = ScriptedLLM([{"keywords": ["heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft(), draft("B")]},
                 decision("retry"), {"keywords": ["thermal"]}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
             r.initialize("Q?", ["fixture"], context_budget=12000)
@@ -121,7 +121,7 @@ class GardenerTests(unittest.TestCase):
                 token, memories, equations, ledger = r.store.read()
                 state = loads(r.store._files()["research/state.json"])
                 from mira import r3
-                r3.create_memory(state, memories, equations, ledger, "q1", [draft("C")], {**evidence(), "reference": "synthetic-existing-batch"})
+                r3.create_memory(state, memories, equations, ledger, "q1", [draft("C")], {**evidence(), "reference": "synthetic-existing-batch"}, summary="Scoped summary of all extracted results and their limitations.")
                 tree.refresh(state, memories)
                 r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
             r.llm = DemoLLM()

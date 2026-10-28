@@ -51,7 +51,7 @@ class ResearchTests(unittest.TestCase):
         return loads((self.root / "research/state.json").read_text())
 
     def test_deterministic_r1_r2_r3_r4_restart_and_transcript(self):
-        r = self.make([{"keywords": ["barrier", "heat"]}, {"results": [draft()]}, decision()], [evidence()])
+        r = self.make([{"keywords": ["barrier", "heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()], [evidence()])
         self.assertEqual(r.step()["action"], "R1")
         self.assertEqual(r.step()["action"], "R2")
         pending = self.state()["nodes"]["q1"]["pending_results"]
@@ -91,7 +91,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(self.llm.requests), 2)
 
     def test_prompts_supply_search_history_evidence_and_provider_by_named_slots(self):
-        self.llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": [draft()]}, decision()])
+        self.llm = ScriptedLLM([{"keywords": ["heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()])
         r = Research(self.root, self.llm, {"offline":FixtureSearch([{"status":"failed","results":[],"error":"offline"}]),
             "fixture":FixtureSearch([{**evidence(), "raw_api_response":"Raw provider feed is retained outside prompts."}])})
         r.initialize("How does the fictional barrier affect heat?", ["offline","fixture"], context_budget=12000)
@@ -166,7 +166,7 @@ class ResearchTests(unittest.TestCase):
 
     def test_unsupported_evidence_no_second_llm_pass(self):
         bad = draft(); bad["source_ids"] = ["invented"]
-        r = self.make([{"keywords": ["heat"]}, {"results": [bad]}], [evidence()])
+        r = self.make([{"keywords": ["heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [bad]}], [evidence()])
         r.step(); r.step(); self.assertEqual(r.step()["status"], "rejected")
         self.assertEqual(len(self.llm.requests), 2)
         self.assertEqual(r.knowledge.validate()["documents"], 0)
@@ -191,7 +191,7 @@ class ResearchTests(unittest.TestCase):
         r = self.make([{"keywords": ["heat"]}], context_budget=100, output_reserve=50)
         self.assertEqual(r.step()["status"], "rejected"); self.assertFalse(self.llm.requests)
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat"]}, {"results": []}])
+            llm = ScriptedLLM([{"keywords": ["heat"]}, {"summary": "", "results": []}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])}); r.initialize("Q?", ["fixture"], context_budget=12000)
             for _ in range(3): self.assertEqual(r.step()["status"], "committed")
             self.assertEqual(r.knowledge.validate()["documents"], 0)

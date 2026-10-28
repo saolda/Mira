@@ -57,7 +57,7 @@ class SemanticDirectory:
                     CREATE INDEX edges_incoming ON edges(target,status,type);
                     CREATE INDEX edges_outgoing ON edges(source,status,type);
                 ''')
-                db.executemany("INSERT INTO metadata VALUES (?,?)", [("generation", generation or "empty"), ("model", self.model), ("dimensions", str(dimensions)), ("schema", "1")])
+                db.executemany("INSERT INTO metadata VALUES (?,?)", [("generation", generation or "empty"), ("model", self.model), ("dimensions", str(dimensions)), ("schema", "2")])
                 db.executemany("INSERT INTO documents VALUES (?,?,?,?,?)", [(m.id, m.title, m.summary, m.revision, dumps(m.metadata)) for m in docs.values()])
                 for i, row in enumerate(rows):
                     db.execute("INSERT INTO units VALUES (?,?,?,?,?,?,?)", (*[row[k] for k in ("id", "document", "type", "label", "content", "revision")], json.dumps(vectors[i]) if vectors else None))
@@ -83,7 +83,7 @@ class SemanticDirectory:
             try:
                 with closing(sqlite3.connect(self.path)) as db:
                     meta = dict(db.execute("SELECT key,value FROM metadata"))
-                    fresh = meta.get("generation") == (snapshot[0] or "empty") and meta.get("model") == self.model and meta.get("schema") == "1"
+                    fresh = meta.get("generation") == (snapshot[0] or "empty") and meta.get("model") == self.model and meta.get("schema") == "2"
             except sqlite3.DatabaseError:
                 pass
         if not fresh:

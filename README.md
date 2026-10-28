@@ -2,7 +2,8 @@
 
 A local, inspectable autonomous researcher with persistent R0 strategy selection, multi-database R1–R5 research, branching and synthesis.
 Canonical Markdown and equation JSON remain authoritative; SQLite full-text,
-relationship and vector indexes can be rebuilt.
+relationship and vector indexes can be rebuilt. Research memories retain one source,
+an R3-generated summary and compact anchored knowledge with inherited provenance.
 
 - [Project purpose](ProjectOverview.md)
 - [Implemented architecture](architecture.md)

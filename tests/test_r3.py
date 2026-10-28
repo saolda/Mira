@@ -14,6 +14,9 @@ from mira.inspection import Inspector
 from mira.interactions import read_records
 from mira.research import Research
 from mira.search import FixtureSearch
+from mira import branching
+import multiprocessing
+import os
 
 
 def research():
@@ -37,11 +40,173 @@ def image(related=0, url="https://example.org/fig2.png"):
     return {"type": "image", "text": "Synthetic caption", "url": url, "reference": "Figure 2", "source_ids": ["source-a"], "related_to": related}
 
 
+def crash_extraction(root, stage):
+    def fault(point):
+        if point == stage: os._exit(75)
+    Research(root, ScriptedLLM([{"summary": "Two results with important limitations.",
+                               "results": [result(), result("claim")]}]), {}).step(fault=fault)
+
+
+class CompactResearchTests(unittest.TestCase):
+    def test_summary_contract_rejects_missing_invalid_and_inconsistent_summaries(self):
+        for value in ({"results": [result()]}, {"summary": None, "results": []},
+                      {"summary": "", "results": [result()]}, {"summary": "No results", "results": []},
+                      {"summary": "Valid", "results": [result()], "extra": True}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r3.validate(value, research())
+        evidence = research()
+        evidence["results"].append({**evidence["results"][0], "id": "source-b"})
+        with self.assertRaisesRegex(ValueError, "one source"):
+            r3.validate({"summary": "Multiple sources", "results": [result()]}, evidence)
+
+    def test_compact_prose_preserves_literal_structure_and_omits_empty_fields(self):
+        state = tree.initial("Q?", ["fixture"])
+        text = {**result(), "text": "Scope: First line.\nOrigin: literal source prose.", "qualification": ""}
+        memory = r3.create_memory(state, [], [], {"r": 1, "s": 1}, "q1", [text], research(),
+                                  "A summary with <tags> and # reserved syntax.")
+        markdown = render(memory)
+        self.assertEqual(parse(markdown), memory)
+        self.assertNotIn("Qualification:", markdown)
+        self.assertNotIn("Evidence status:", markdown)
+        self.assertNotIn("CITES", markdown)
+        self.assertEqual(set(memory.units[0].fields), {"Kind", "Proposition"})
+
+    def runner(self, root, responses, rows=None):
+        llm = ScriptedLLM([{"keywords": ["physics"]}, *responses])
+        evidence = research()
+        if rows is not None: evidence["results"] = rows
+        runner = Research(root, llm, {"fixture": FixtureSearch([evidence, evidence])})
+        runner.initialize("What does physics establish?", ["fixture"], context_budget=24000,
+                          synthesis_interval=100)
+        for _ in range(2): self.assertEqual(runner.step()["status"], "committed")
+        return runner, llm
+
+    def test_summary_is_exact_model_text_covering_all_results_and_contexts(self):
+        summary = "Measures energy, but also identifies unresolved calibration limits."
+        question = {**result("question", 0), "text": "How reliable is calibration?", "origin": "derived"}
+        with tempfile.TemporaryDirectory() as root:
+            runner, llm = self.runner(root, [{"summary": summary, "results": [result(), question]}])
+            self.assertEqual(runner.step()["status"], "committed")
+            memory = runner.knowledge.document("r1")
+            self.assertEqual(memory.summary, summary)
+            self.assertNotEqual(memory.summary, memory.units[0].fields["Proposition"])
+            self.assertEqual(len(llm.requests), 2)
+            self.assertIn("summary must represent the extracted results as a whole", llm.requests[-1])
+            self.assertIn("Normally use 40–80 words", llm.requests[-1])
+            self.assertEqual(parse(render(memory)), memory)
+            self.assertIn("Origin: derived", render(memory))
+            state = loads(Path(root, "research/state.json").read_text())
+            contexts = [branching.context(state, [memory], [], "q1")["research_results"]["memories"][0]["markdown"],
+                        gardener.context(state, [memory], [], "q1", [memory])["input_memories"][0]["markdown"]]
+            for context in contexts:
+                self.assertEqual(context, render(memory))
+                self.assertIn("Qualification:", context)
+                self.assertNotIn("**Proposition:**", context)
+            self.assertEqual(gardener.context(state, [memory], [], "q1", [memory], summarized=True)["input_memories"][0]["sources"],
+                             [memory.metadata["source"]])
+
+    def test_multiple_sources_separate_calls_memories_and_dedup_on_restart(self):
+        rows = research()["results"]
+        rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+        second = {**result("claim"), "source_ids": ["source-b"]}
+        with tempfile.TemporaryDirectory() as root:
+            runner, llm = self.runner(root, [{"summary": "First source.", "results": [result(), result("claim")]},
+                                           {"summary": "Second source.", "results": [second]}], rows)
+            self.assertEqual(runner.step()["memory_ids"], ["r1"])
+            self.assertIsNotNone(loads(Path(root, "research/state.json").read_text())["nodes"]["q1"]["pending_results"])
+            # Resume with the same pending evidence; the processed-source index is its cursor.
+            resumed = Research(root, llm, runner.adapters)
+            self.assertEqual(resumed.step()["memory_ids"], ["r2"])
+            self.assertEqual(resumed.knowledge.validate()["documents"], 2)
+            records = read_records(root)[1:]
+            self.assertEqual([len(r["request"]["context"]["research"]["results"]) for r in records], [1, 1])
+            self.assertEqual([resumed.knowledge.document(i).metadata["source"]["id"] for i in ("r1", "r2")], ["source-a", "source-b"])
+            with resumed.store.lock():
+                token, memories, equations, ledger = resumed.store.read()
+                state = loads(resumed.store._files()["research/state.json"])
+                state["nodes"]["q1"]["next_database_index"] = 0
+                resumed.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
+            event = resumed.step()
+            self.assertEqual(event["duplicate_count"], 2)
+            self.assertEqual(len(llm.requests), 3)
+            self.assertEqual(resumed.knowledge.validate()["documents"], 2)
+
+    def test_empty_source_does_not_drop_remaining_source_or_allocate_id(self):
+        rows = research()["results"]
+        rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+        with tempfile.TemporaryDirectory() as root:
+            runner, _ = self.runner(root, [{"summary": "", "results": []},
+                                          {"summary": "Useful second source.", "results": [{**result(), "source_ids": ["source-b"]}]}], rows)
+            self.assertEqual(runner.step()["memory_ids"], [])
+            self.assertEqual(runner.step()["memory_ids"], ["r1"])
+            self.assertEqual(runner.knowledge.document("r1").metadata["source"]["id"], "source-b")
+
+    def test_inherited_provenance_retrieval_graph_synthesis_and_index_rebuild(self):
+        question = {**result("question", 0), "origin": "derived"}
+        with tempfile.TemporaryDirectory() as root:
+            runner, _ = self.runner(root, [{"summary": "Finding and derived objects.", "results": [result(), question, equation(0, "derived")]}])
+            self.assertEqual(runner.step()["status"], "committed")
+            k = runner.knowledge
+            memory = k.document("r1")
+            self.assertFalse(any(e.type == "CITES" for e in memory.relationships))
+            self.assertNotIn("authors", memory.metadata["source"])
+            for ref in ("r1#f1", "r1#q1", "r1#e1"):
+                self.assertEqual(k.retrieve(ref)["provenance"][0]["source"], memory.metadata["source"])
+                self.assertEqual(k.relationships(ref, type="CITES")[0]["target"], memory.metadata["source"]["url"])
+            self.assertEqual(k.provenance("r1#q1")[0]["origin"], "derived")
+            self.assertEqual(k.provenance("e_r1_1")[0]["origin"], "derived")
+            with runner.store.lock():
+                token, docs, equations, ledger = runner.store.read()
+                state = loads(runner.store._files()["research/state.json"])
+                other = {**research(), "results": [{**research()["results"][0], "id": "source-b", "url": "https://example.org/second"}]}
+                second = r3.create_memory(state, docs, equations, ledger, "q1", [{**result(), "source_ids": ["source-b"]}], other, "Second source.")
+                value = {"title": "Integration", "summary": "Qualified integration.", "findings": [{
+                    "label": "Integration", "proposition": "A scoped integration.", "explanation": "Limitations remain.",
+                    "provenance": "Model reasoning.", "source_findings": ["r1#q1", "r2#f1"]}]}
+                gardener.apply(state, docs, ledger, "q1", [docs[0], second], value)
+                tree.refresh(state, docs)
+                runner.store.publish(docs, equations, ledger, token, files={"research/state.json": dumps(state)})
+            self.assertIn(k.provenance("r1#q1")[0], k.provenance("s1#f1"))
+            k.rebuild()
+            k.directory.path.unlink()
+            self.assertTrue(k.search("scoped"))
+            self.assertEqual(len(k.relationships(memory.metadata["source"]["url"], direction="incoming", type="CITES")), 3)
+            self.assertEqual(k.directory.integrity()["integrity"], "ok")
+
+    def test_legacy_memory_citations_are_still_resolvable(self):
+        from mira.api import Knowledge
+        with tempfile.TemporaryDirectory() as root:
+            k = Knowledge(root)
+            m = k.create_memory("Legacy", "Legacy memory.")
+            k.add_finding(m.id, "Old", "Old claim.", "Scoped.", "Explicit citation.")
+            k.add_relationship(m.id, "f1", "CITES", "https://example.org/legacy", status="unverified")
+            self.assertEqual(parse(k.retrieve(m.id)), k.document(m.id))
+            self.assertEqual(k.provenance("r1#f1")[0]["source"]["url"], "https://example.org/legacy")
+
+    def test_interrupted_source_creation_recovers_memory_summary_and_cursor_together(self):
+        for stage in ("prepared", "replaced:memories/r1.md", "replaced:research/state.json", "before_commit"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as root:
+                rows = research()["results"]
+                rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+                runner, _ = self.runner(root, [], rows)
+                process = multiprocessing.get_context("fork").Process(target=crash_extraction, args=(root, stage))
+                process.start(); process.join(10)
+                self.assertEqual(process.exitcode, 75)
+                operation = runner.store.recovery_status()["operations"][0]
+                runner.store.repair(operation["id"], apply=True)
+                runner.store.repair(operation["id"], apply=True)
+                self.assertEqual(runner.knowledge.document("r1").summary, "Two results with important limitations.")
+                runner.llm = ScriptedLLM([{"summary": "Second source.", "results": [{**result(), "source_ids": ["source-b"]}]}])
+                self.assertEqual(runner.step()["memory_ids"], ["r2"])
+                self.assertEqual(len(runner.llm.requests), 1)
+                self.assertEqual(runner.knowledge.validate()["documents"], 2)
+
+
 class R3Tests(unittest.TestCase):
     def make(self, results):
         state=tree.initial("What does this fixture establish?", ["fixture"])
         memories, equations, ledger=[], [], {"r": 1, "s": 1}
-        memory=r3.create_memory(state, memories, equations, ledger, "q1", results, research())
+        memory=r3.create_memory(state, memories, equations, ledger, "q1", results, research(), summary="Scoped summary of all extracted results and their limitations.")
         return memory, equations, memories, state
 
     def test_context_exact_three_fields_and_research_metadata(self):
@@ -59,18 +224,18 @@ class R3Tests(unittest.TestCase):
 
     def test_empty_results_no_memory_or_identity_allocation(self):
         state=tree.initial("Q?",["fixture"]); ledger={"r":1,"s":1}
-        self.assertIsNone(r3.create_memory(state,[],[],ledger,"q1",[],research()))
+        self.assertIsNone(r3.create_memory(state,[],[],ledger,"q1",[],research(), summary=""))
         self.assertEqual(ledger,{"r":1,"s":1})
-        validate("R3",{"results":[]},research())
+        validate("R3",{"summary": "", "results":[]},research())
 
     def test_all_text_types_and_no_model_memory_fields(self):
         results=[result(t) for t in ("finding","observation","claim","inference","hypothesis")]
         memory, equations, _, _=self.make(results)
         self.assertEqual([u.fields["Kind"] for u in memory.units],[r["type"] for r in results])
-        self.assertEqual([u.fields["Evidence status"] for u in memory.units],["unverified"]*5)
+        self.assertTrue(all("Evidence status" not in u.fields for u in memory.units))
         with self.assertRaises(ValueError): validate("R3",{"memories":[],"no_finding_reason":"old"},research())
         bad=result();bad["memory_id"]="r99"
-        with self.assertRaises(ValueError): validate("R3",{"results":[bad]},research())
+        with self.assertRaises(ValueError): validate("R3",{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]},research())
 
     def test_mixed_order_stable_refs_and_deterministic_markdown(self):
         results=[result(),equation(),image(),result("hypothesis",0)]
@@ -79,9 +244,9 @@ class R3Tests(unittest.TestCase):
         text=render(memory)
         self.assertEqual(text,render(memory))
         self.assertEqual(parse(text),memory)
-        self.assertLess(text.index("[#f1]"),text.index("[#e1]"))
-        self.assertLess(text.index("[#e1]"),text.index("[#i1]"))
-        self.assertLess(text.index("[#i1]"),text.index("[#f2]"))
+        self.assertLess(text.index("### #f1 |"),text.index("### #e1 |"))
+        self.assertLess(text.index("### #e1 |"),text.index("### #i1 |"))
+        self.assertLess(text.index("### #i1 |"),text.index("### #f2 |"))
         self.assertIn("$$\nE = mc^2\n$$",text)
         self.assertIn("units: not supplied",text)
         self.assertIn("![Synthetic caption](<https://example.org/fig2.png>)",text)
@@ -92,7 +257,7 @@ class R3Tests(unittest.TestCase):
     def test_equation_json_roundtrip_units_and_optional_origin(self):
         eq=equation(None);eq["latex"]=r"E = \frac{mc^2}{1}"
         del eq["origin"]
-        wire=dumps({"results":[eq]});self.assertIn(r"\\frac",wire)
+        wire=dumps({"summary": "Scoped summary of all extracted results and their limitations.", "results":[eq]});self.assertIn(r"\\frac",wire)
         memory,equations,docs,_=self.make(loads(wire)["results"])
         stored=Equation(**loads(dumps(asdict(equations[0]))))
         validate_corpus(docs,[stored])
@@ -103,7 +268,7 @@ class R3Tests(unittest.TestCase):
         self.assertIn("model-derived, not asserted to appear in source",derived.provenance)
         for change in (lambda e:e["variables"][0].update(description=""),lambda e:e["variables"][0].update(units=4),lambda e:e.update(latex="\f"),lambda e:e.update(variables=[])):
             bad=equation(None);change(bad)
-            with self.assertRaises(ValueError):r3.validate({"results":[bad]},research())
+            with self.assertRaises(ValueError):r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]},research())
 
     def test_image_without_url_retains_reference_and_description(self):
         memory,_,_,_=self.make([image(None,None)])
@@ -120,13 +285,13 @@ class R3Tests(unittest.TestCase):
         bad=image(None,None);bad["reference"]=None;cases.append(bad)
         bad=image(None,None);bad["reference"]="Figure 999 invented";cases.append(bad)
         for bad in cases:
-            with self.subTest(bad=bad),self.assertRaises(ValueError):r3.validate({"results":[bad]},research())
+            with self.subTest(bad=bad),self.assertRaises(ValueError):r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]},research())
 
     def test_reference_ranges_self_and_cycles(self):
         for ref in (-1,3,True,"0",0):
-            with self.subTest(ref=ref),self.assertRaises(ValueError):r3.validate({"results":[result(related=ref)]},research())
-        with self.assertRaises(ValueError):r3.validate({"results":[result(related=1),result(related=0)]},research())
-        r3.validate({"results":[result(related=1),result()]},research())
+            with self.subTest(ref=ref),self.assertRaises(ValueError):r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(related=ref)]},research())
+        with self.assertRaises(ValueError):r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(related=1),result(related=0)]},research())
+        r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(related=1),result()]},research())
         memory,_,_,_=self.make([result(related=1),result()])
         self.assertEqual(memory.relationships[-1].target,"r1#f2")
 
@@ -147,7 +312,7 @@ class R3Tests(unittest.TestCase):
     def test_live_pipeline_exact_prompt_and_atomic_equation_image_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog=Experiments(directory);root=catalog.create("ordered-r3")
-            llm=ScriptedLLM([{"keywords":["physics"]},{"results":[result(),equation(),image()]}])
+            llm=ScriptedLLM([{"keywords":["physics"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(),equation(),image()]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("What does the physics research show?",["fixture"],context_budget=20000)
             for _ in range(3):self.assertEqual(r.step()["status"],"committed")
@@ -166,7 +331,7 @@ class R3Tests(unittest.TestCase):
     def test_rejected_equation_batch_rolls_back_equations_and_ids(self):
         with tempfile.TemporaryDirectory() as root:
             bad=equation(None);bad["latex"]="x=y\n## Relationships"
-            llm=ScriptedLLM([{"keywords":["physics"]},{"results":[bad]}])
+            llm=ScriptedLLM([{"keywords":["physics"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("Physics?",["fixture"],context_budget=20000)
             r.step();r.step()
@@ -181,7 +346,7 @@ class R3Tests(unittest.TestCase):
     def test_synthesis_can_reference_media_only_inputs(self):
         memory,eq,docs,state=self.make([equation(None),image(None,None)])
         second=deepcopy(memory);second.id="r2";second.units=[Unit("i1","Figure",{"Image":"Caption","Figure reference":"Fig 2","Provenance":"Fixture"})]
-        second.relationships=[]
+        second.relationships=[];second.metadata.pop("source")
         value={"title":"Combined","summary":"Scoped integration","findings":[{"label":"Combined","proposition":"A scoped integration.","explanation":"No verification implied.","provenance":"Supplied media only.","source_findings":["r1#e1","r2#i1"]}]}
         gardener.validate(value,[memory,second])
         second.metadata.update(created_order=2)

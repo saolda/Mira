@@ -87,7 +87,7 @@ no model. Action selection for a living node is:
 | --- | --- | --- | --- |
 | R1 | No keywords and no pending results | Generate targeted terms, apply deterministic control filter, persist terms | 1 |
 | R2 | Keywords, no pending results, database pointer within strategy | Search current database; record outcome and advance the node's next-database pointer, including on empty, failed or rate-limited responses; save nonduplicate results for R3 | 0 |
-| R3 | Pending results | Validate ordered extraction; create a memory for a nonempty batch; clear pending reference | 1 |
+| R3 | Pending results | Extract one unprocessed source; create at most one memory; clear pending reference after all sources | 1 |
 | R4 | Keywords, no pending results, all databases tried | Evaluate direct research in question context | 1 |
 | R5 | Selected exhausted node, no committed split receipt | Develop children, persist IDs and receipt; mark split even if empty | 1 |
 
@@ -139,19 +139,42 @@ No hidden fallback query or negative control-term operator is introduced.
 
 ### R3: ordered extraction and provenance
 
-R3 returns exactly `{"results":[...]}`. Accepted result types are `finding`,
+R3 returns exactly `{"summary":"...","results":[...]}` in one model call per
+source. The model summary covers the complete extraction and its limitations;
+Python does not construct it from a finding. Accepted result types are `finding`,
 `observation`, `claim`, `inference`, `hypothesis`, `question`, `equation`, `image`.
 Results preserve their sequence, source IDs, qualifications and optional
 `related_to` indexes. Python validates source membership, type-specific fields,
 index bounds and acyclic relationships before creating Markdown.
 
 Questions require `origin: source|derived`. They become open `#q` units retaining
-Origin, Qualification and Provenance; source relationships remain CITES edges and
-result relationships become stable RELATED_TO edges. Derived questions must be
-grounded in cited research, and are not attributed to its authors. Equations
+Origin and nonempty Qualification; result relationships become stable RELATED_TO
+edges. Derived questions must be grounded in cited research, and are not attributed
+to its authors. Equations
 preserve LaTeX, variable descriptions/units and source/derived attribution. Images
 must reference supplied URLs or figure references. Empty extraction is valid and
-creates no memory or ID. R3 never emits memory IDs or writes canonical files.
+creates no memory or ID and requires an empty summary. R3 never emits memory IDs
+or writes canonical files.
+
+Each independently identifiable source produces at most one research memory per
+experiment. A pending batch is processed one source per R3 action; its processed
+source index and memory commit together, allowing restart without duplicate
+extraction. Empty sources are also marked processed. R3 remains extractive; S2
+integrates across memories.
+
+New single-source research Markdown has compact metadata (including the source
+identifier, title, publication date, URL and content kind when supplied), Summary,
+Knowledge and terminal structured Relationships sections. Knowledge headings retain
+stable anchors and types, with propositions directly below, nonempty qualifications,
+and explicit question/equation origins. Equation assets, variables, units and image
+references remain intact. Allocators and required journal/lineage metadata persist;
+author lists and repeated default evidence labels/citations are omitted.
+Every unit inherits the memory's source in provenance resolution and rebuildable
+relationship indexes; redundant canonical CITES edges are unnecessary. Retrieval,
+synthesis lineage and evidence auditing can resolve this inheritance without
+attributing derived objects to source authors. Legacy Markdown and explicit CITES
+edges remain readable. Subsequent actions use the compact representation directly;
+structured synthesis projections retain the source and all substantive units.
 
 ### R4: exactly three decisions
 

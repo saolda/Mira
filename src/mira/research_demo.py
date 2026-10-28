@@ -25,7 +25,7 @@ class DemoLLM(ScriptedLLM):
     def complete(self, serialized_request):
         self.requests.append(serialized_request)
         content = loads(serialized_request)["messages"][-1]["content"]
-        action = "R1" if content.startswith("Generate concise, targeted search terms") else "R3" if content.startswith("Review the retrieved research") else content.split(":", 1)[0]
+        action = "R1" if content.startswith("Generate concise, targeted search terms") else "R3" if "RETRIEVED RESEARCH\n" in content else content.split(":", 1)[0]
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
@@ -33,7 +33,7 @@ class DemoLLM(ScriptedLLM):
         elif action == "R3":
             supplied = decoder.raw_decode(content.split("RETRIEVED RESEARCH\n", 1)[1])[0]
             source_id = supplied["results"][0]["id"]
-            value = {"results": [finding("A transfers 4 units", source_id), finding("B transfers 8 units", source_id)]}
+            value = {"summary": "Scoped summary of all extracted results and their limitations.", "results": [finding("A transfers 4 units", source_id), finding("B transfers 8 units", source_id)]}
         elif action == "R4":
             value = {"decision": "retry", "reason": "Scripted second research batch; the question remains relevant."}
         elif action == "R5":

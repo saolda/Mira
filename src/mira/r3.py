@@ -4,6 +4,7 @@ import re
 from .format import (Equation, Memory, Unit, Relationship, base36, require,
                      external, equation_fields)
 from .r1 import question_context
+from .sources import descriptor
 
 TEXT_TYPES = {"finding", "observation", "claim", "inference", "hypothesis"}
 
@@ -30,7 +31,10 @@ def strings(value):
 
 
 def validate(value, evidence):
-    require(isinstance(value, dict) and set(value) == {"results"} and isinstance(value["results"], list), "R3 requires only an ordered results array")
+    require(isinstance(value, dict) and set(value) == {"summary", "results"} and isinstance(value["results"], list), "R3 requires summary and an ordered results array")
+    text(value["summary"], allow_empty=not value["results"])
+    require(value["results"] or value["summary"] == "", "empty extraction requires empty summary")
+    require(len(evidence["results"]) <= 1, "R3 extracts one source at a time")
     sources = {row["id"]: row for row in evidence["results"]}
     results = value["results"]
     for result in results:
@@ -94,6 +98,8 @@ def validate(value, evidence):
 def prose(value):
     """Store model prose as text, not executable HTML or canonical markup."""
     value = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # A model's prose may contain text resembling a compact field label.
+    value = re.sub(r"(?m)^([A-Z][A-Za-z ]*):", r"\1\\:", value)
     return re.sub(r"([\\`*{}_\[\]#!])", r"\\\1", value).strip()
 
 
@@ -101,44 +107,41 @@ def label(value):
     return prose(" ".join(value.split())[:110])
 
 
-def create_memory(state, memories, equations, ledger, node_id, results, evidence):
+def create_memory(state, memories, equations, ledger, node_id, results, evidence, summary):
+    validate({"summary": summary, "results": results}, evidence)
     if not results: return None
-    validate({"results": results}, evidence)
     identity = "r" + base36(ledger["r"]); ledger["r"] += 1
     question = state["nodes"][node_id]["question"]
-    memory = Memory(identity, "Research: " + label(question), prose(results[0]["text"][:300]), metadata={
+    memory = Memory(identity, "Research: " + label(question), prose(summary), metadata={
         "node_id": node_id, "kind": "research", "source_memories": [], "synthesized_by": None,
-        "created_order": len(memories) + 1, "evidence_ref": evidence["reference"]})
-    sources = {row["id"]: row for row in evidence["results"]}
+        "created_order": len(memories) + 1, "evidence_ref": evidence["reference"],
+        "source": {k: v for k, v in descriptor(evidence["results"][0]).items() if k != "authors"}})
     anchors = []
     for result in results:
         kind = result["type"]
         anchor = memory.allocate("e" if kind == "equation" else "i" if kind == "image" else "q" if kind == "question" else "f")
         anchors.append(anchor)
-        provenance = "Supplied source identifiers: " + ", ".join(result["source_ids"]) + ". Model extraction; not independently verified."
+        provenance = "Equation origin: " + (result.get("origin") or "unspecified")
         if kind in TEXT_TYPES:
-            unit = Unit(anchor, label(result["text"]), {"Kind": kind, "Evidence status": "unverified",
-                "Proposition": prose(result["text"]), "Explanation": prose(result["qualification"]) or "No qualification supplied; not independent verification.",
-                "Provenance": prose(provenance)})
+            unit = Unit(anchor, kind.title(), {"Kind": kind, "Proposition": prose(result["text"]),
+                **({"Qualification": prose(result["qualification"])} if result["qualification"].strip() else {})})
         elif kind == "question":
-            unit = Unit(anchor, label(result["text"]), {"Question": prose(result["text"]), "State": "open",
-                "Origin": result["origin"], "Qualification": prose(result["qualification"]) or "No qualification supplied.", "Provenance": prose(provenance)})
+            unit = Unit(anchor, "Question", {"Question": prose(result["text"]), "State": "open",
+                "Origin": result["origin"],
+                **({"Qualification": prose(result["qualification"])} if result["qualification"].strip() else {})})
         elif kind == "equation":
             origin = result.get("origin") or "unspecified"
             equation = Equation(f"e_{identity}_{int(anchor[1:], 36)}", identity, result["text"].strip(), result["latex"],
                 {v["symbol"]: v["description"] for v in result["variables"]}, [],
-                provenance + " Equation origin: " + origin + (" (model-derived, not asserted to appear in source)." if origin == "derived" else " (model-reported, unverified)."),
+                provenance + (" (model-derived, not asserted to appear in source)." if origin == "derived" else " (model-reported, unverified)."),
                 units={v["symbol"]: v["units"] for v in result["variables"] if v["units"] is not None})
             equations.append(equation)
-            unit = Unit(anchor, label(result["text"]), equation_fields(equation))
+            unit = Unit(anchor, "Equation", {**equation_fields(equation), **({"Origin": origin} if origin != "unspecified" else {})})
         else:
             image = f'![{prose(result["text"])}](<{result["url"]}>)' if result["url"] else prose(result["text"])
-            unit = Unit(anchor, label(result["text"]), {"Image": image,
-                "Figure reference": prose(result["reference"]) if result["reference"] else "Not supplied",
-                "Provenance": prose(provenance)})
+            unit = Unit(anchor, "Image", {"Image": image,
+                **({"Figure reference": prose(result["reference"])} if result["reference"] else {})})
         memory.units.append(unit)
-        for url in dict.fromkeys(sources[i]["url"] for i in result["source_ids"]):
-            memory.relationships.append(Relationship(anchor, "CITES", url, "unverified"))
     for index, result in enumerate(results):
         if result["related_to"] is not None:
             memory.relationships.append(Relationship(anchors[index], "RELATED_TO", identity + "#" + anchors[result["related_to"]], "unverified"))

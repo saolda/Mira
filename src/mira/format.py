@@ -165,6 +165,8 @@ def structural_lines(text):
 
 
 def render(memory):
+    if "source" in memory.metadata:
+        return render_compact(memory)
     header = {"version": 1, "id": memory.id, "revision": memory.revision,
               "summary": memory.summary, "metadata": memory.metadata, "next": memory.next_ids}
     parts = ["# " + memory.title, "", "```json", dumps(header).rstrip(), "```", "", "## Memory", ""]
@@ -187,6 +189,8 @@ def parse(text):
     for i, token in enumerate(tokens):
         if token.type == "heading_open" and token.level == 0:
             headings.append((token.tag, tokens[i + 1].content, token.map[0], token.map[1]))
+    if len(headings) >= 4 and headings[1][1] == "Summary":
+        return parse_compact(text, headings)
     require(len(headings) >= 3 and headings[0][0] == "h1", "document title required")
     require([(h[0], h[1]) for h in headings[1:]] == [("h2", "Memory"), ("h2", "Relationships")],
             "expected Memory then terminal Relationships sections; other headings unsupported")
@@ -243,6 +247,79 @@ def parse(text):
     return memory
 
 
+def render_compact(memory):
+    """Single-source research format; keep allocators and journal lineage lossless."""
+    header = {"version": 2, "id": memory.id, "revision": memory.revision,
+              **memory.metadata, "next": memory.next_ids}
+    parts = ["# " + memory.title, "", "```json", dumps(header).rstrip(), "```", "",
+             "## Summary", "", memory.summary, "", "## Knowledge", ""]
+    for unit in memory.units:
+        main = {"finding": "Proposition", "question": "Question", "equation": "Description", "image": "Image"}[unit.kind]
+        parts += [f"### #{unit.anchor} | {unit.label}", "", unit.fields[main], ""]
+        for key, value in unit.fields.items():
+            if key == main or key == "Kind" or key == "State" and value == "open": continue
+            parts += [key + ":" + ("\n\n" if key in {"Expression", "Variables"} else " ") + value, ""]
+    parts += ["## Relationships", "", "```json",
+              json.dumps({"relationships": [r.payload() for r in memory.relationships]}, ensure_ascii=False, separators=(",", ":")), "```", ""]
+    rendered = "\n".join(parts)
+    require(parse(rendered) == memory, "memory is not losslessly representable")
+    return rendered
+
+
+def parse_compact(text, headings):
+    lines = text.splitlines(keepends=True)
+    sections = [h for h in headings if h[0] != "h3"]
+    require([(h[0], h[1]) for h in sections[1:]] ==
+            [("h2", "Summary"), ("h2", "Knowledge"), ("h2", "Relationships")], "compact sections")
+    require(sections[0][0] == "h1" and sections[0][2] == 0, "title must be first")
+    def fence(start, end):
+        tokens = MD.parse("".join(lines[start:end]))
+        require(len(tokens) == 1 and tokens[0].type == "fence" and tokens[0].info == "json", "one JSON fence required")
+        return loads(tokens[0].content)
+    header = fence(sections[0][3], sections[1][2])
+    require(isinstance(header, dict) and header.get("version") == 2 and
+            {"id", "revision", "next", "source", "kind", "node_id"} <= header.keys(), "compact header")
+    metadata = {k: v for k, v in header.items() if k not in {"version", "id", "revision", "next"}}
+    summary = "".join(lines[sections[1][3]:sections[2][2]]).strip()
+    markers = [h for h in headings if h[0] == "h3"]
+    require(all(sections[2][3] <= h[2] < sections[3][2] for h in markers), "unit outside Knowledge")
+    require(not "".join(lines[sections[2][3]:markers[0][2] if markers else sections[3][2]]).strip(), "unanchored knowledge")
+    units = []
+    for index, (_, heading, _, body_start) in enumerate(markers):
+        match = re.fullmatch(r"#([fqei][1-9a-z][0-9a-z]*) \| (.+)", heading)
+        require(match is not None, "compact unit heading")
+        anchor, label = match.groups()
+        end = markers[index + 1][2] if index + 1 < len(markers) else sections[3][2]
+        body = lines[body_start:end]
+        visible = structural_lines("".join(body))
+        fields = []
+        for number in visible:
+            field_match = re.match(r"^([A-Z][A-Za-z ]*):(?: (.*)|\n?$)", body[number])
+            if field_match:
+                fields.append((number, field_match[1], field_match[2] or ""))
+        main = {"f": "Proposition", "q": "Question", "e": "Description", "i": "Image"}[anchor[0]]
+        content_end = fields[0][0] if fields else len(body)
+        values = {main: "".join(body[:content_end]).strip()}
+        if anchor[0] == "f": values["Kind"] = label.lower()
+        if anchor[0] == "q": values["State"] = "open"
+        seen_fields = set()
+        for j, (number, key, first) in enumerate(fields):
+            stop = fields[j + 1][0] if j + 1 < len(fields) else len(body)
+            require(key not in seen_fields and (key not in values or key == "State"), "duplicate compact field")
+            seen_fields.add(key)
+            values[key] = (first + "\n" + "".join(body[number + 1:stop])).strip()
+        units.append(Unit(anchor, label, values))
+    envelope = fence(sections[3][3], len(lines))
+    require(isinstance(envelope, dict) and set(envelope) == {"relationships"} and isinstance(envelope["relationships"], list), "compact relationships")
+    edges = []
+    for row in envelope["relationships"]:
+        require(isinstance(row, dict) and set(row) == {"from", "to", "type", "status"}, "relationship fields")
+        edges.append(Relationship(row["from"], row["type"], row["to"], row["status"]))
+    memory = Memory(header["id"], sections[0][1], summary, header["revision"], metadata, header["next"], units, edges)
+    validate_memory(memory)
+    return memory
+
+
 def validate_memory(memory):
     require(isinstance(memory.id, str) and DOC_ID.fullmatch(memory.id), "invalid memory ID")
     for value in (memory.title, memory.summary):
@@ -252,6 +329,12 @@ def validate_memory(memory):
     require(isinstance(memory.metadata, dict), "metadata object required")
     require(isinstance(memory.next_ids, dict) and set(memory.next_ids) in ({"f", "q", "e"}, {"f", "q", "e", "i"}), "allocator fields")
     require(all(type(v) is int and v > 0 for v in memory.next_ids.values()), "invalid allocator")
+    compact = "source" in memory.metadata
+    if compact:
+        source = memory.metadata["source"]
+        require(memory.metadata.get("kind") == "research" and isinstance(source, dict), "single research source required")
+        require(isinstance(source.get("id"), str) and source["id"].strip(), "source identity required")
+        require(external(source.get("url")), "source URL required")
     seen = set()
     for unit in memory.units:
         require(isinstance(unit.anchor, str) and ANCHOR.fullmatch(unit.anchor), "invalid anchor")
@@ -261,16 +344,21 @@ def validate_memory(memory):
         require(isinstance(unit.label, str) and unit.label.strip() and "\n" not in unit.label, "invalid unit label")
         require(isinstance(unit.fields, dict) and all(isinstance(v, str) and v.strip() for v in unit.fields.values()), "empty unit field")
         if unit.kind == "finding":
-            require(set(unit.fields) == {"Kind", "Evidence status", "Proposition", "Explanation", "Provenance"}, "finding fields")
-            require(unit.fields["Kind"] in KINDS and unit.fields["Evidence status"] in EVIDENCE, "finding vocabulary")
+            if compact:
+                require({"Kind", "Proposition"} <= set(unit.fields) <= {"Kind", "Proposition", "Qualification"}, "compact finding fields")
+            else:
+                require(set(unit.fields) == {"Kind", "Evidence status", "Proposition", "Explanation", "Provenance"}, "finding fields")
+            require(unit.fields["Kind"] in KINDS and unit.fields.get("Evidence status", "unverified") in EVIDENCE, "finding vocabulary")
         elif unit.kind == "question":
             require({"Question", "State"} <= set(unit.fields) <= {"Question", "State", "Origin", "Qualification", "Provenance"}
                     and unit.fields["State"] in QUESTION_STATES, "question fields/state")
             require("Origin" not in unit.fields or unit.fields["Origin"] in {"source", "derived"}, "invalid question origin")
         elif unit.kind == "equation":
-            require(set(unit.fields) in ({"Equation"}, {"Equation", "Description", "Expression", "Variables", "Provenance"}) and EQ_ID.fullmatch(unit.fields["Equation"]), "equation reference")
+            require(set(unit.fields) - {"Origin"} in ({"Equation"}, {"Equation", "Description", "Expression", "Variables", "Provenance"}) and EQ_ID.fullmatch(unit.fields["Equation"]), "equation reference")
+            require("Origin" not in unit.fields or unit.fields["Origin"] in {"source", "derived"}, "invalid equation attribution")
         else:
-            require(set(unit.fields) == {"Image", "Figure reference", "Provenance"}, "image fields")
+            require({"Image"} <= set(unit.fields) <= {"Image", "Figure reference"} if compact else
+                    set(unit.fields) == {"Image", "Figure reference", "Provenance"}, "image fields")
 
 
 def external(ref):
@@ -303,7 +391,7 @@ def validate_corpus(memories, equations):
                 require(target in eqs, "missing equation: " + target)
                 referenced.add(target)
                 if "Expression" in unit.fields:
-                    require(unit.fields == equation_fields(eqs[target]), "equation presentation differs from definition")
+                    require({k: v for k, v in unit.fields.items() if k != "Origin"} == equation_fields(eqs[target]), "equation presentation differs from definition")
     require(referenced == set(eqs), "orphan equation definition")
     seen = set()
     for memory in memories:
@@ -329,6 +417,14 @@ def validate_corpus(memories, equations):
             require(key not in seen, "duplicate relationship")
             seen.add(key)
             edges.append({**edge.payload(), "from": source, "owner": memory.id})
+    # Inheritance is a derived provenance edge, never repeated in canonical files.
+    explicit = {(e["from"], e["type"], e["to"]) for e in edges}
+    for memory in memories:
+        if "source" not in memory.metadata: continue
+        for unit in memory.units:
+            source, target = memory.id + "#" + unit.anchor, memory.metadata["source"]["url"]
+            if (source, "CITES", target) not in explicit:
+                edges.append({"from": source, "to": target, "type": "CITES", "status": "unverified", "owner": memory.id})
     return docs, eqs, units, edges
 
 

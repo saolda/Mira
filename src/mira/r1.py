@@ -111,13 +111,15 @@ def memory_context(memories, linked_ids, questions):
                 continue
             if unit.kind == "question":
                 if fields["State"] in {"open", "partially_answered"}:
-                    gaps.append({"question": proposition, "state": fields["State"]})
+                    gaps.append({"question": proposition, "state": fields["State"],
+                                 **{k.lower(): fields[k] for k in ("Origin", "Qualification") if k in fields},
+                                 **({"source": memory.metadata["source"]} if "source" in memory.metadata else {})})
                 continue
-            limitation, flag = clean_text(fields["Explanation"])
-            attribution, provenance_flag = clean_text(fields["Provenance"], 180)
+            limitation, flag = clean_text(fields.get("Qualification", fields.get("Explanation", "")))
+            attribution, provenance_flag = clean_text(fields.get("Provenance", memory.metadata.get("source", {}).get("url", "")), 180)
             omitted |= flag or provenance_flag
             findings.append({"terminology": label, "proposition": proposition,
-                             "kind": fields["Kind"], "evidence_status": fields["Evidence status"],
+                             "kind": fields["Kind"], "evidence_status": fields.get("Evidence status", "unverified"),
                              "reasoning_and_limits": limitation, "attribution": attribution,
                              "excerpt_incomplete": label_omitted or text_omitted or flag or provenance_flag})
     # Bound the serialized data, including labels and Unicode, without an LLM.

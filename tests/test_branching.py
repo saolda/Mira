@@ -52,12 +52,12 @@ class BranchingTests(unittest.TestCase):
 
     def extraction(self, state, docs, eqs, ledger, identity='q1', results=None):
         return r3.create_memory(state, docs, eqs, ledger, identity, results or [draft()],
-                                {**evidence(), 'reference': 'research/results/fixture.json'})
+                                {**evidence(), 'reference': 'research/results/fixture.json'}, summary="Scoped summary of all extracted results and their limitations.")
 
     def exhaust(self, state, *_): state['nodes']['q1']['status'] = 'exhausted'
 
     def test_threshold_uses_exact_r5_wire_and_crossing_memory_is_kept(self):
-        r = self.make([{'keywords': ['heat']}, {'results': [draft()]}])
+        r = self.make([{'keywords': ['heat']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
         empty_total = self.state()['nodes']['q1']['research_capacity']['estimated_tokens']
         self.change(lambda s, *_: s.update(research_capacity_tokens=empty_total + 1))
         for expected in ('R1', 'R2', 'R3'):
@@ -86,7 +86,7 @@ class BranchingTests(unittest.TestCase):
         gardener.apply(state, docs, ledger, 'q2', docs[1:], {'title': 'Combined', 'summary': 'Fixture', 'findings': []})
         root_doc.metadata['synthesized_by'] = 's99'; root_doc.revision += 1
         self.assertEqual(branching.context(state, docs, eqs, 'q1'), initial_context)
-        r3.create_memory(state, docs, eqs, ledger, 'q1', [equation(None)], media_evidence())
+        r3.create_memory(state, docs, eqs, ledger, 'q1', [equation(None)], media_evidence(), summary="Scoped summary of all extracted results and their limitations.")
         ctx = branching.context(state, docs, eqs, 'q1')
         self.assertEqual(len(ctx['research_results']['equations']), 1)
         self.assertEqual([m['id'] for m in ctx['research_results']['memories']], ['r1', 'r4'])
@@ -123,9 +123,9 @@ class BranchingTests(unittest.TestCase):
         self.assertEqual(parse(render(memory)), memory)
         for origin in (None, 'invented', [], 3):
             with self.subTest(origin=origin), self.assertRaises(ValueError):
-                r3.validate({'results': [{**source, 'origin': origin}]}, evidence())
+                r3.validate({"summary": "Scoped summary of all extracted results and their limitations.", 'results': [{**source, 'origin': origin}]}, evidence())
         del source['origin']
-        self.assertRaises(ValueError, r3.validate, {'results': [source]}, evidence())
+        self.assertRaises(ValueError, r3.validate, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [source]}, evidence())
 
     def test_no_living_nodes_split_children_zero_and_empty_one_time(self):
         for questions in ([], ['How is heat flux measured?', 'Which boundary condition applies?']):
@@ -149,7 +149,7 @@ class BranchingTests(unittest.TestCase):
                     self.assertIn('"empty": true', transcript(directory))
 
     def test_periodic_branching_does_not_reset_other_progress_or_starve_research(self):
-        self.make([{'questions': ['A new mechanism?']}, {'results': [draft()]}], branching_interval=3)
+        self.make([{'questions': ['A new mechanism?']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}], branching_interval=3)
         def seed(s, *_):
             self.add_children(s, 2); self.exhaust(s)
             s['nodes']['q3']['status'] = 'exhausted'
@@ -173,7 +173,7 @@ class BranchingTests(unittest.TestCase):
         self.assertRaisesRegex(ValueError, 'exhausted', branching.apply, self.state(), 'q1', {'questions': []}, 'fixture')
 
     def test_research_switch_and_resume_pending_keywords_pointer_history(self):
-        self.make([{'results': [draft()]}])
+        self.make([{"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
         def seed(s, *_):
             self.add_children(s, 1)
             s['nodes']['q1'].update(priority=1, keywords=['root heat'], previous_search_terms=['old root'])

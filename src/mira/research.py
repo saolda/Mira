@@ -204,6 +204,10 @@ class Research:
                 evidence = sources.hydrate(self.store, loads(files[n["pending_results"]]))
                 evidence["results"], duplicates = sources.unique(evidence["results"], state.setdefault("source_index", {}))
                 event["duplicate_count"] = len(duplicates)
+                # Process one document per action; the seen-source index is the
+                # durable cursor through immutable pending evidence.
+                remaining = evidence["results"][1:]
+                evidence["results"] = evidence["results"][:1]
                 context = r3.context(state, identity, evidence)
             else:
                 old_context, searches = self._context(state, memories, equations, files, identity)
@@ -213,7 +217,7 @@ class Research:
             if action == "R3":
                 event["evidence_ref"] = n["pending_results"]
             if action == "R3" and not evidence["results"]:
-                value = {"results": []}
+                value = {"summary": "", "results": []}
                 event["reason"] = "All pending sources were processed by another node."
             else:
                 value = self._model(event, action, context, state)
@@ -225,15 +229,12 @@ class Research:
                 n["search_round"] = n.get("search_round",0) + 1
                 n["round_outcomes"] = []
             elif action == "R3":
-                output = r3.create_memory(state, memories, equations, ledger, identity, value["results"], evidence)
+                output = r3.create_memory(state, memories, equations, ledger, identity, value["results"], evidence, value["summary"])
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
-                if output is not None:
-                    cited = {source for result in value["results"] for source in result["source_ids"]}
-                    output.metadata["sources"] = [sources.descriptor(row) for row in evidence["results"] if row["id"] in cited]
                 event["memory_ids"] = [output.id] if output is not None else []
                 event["generated_memories"] = [render(m) for m in memories if m.id in event["memory_ids"]]
-                n["pending_results"] = None
+                if not remaining: n["pending_results"] = None
             else:
                 decision = value["decision"]
                 if decision in {"kill", "answered"}:

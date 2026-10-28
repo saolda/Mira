@@ -165,6 +165,8 @@ implementations, not evidence that every provider is already integrated.
 
 Canonical research and synthesis memories are **agent-oriented knowledge documents**, designed for accurate retrieval, evidence tracking, reuse and further synthesis. They need not themselves be polished publications.
 
+Each new research memory contains one source, an R3-generated summary and compact anchored knowledge units with inherited source provenance. Derived questions/equations keep explicit origins; S2 integrates across memories.
+
 A separate **presentation generation** objective transforms selected synthesis memories and supporting evidence into polished, human-readable presentation documents (for example `presentation.md`). Presentation outputs are **derived**, not canonical research memories; they must retain citations and traceability to the source memories and must not silently introduce unsupported claims.
 
 Presentation format, editorial style and publication workflow can be **project-specific**, outside Mira's core research/synthesis controller. For example, a HistoryOfAI project may build chronological historical articles from Mira's synthesis memories, while HumanLegacy may use a different publication format to populate its research library. The exact document schemas, generation schedule and project adapters remain to be designed. The core memory format stays common across projects.

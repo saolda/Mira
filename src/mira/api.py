@@ -135,10 +135,45 @@ class Knowledge:
             if reference in units:
                 memory, unit = units[reference]
                 result = {"id": reference, "document": memory.id, **asdict(unit), "revision": unit.revision}
+                result["provenance"] = self._provenance(reference, memories, equations)
                 if unit.kind == "equation":
                     result["definition"] = asdict(eqs[unit.fields["Equation"]])
                 return result
         raise KeyError(reference)
+
+    @staticmethod
+    def _provenance(reference, memories, equations):
+        docs, eqs, units, edges = validate_corpus(memories, equations)
+        if reference in eqs:
+            reference = next(m.id + "#" + u.anchor for m in memories for u in m.units
+                             if u.fields.get("Equation") == reference and m.id == eqs[reference].origin)
+        require(reference in units, "unknown provenance reference")
+        pending, seen, citations = [reference], set(), []
+        while pending:
+            current = pending.pop()
+            if current in seen: continue
+            seen.add(current)
+            memory, unit = units[current]
+            if unit is None:
+                pending.extend(memory.id + "#" + u.anchor for u in memory.units)
+                continue
+            for edge in edges:
+                if edge["from"] != current: continue
+                if edge["type"] == "CITES":
+                    source = memory.metadata.get("source")
+                    citation = {"unit": current, "source": source if source and source["url"] == edge["to"] else {"url": edge["to"]},
+                                "status": edge["status"]}
+                    if "Origin" in unit.fields: citation["origin"] = unit.fields["Origin"]
+                    citations.append(citation)
+                elif edge["type"] == "SYNTHESIZES":
+                    pending.append(edge["to"])
+        return citations
+
+    def provenance(self, reference):
+        """Resolve inherited/legacy citations, following explicit synthesis lineage."""
+        with self.store.lock():
+            _, memories, equations, _ = self.store.read()
+            return self._provenance(reference, memories, equations)
 
     def containing_document(self, reference):
         record = self.directory.exact(reference)

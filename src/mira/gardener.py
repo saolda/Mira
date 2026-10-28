@@ -23,7 +23,7 @@ def _summary(markdown):
         "node_id": memory.metadata.get("node_id"),
         "units": [{"id": memory.id + "#" + u.anchor,
                    "text": "\n".join(key + ": " + value for key, value in u.fields.items())} for u in memory.units],
-        "sources": memory.metadata.get("sources", []),
+        "sources": [memory.metadata["source"]] if "source" in memory.metadata else memory.metadata.get("sources", []),
         "source_memories": memory.metadata.get("source_memories", []),
         "relationships": [r.payload() for r in memory.relationships]})
 

@@ -91,7 +91,7 @@ class IntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             result = ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM)).search("uncertainty")
             proposal = draft(); proposal["source_ids"] = [result["results"][0]["id"]]
-            llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"results": [proposal]}])
+            llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [proposal]}])
             r = Research(root, llm, {"arxiv": ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM))})
             r.initialize("What does this abstract claim?", ["arxiv"], context_budget=12000)
             with patch("time.sleep"):
@@ -103,7 +103,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertNotIn("raw_api_response", saved)
             self.assertNotIn("content", saved["results"][0])
             self.assertIn("abstract", Path(root, saved["payload_ref"]).read_text())
-            self.assertEqual(r.knowledge.document("r1").metadata["sources"][0]["id"], result["results"][0]["id"])
+            self.assertEqual(r.knowledge.document("r1").metadata["source"]["id"], result["results"][0]["id"])
             self.assertEqual(r.knowledge.relationships("r1#f1")[0]["target"], result["results"][0]["url"])
 
     def test_server_usage_identifier_and_rejected_complete_response_retained(self):
