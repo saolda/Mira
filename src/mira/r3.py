@@ -36,7 +36,7 @@ def strings(value):
 
 def validate(value, evidence):
     """Validate extraction, discarding unused summary text for empty results."""
-    require(isinstance(value, dict) and set(value) == {"summary", "results"} and isinstance(value["results"], list), "R3 requires summary and an ordered results array")
+    require(isinstance(value, dict) and {"summary", "results"} <= set(value) <= {"summary", "results", "terms"} and isinstance(value["results"], list), "R3 requires summary and an ordered results array")
     if not value["results"] and isinstance(value["summary"], str):
         value = {**value, "summary": ""}
     text(value["summary"], allow_empty=not value["results"])

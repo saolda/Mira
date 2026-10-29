@@ -15,6 +15,7 @@ import uuid
 
 from .format import Equation, digest, dumps, loads, parse, render, require, validate_corpus
 from .store import ConflictError, durable_write, sync_dir, validate_transition
+from .glossary import TERM_PATH, validate_record, validate_transaction as validate_glossary_transaction
 
 
 class RecoveryRequired(RuntimeError):
@@ -26,16 +27,17 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 CANONICAL = re.compile(
     r"(?:memories/[rs][1-9a-z][0-9a-z]*\.md|"
     r"equations/e_[rs][1-9a-z][0-9a-z]*_[1-9][0-9]*\.json|"
-    r"identity\.json|research/state\.json|"
+    r"identity\.json|research/state\.json|glossary/g[1-9][0-9]*\.json|"
     r"research/results/[A-Za-z0-9_-]+\.json|events/[A-Za-z0-9_-]+\.json)\Z")
 
 
 def revision(files):
-    return digest(dumps({p: digest(t) for p, t in sorted(files.items())}))
+    # Sparse glossary after-images are committed by the hash chain in state.
+    return digest(dumps({p: digest(t) for p, t in sorted(files.items()) if not TERM_PATH.fullmatch(p)}))
 
 
 def hash_revision(hashes):
-    return digest(dumps(dict(sorted(hashes.items()))))
+    return digest(dumps({p: h for p, h in sorted(hashes.items()) if not TERM_PATH.fullmatch(p)}))
 
 
 def decode(files):
@@ -43,6 +45,11 @@ def decode(files):
     documents, equations = [], []
     for name, text in sorted(files.items()):
         require(CANONICAL.fullmatch(name), "unsafe canonical path")
+        if TERM_PATH.fullmatch(name):
+            record = loads(text)
+            validate_record(record)
+            require(name == "glossary/" + record["id"] + ".json", "glossary filename mismatch")
+            continue
         if name.startswith("memories/"):
             memory = parse(text)
             require(memory.id == Path(name).stem, "document filename/ID mismatch")
@@ -110,7 +117,7 @@ class LiveStore:
         sync_dir(self.root.parent)
         require(not (self.root / "CURRENT").exists() and not (self.root / "generations").exists(),
                 "cannot open snapshot corpus as live storage")
-        for relative in ("memories", "equations", "research", "research/results", "events", "journal"):
+        for relative in ("memories", "equations", "research", "research/results", "events", "journal", "glossary"):
             path = self.path(relative)
             path.mkdir(exist_ok=True)
             sync_dir(path.parent)
@@ -152,6 +159,8 @@ class LiveStore:
                     # Atomic-write leftovers are not canonical, and remain inspectable.
                     if re.search(r"\.tmp-[0-9a-f]{32}\Z", p.name):
                         continue
+                    if relative == "research/glossary.md":
+                        continue  # Explicitly regenerated, disposable export.
                     require(CANONICAL.fullmatch(relative), "unexpected canonical file: " + relative)
                     result[relative] = p.read_text(encoding="utf-8")
         ledger = self.path("identity.json")
@@ -225,18 +234,24 @@ class LiveStore:
         validate_corpus(documents, equations)
         validate_transition(documents, equations, ledger, old_docs, old_eqs, old_ledger)
         old = self._files()
+        # Read only touched glossary records. All other terms stay on disk.
+        for name in files or {}:
+            if isinstance(name, str) and TERM_PATH.fullmatch(name):
+                path = self.path(name)
+                if path.exists(): old[name] = path.read_text(encoding="utf-8")
         proposed = dict(old)
         extras = dict(files or {})
         for name, text in extras.items():
             require(isinstance(name, str) and CANONICAL.fullmatch(name) and
-                    (name.startswith("research/") or name.startswith("events/")), "invalid auxiliary path")
+                    (name.startswith("research/") or name.startswith("events/") or TERM_PATH.fullmatch(name)), "invalid auxiliary path")
             require(isinstance(text, str) and isinstance(loads(text), dict), "auxiliary JSON required")
-            if name != "research/state.json":
+            if name != "research/state.json" and not TERM_PATH.fullmatch(name):
                 require(name not in old or old[name] == text, "evidence/events are immutable")
         proposed.update(extras)
         proposed.update({"memories/" + d.id + ".md": render(d) for d in documents})
         proposed.update({"equations/" + e.id + ".json": dumps(asdict(e)) for e in equations})
         proposed["identity.json"] = dumps(ledger)
+        validate_glossary_transaction(old, proposed)
         decode(proposed)
         if "research/state.json" in old and "mira_research" in loads(old["research/state.json"]):
             from .research_tree import validate_transition as validate_tree_transition
@@ -275,6 +290,9 @@ class LiveStore:
                         "source_memories": {d.id: d.metadata["source_memories"] for d in documents
                                             if d.id not in {o.id for o in old_docs} and d.metadata.get("kind") == "synthesis"},
                         "expected_state_revision": digest(old["research/state.json"]) if "research/state.json" in old else None})
+        if any(TERM_PATH.fullmatch(p) for p in changed):
+            from .glossary import metadata
+            details["glossary_before"] = metadata(loads(old.get("research/state.json", "{}")))
         m = {"version": 1, "id": identity, "sequence": len(self._journals()) + 1,
              "type": operation_type, "context": details, "status": "prepared",
              "before_revision": expected, "after_revision": revision(proposed), "files": entries}
@@ -294,6 +312,10 @@ class LiveStore:
 
     def _assessment(self, m):
         actual = self._files()
+        for entry in m["files"]:
+            if TERM_PATH.fullmatch(entry["path"]):
+                path = self.path(entry["path"])
+                if path.exists(): actual[entry["path"]] = path.read_text(encoding="utf-8")
         prospective = dict(actual)
         before_hashes = {p: digest(t) for p, t in actual.items()}
         completed, remaining, problems = [], [], []
@@ -326,6 +348,14 @@ class LiveStore:
         try:
             require(revision(prospective) == m["after_revision"], "prospective revision mismatch")
             decode(prospective)
+            touched = {entry["path"]: prospective[entry["path"]] for entry in m["files"] if TERM_PATH.fullmatch(entry["path"])}
+            if touched:
+                from .glossary import commitment, metadata
+                before = m["context"].get("glossary_before")
+                require(isinstance(before, dict), "glossary recovery lacks prior commitment")
+                after = metadata(loads(prospective["research/state.json"]))
+                require(after["revision"] == before["revision"] + 1 and
+                        after["commitment"] == commitment(before["commitment"], touched), "glossary recovery commitment mismatch")
         except (ValueError, TypeError, KeyError) as exc:
             problems.append(str(exc))
         return {"id": m["id"], "type": m["type"], "context": m["context"], "status": m["status"],
@@ -355,6 +385,9 @@ class LiveStore:
                 fault("progress:" + entry["path"])
         require(revision(self._files()) == m["after_revision"], "commit revision mismatch")
         decode(self._files())
+        for entry in m["files"]:
+            if TERM_PATH.fullmatch(entry["path"]):
+                require(digest(self.path(entry["path"]).read_text(encoding="utf-8")) == entry["after"], "glossary commit hash mismatch")
         if fault:
             fault("before_commit")
         m["status"] = "committed"
@@ -374,6 +407,9 @@ class LiveStore:
                     files = self._files()
                     require(revision(files) == (manifests[-1]["after_revision"] if manifests else revision({})), "canonical revision mismatch")
                     decode(files)
+                    if "research/state.json" in files:
+                        from .glossary import verify
+                        verify(self, loads(files["research/state.json"]), manifests)
                 return {"operations": pending, "committed": [m["id"] for m in manifests if m["status"] == "committed"],
                         "unpublished": orphans, "blocked": bool(pending or orphans), "problems": problems}
             except (ValueError, TypeError, KeyError, OSError) as exc:

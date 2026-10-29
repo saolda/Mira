@@ -188,6 +188,12 @@ class Knowledge:
                 memory = parse(text)
                 memories = [m for m in memories if m.id != memory.id] + [memory]
             docs, eqs, units, edges = validate_corpus(memories, equations)
+            if getattr(self.store, "live", False):
+                from .glossary import verify
+                from .format import loads
+                files = self.store._files()
+                if "research/state.json" in files:
+                    verify(self.store, loads(files["research/state.json"]))
             return {"documents": len(docs), "equations": len(eqs), "units_including_documents": len(units), "relationships": len(edges)}
 
     def relationships(self, reference, **kwargs):

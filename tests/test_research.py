@@ -102,7 +102,7 @@ class ResearchTests(unittest.TestCase):
         prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
                    for record in read_records(self.root)}
         r1 = prompts["R1"]["context"]
-        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context"})
+        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context"})
         self.assertEqual(r1["question"], self.state()["nodes"]["q1"]["question"])
         self.assertEqual(r1["question_context"], [])
         self.assertEqual(r1["previous_search_terms"], [])
@@ -202,7 +202,7 @@ class ResearchTests(unittest.TestCase):
         r = Research(self.root, llm, {}); r.initialize("Q?", ["fixture"], context_budget=12000)
         self.assertEqual(r.step()["status"], "rejected")
         for path in self.root.rglob("*"):
-            if path.is_file(): self.assertNotIn("test-secret-token", path.read_text())
+            if path.is_file(): self.assertNotIn(b"test-secret-token", path.read_bytes())
         self.assertIn("call_failed", transcript(self.root, full=True))
 
     def test_corrupt_tree_and_reference_validation(self):

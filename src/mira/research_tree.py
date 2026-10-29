@@ -11,13 +11,14 @@ def node(identity, question, parent=None):
     return {"id": identity, "created_order": int(identity[1:]), "parent_id": parent,
             "child_ids": [], "question": question, "status": "living", "priority": 0,
             "keywords": None, "next_database_index": 0, "pending_results": None,
-            "previous_search_terms": [], "split_attempt": None, "research_capacity": None,
+            "previous_search_terms": [], "used_glossary_term_ids": [], "split_attempt": None, "research_capacity": None,
             "memory_ids": [], "unsynthesized_memory_count": 0,
             "living_descendant_count": 0, "synthesis_score": 0}
 
 
 def initial(question, databases, *, synthesis_interval=5, context_budget=8192, output_reserve=2048,
-            research_capacity_tokens=None, branching_interval=5, max_children=3, synthesis_output_reserve=None):
+            research_capacity_tokens=None, branching_interval=5, max_children=3, synthesis_output_reserve=None,
+            glossary_token_budget=3200, glossary_limit=12):
     require(isinstance(question, str) and question.strip(), "research question required")
     require(databases and len(set(databases)) == len(databases) and
             all(isinstance(d, str) and d.strip() for d in databases), "ordered database IDs required")
@@ -46,6 +47,9 @@ def initial(question, databases, *, synthesis_interval=5, context_budget=8192, o
             "pending_synthesis": None, "synthesis_evaluated_catalogue": None}
 
     if synthesis_output_reserve is not None: state["synthesis_output_reserve"] = synthesis_output_reserve
+    from .glossary import metadata, validate_metadata
+    state["glossary"] = {**metadata({}), "token_budget": glossary_token_budget, "limit": glossary_limit}
+    validate_metadata(state["glossary"])
     refresh(state, [])
     return state
 
@@ -211,6 +215,9 @@ def validate(state, memories, files):
         from .research_tree_v1 import validate as legacy_validate
         return legacy_validate(state, memories, files)
     require(isinstance(state, dict) and state.get("mira_research") == 2, "invalid research state version")
+    from .glossary import metadata, validate_metadata, TERM_ID
+    glossary = metadata(state)
+    validate_metadata(glossary)
     require("synthesis_output_reserve" not in state or type(state["synthesis_output_reserve"]) is int and
             0 < state["synthesis_output_reserve"] < state["context_budget"], "invalid synthesis output reserve")
     for key in ("branching_interval", "max_children", "research_capacity_tokens"):
@@ -245,6 +252,9 @@ def validate(state, memories, files):
                 n["created_order"] == int(identity[1:]) < state["next_node"], "invalid node allocator/order")
         require(n["status"] in {"living", "answered", "exhausted", "killed", "split"}, "invalid node status")
         require(isinstance(n["previous_search_terms"], list) and all(isinstance(t, str) and t.strip() for t in n["previous_search_terms"]), "invalid tried terms")
+        used = n.get("used_glossary_term_ids", [])
+        require(isinstance(used, list) and all(isinstance(t, str) and TERM_ID.fullmatch(t) and
+                int(t[1:]) < glossary["next_id"] for t in used) and len(used) == len(set(used)), "invalid used glossary IDs")
         require((n["status"] == "split") == (n["split_attempt"] is not None), "inconsistent split attempt")
         if n["split_attempt"] is not None:
             receipt = n["split_attempt"]
@@ -347,6 +357,8 @@ def validate_synthesis(state, memories):
 
 
 def metrics(state):
+    from .glossary import metadata
+    glossary = metadata(state)
     depths = {state["root_id"]: 0}
     living, all_depths = Counter(), Counter()
     for i in descendants(state, state["root_id"]):
@@ -363,6 +375,7 @@ def metrics(state):
             "strategy": state["strategies"][state["strategy_index"]],
             "strategy_selection": state.get("strategy_selection"),
             "processed_source_count": len(state.get("source_index", {})),
+            "glossary": {**glossary, "term_count": glossary["next_id"] - 1},
             "provider_cooldowns": state.get("provider_cooldowns", {}),
             "retrieval_storage": state.get("retrieval_storage", "legacy_canonical"),
             "status_totals": {s: sum(n["status"] == s for n in state["nodes"].values())
@@ -385,6 +398,8 @@ def validate_transition(before, after):
     """A durable split receipt cannot be cleared or replayed by any writer."""
     if before.get("mira_research") != 2: return
     require(after.get("mira_research") == 2, "cannot downgrade research state")
+    for identity, old in before["nodes"].items():
+        require(set(old.get("used_glossary_term_ids", [])) <= set(after["nodes"][identity].get("used_glossary_term_ids", [])), "cannot forget submitted glossary terms")
     if "synthesis_attempts" in before:
         require(all(k in after for k in ("synthesis_attempts", "pending_synthesis", "synthesis_evaluated_catalogue")),
                 "cannot discard synthesis bookkeeping")

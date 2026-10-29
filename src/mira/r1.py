@@ -161,4 +161,15 @@ def context(state, memories, files, node_id, control_terms=()):
         previous.extend(event.get("tree", {}).get(node_id, {}).get("keywords") or [])
     return {"question": question, "question_context": additional,
             "previous_search_terms": unique(previous), "control_terms": controls(control_terms),
-            "memory_context": memory_context(memories, set(node["memory_ids"]), [question, *additional])}
+            "memory_context": memory_context(memories, set(node["memory_ids"]), [question, *additional]),
+            "glossary_context": {"entries": [], "untrusted_glossary_data": True,
+                "recent_search_outcomes": recent_outcomes(files, node_id)}}
+
+
+def recent_outcomes(files, node_id):
+    rows = [loads(raw) for path, raw in files.items() if path.startswith("research/results/")]
+    rows = sorted((row for row in rows if row.get("node_id") == node_id),
+                  key=lambda row: (row.get("timestamp", ""), row.get("reference", "")))[-8:]
+    return [{"query": clean_text(row.get("query", ""), 180)[0], "provider": row.get("provider"),
+             "status": row.get("status"), "used_glossary_term_ids": row.get("used_glossary_term_ids", [])}
+            for row in rows]

@@ -24,6 +24,8 @@ def register(sub):
     init.add_argument("--research-capacity-tokens", type=int, help="R5 estimated total that exhausts direct research; default 75%% of context budget")
     init.add_argument("--branching-interval", type=int, default=5, help="minimum direct research actions between R5 attempts while living nodes exist")
     init.add_argument("--max-children", type=int, default=3)
+    init.add_argument("--glossary-token-budget", type=int, default=3200, help="conservative UTF-8 byte/token upper bound for R1 glossary context")
+    init.add_argument("--glossary-limit", type=int, default=12, help="maximum terms supplied to R1 (1..15)")
     run = sub.add_parser("research-run")
     for command in (init, run):
         command.add_argument("--script", help="JSON fixture responses/provider results for deterministic testing")
@@ -42,6 +44,8 @@ def register(sub):
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
     state = sub.add_parser("research-state")
+    glossary_export = sub.add_parser("glossary-export", help="regenerate research/glossary.md")
+    glossary_rebuild = sub.add_parser("glossary-rebuild", help="rebuild the disposable glossary SQLite index")
     prune = sub.add_parser("research-prune")
     prune.add_argument("--apply", action="store_true", help="discard completed temporary retrievals; default dry run")
     viewer = sub.add_parser("viewer")
@@ -54,7 +58,7 @@ def register(sub):
     show.add_argument("--full", action="store_true")
     show.add_argument("--concise", action="store_true")
     show.add_argument("--output", help="optional export path; catalog runs also export under memory/transcripts/")
-    for command in (init, run, demo, state, show, prune):
+    for command in (init, run, demo, state, show, prune, glossary_export, glossary_rebuild):
         command.add_argument("--experiment", help="persistent experiment name")
 
 
@@ -119,9 +123,17 @@ def execute(args):
             context_budget=args.context_budget, output_reserve=args.output_reserve,
             strategy=args.strategy, registry=args.strategies,
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
-            max_children=args.max_children, synthesis_output_reserve=args.synthesis_output_reserve)
+            max_children=args.max_children, synthesis_output_reserve=args.synthesis_output_reserve,
+            glossary_token_budget=args.glossary_token_budget, glossary_limit=args.glossary_limit)
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.command == "research-prune": return research.prune_retrievals(apply=args.apply)
+    if args.command in {"glossary-export", "glossary-rebuild"}:
+        with research.store.lock():
+            research.store.read()
+            state = loads(research.store._files()["research/state.json"])
+            if args.command == "glossary-export": return research.glossary.export(state)
+            research.glossary.ensure(state, rebuild=True)
+            return {"path": str(research.glossary.path), "rebuilt": True}
     if args.acknowledge_interrupted: research.acknowledge_interrupted()
     return research.run(args.max_cycles)

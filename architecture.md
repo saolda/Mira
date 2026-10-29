@@ -133,6 +133,26 @@ avoidance guidance; essential terms may recur. Python removes prohibited literal
 whole terms/phrases and rejects an all-control query. Previous terms never become
 control terms. R1 memory excerpts remain explicitly untrusted and bounded; this
 small retrieval projection is distinct from R5's complete direct-research context.
+An indexed glossary projection adds relevant terms, aliases, concise definitions,
+definition status, explicit relationships and per-node usage status. Selection
+matches the question, its ancestors and relevant findings/gaps; novelty breaks
+relevance ties, and sourced neighbours can extend discovery. At most 96 FTS hits
+and eight neighbours per leading hit are considered, rather than scanning term
+records. The default maximum is 12 entries (configurable up to 15), within a
+3,200-token conservative UTF-8 byte upper bound including recent search outcomes.
+Both settings are persisted by `research-init --glossary-token-budget` and
+`--glossary-limit`. Sparse catalogues or smaller budgets supply fewer entries.
+The complete request still passes the existing model-tokenizer budget check.
+Glossary prose receives the existing untrusted-text filtering; definitions guide
+terminology and are never independently verified scientific evidence.
+
+Previous search terms retain their existing meaning. R1 records suggested glossary
+IDs in its event, without marking them used. Only terms/aliases matched in an
+actually submitted provider query enter the node's `used_glossary_term_ids` register
+and the corresponding R2 event/evidence history. Cooldown skips do not count;
+submitted rate-limited requests do. Ambiguous abbreviations alone identify no
+concept. Recent outcomes inform soft reuse guidance, without adding query bans
+or extra LLM calls.
 
 The prompt asks for one or two literal topic phrases. The arXiv controller joins
 their distinct words as `all:"word1" AND all:"word2"`. Multiword components
@@ -144,7 +164,7 @@ No hidden fallback query or negative control-term operator is introduced.
 
 ### R3: ordered extraction and provenance
 
-R3 returns exactly `{"summary":"...","results":[...]}` in one model call per
+R3 returns `{"summary":"...","results":[...],"terms":[...]}` in one model call per
 source. The model summary covers the complete extraction and its limitations;
 Python does not construct it from a finding. Accepted result types are `finding`,
 `observation`, `claim`, `inference`, `hypothesis`, `question`, `equation`, `image`.
@@ -161,6 +181,9 @@ must reference supplied URLs or figure references. Empty extraction is valid and
 creates no memory or ID. Python discards any supplied summary string when results
 are empty and records that normalization; the raw response remains unchanged.
 R3 never emits memory IDs or writes canonical files.
+The optional `terms` array defaults to empty for legacy responses; its independent
+admission contract is specified below. Empty results with useful terms create no
+empty memory or research-memory ID.
 
 Each independently identifiable source produces at most one research memory per
 experiment. A pending batch is processed one source per R3 action; its processed
@@ -189,6 +212,47 @@ synthesis lineage and evidence auditing can resolve this inheritance without
 attributing derived objects to source authors. Legacy Markdown and explicit CITES
 edges remain readable. Subsequent actions use the compact representation directly;
 structured synthesis projections retain the source and all substantive units.
+
+### Research glossary
+
+Each experiment stores durable `glossary/g1.json`, `g2.json`, etc. IDs are decimal,
+monotonic and independent of memory IDs. Records retain the canonical spelling,
+aliases, multiple sourced definitions and qualifications, supporting passages,
+source IDs, immutable retrieval references, relevant node IDs and typed links to
+other terms. Status is `candidate`, `source_defined` or `multiple_definitions`;
+different definitions remain separate with their provenance rather than silently
+replacing one another. These are terminology records, not new knowledge-unit types.
+
+R3 may propose up to five terms per source in its existing call. Each proposal has
+exactly `term`, nullable `definition`, `aliases`, `relationships`, `source_id`,
+`passage` and `qualification`. Relationship proposals name another term and use
+`SYNONYM_OF`, `BROADER_THAN`, `NARROWER_THAN` or `RELATED_TO`. Python verifies the
+source ID and exact supporting passage against supplied source content. Non-null
+definitions must quote a definitional statement containing the term within that
+passage. Otherwise the model should supply a candidate with null definition.
+Aliases require explicit naming evidence, and relationships require explicit
+supported wording; co-occurrence alone is insufficient. Unknown relationship
+targets are logged and omitted. Invalid optional proposals are logged independently
+and cannot reject otherwise valid substantive extraction. Invalid substantive
+extraction retains the existing skipped-source behavior and admits no terms.
+
+Matching uses Unicode normalization, case folding, whitespace and hyphen-spacing
+normalization, without fuzzy scientific equivalence. A source-supported redundant
+parenthetical abbreviation in a canonical label is separated into its alias.
+Expanded names merge conservatively; shared abbreviations do not merge concepts,
+and bare acronym labels retain definition/source scope. Definition and relationship
+grounding is deliberately conservative textual validation, not semantic verification.
+
+`glossary.sqlite3` is a disposable exact-name/alias, FTS5 and relationship directory.
+Normal retrieval and deduplication use indexed bounded lookup and deserialize only
+selected or touched records. An absent, stale or corrupt directory is rebuilt or
+incrementally caught up from committed journal hashes and canonical records.
+Rebuilds and explicit full integrity audits may scan all terms; ordinary R1 does
+not. The index is refreshed lazily after commitment, so a cache failure cannot
+partially publish terminology. `glossary-rebuild --experiment NAME` explicitly
+rebuilds it. `glossary-export --experiment NAME` atomically regenerates the derived,
+case-insensitive alphabetical `research/glossary.md`, including evidence and links.
+R3 never rewrites that whole export; it may be stale until explicitly regenerated.
 
 ### R4: exactly three decisions
 
@@ -414,7 +478,8 @@ independent recorded action. Exports work without a running model or SQLite.
 ## Persistence, compatibility and recovery
 
 Canonical live layout remains `memories/*.md`, `equations/*.json`, `identity.json`,
-`research/state.json`, immutable `research/results/*.json` and `events/*.json`.
+`research/state.json`, immutable `research/results/*.json`, `events/*.json` and
+per-term `glossary/g*.json` records.
 Independent `interactions/` records save the exact request before dispatch and
 then raw response, validation and outcome. Indexes remain disposable.
 
@@ -423,6 +488,16 @@ after-images are fsynced, a prepared manifest is published before canonical edit
 individual atomic replacements are fsynced, and a committed marker appears only
 after complete validation. R5 commits its receipt, child IDs, allocator and event
 through this same protocol. A crash cannot silently grant a second committed split.
+Glossary edits use the same journal operation as the R3 memory, processed-source
+cursor and event. Only affected records are staged/replaced. State stores the term
+allocator, revision, budgets and a hash-chain commitment to changed term hashes;
+this binds sparse glossary updates into the canonical revision without reading
+the full glossary on each action. Recovery checks touched after-images and their
+commitment before completing the joint operation. Indexed reads verify selected
+record hashes against the committed directory; full validation and recovery
+inspection verify every term against journal hashes, including missing/unregistered
+records and dangling glossary links. Untouched record damage is detected by its
+next lookup or an explicit full audit, not by a full scan at each R1.
 
 On incomplete operations, canonical access blocks for recovery assessment.
 `recovery inspect/validate` are read-only assessments; `recovery repair ID` defaults
@@ -441,6 +516,8 @@ as `legacy_status`. Pending evidence on a formerly living, previously branched
 node is retained as `legacy_pending_results` and in its immutable evidence file,
 rather than discarded or directly rescheduled on a split node. Existing memory bytes, stable IDs, events, equation assets and
 historical prompts are preserved. Inspection does not migrate experiments.
+Experiments and historical R3 responses without glossary fields remain valid;
+the glossary is initialized lazily when terminology is first admitted.
 
 The old Phase 1 snapshot store remains supported separately. New autonomous
 experiments use live persistence; no implicit import or whole-corpus snapshot is

@@ -14,6 +14,7 @@ from . import strategies, sources
 import time
 from email.utils import parsedate_to_datetime
 from .budget import measure
+from . import glossary
 
 
 class Research:
@@ -21,6 +22,7 @@ class Research:
         self.knowledge = Knowledge(store=LiveStore(root))
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
+        self.glossary = glossary.Directory(self.store)
         self.control_terms = r1.controls(control_terms)
         self.trace = Interactions(self.store, tuple(getattr(llm, "secrets", ())) +
             tuple(secret for adapter in adapters.values() for secret in getattr(adapter, "secrets", ())))
@@ -154,7 +156,7 @@ class Research:
         old_ledger = dict(ledger)
         node_memories = state["nodes"][identity]["memory_ids"]
         old_ids = list(node_memories)
-        error, output = None, None
+        error, output, extras = None, None, {}
         try:
             value = self._model(event, "R3", context, state) if evidence["results"] else {"summary": "", "results": []}
         except r3.OutputError as exc:
@@ -181,6 +183,11 @@ class Research:
             output, markdown = None, []
         event["memory_ids"] = [output.id] if output is not None else []
         event["generated_memories"] = markdown
+        if error is None and value.get("terms"):
+            extras, event["glossary"] = self.glossary.proposals(state, value["terms"], evidence, identity)
+        elif error is None and "terms" in value and not isinstance(value["terms"], list):
+            event["glossary"] = {"accepted": 0, "rejected": ["terms must be an array"], "merged": 0}
+        return extras
 
     def _research(self, state, memories, equations, ledger, files, event):
         identity = state["active_node_id"]; n = state["nodes"][identity]
@@ -199,6 +206,9 @@ class Research:
             if cooldowns.get(provider, 0) > time.time():
                 result = {"status":"rate_limited", "results":[], "skipped":"provider_cooldown", "retry_at":cooldowns[provider]}
             else:
+                used = self.glossary.used(query, state) if provider in self.adapters else []
+                n["used_glossary_term_ids"] = sorted(set(n.get("used_glossary_term_ids", [])) | set(used), key=lambda i: int(i[1:]))
+                event["used_glossary_term_ids"] = used
                 try:
                     result = validate_search(self.adapters[provider].search(query))
                 except Exception as exc:
@@ -209,6 +219,8 @@ class Research:
             evidence = {**{k:v for k,v in result.items() if k not in {"results","raw_api_response"}},
                 "provider":provider, "query":query, "timestamp":now(), "node_id":identity,
                 "round":n.get("search_round",0), "reference":evidence_ref,
+                "used_glossary_term_ids": event.get("used_glossary_term_ids", []),
+                "query_submitted": provider in self.adapters and not bool(result.get("skipped")),
                 "results":unique, "duplicates":duplicates}
             if state.get("retrieval_storage") == "temporary":
                 evidence["results"] = [sources.descriptor(row) for row in unique]
@@ -238,6 +250,11 @@ class Research:
         else:
             if action == "R1":
                 context = r1.context(state, memories, files, identity, self.control_terms)
+                started = time.perf_counter()
+                context["glossary_context"] = self.glossary.retrieve(state, context, identity)
+                event["glossary_retrieval"] = {"seconds": time.perf_counter() - started,
+                    "suggested_ids": [entry["id"] for entry in context["glossary_context"]["entries"]],
+                    "context_bytes": len(dumps(context["glossary_context"]).encode("utf-8"))}
             elif action == "R3":
                 evidence = sources.hydrate(self.store, loads(files[n["pending_results"]]))
                 evidence["results"], duplicates = sources.unique(evidence["results"], state.setdefault("source_index", {}))
@@ -257,7 +274,7 @@ class Research:
             if action == "R3":
                 if not evidence["results"]:
                     event["reason"] = "All pending sources were processed by another node."
-                self._extract(state, memories, equations, ledger, identity, evidence, context, event)
+                extras.update(self._extract(state, memories, equations, ledger, identity, evidence, context, event))
             else:
                 value = self._model(event, action, context, state)
                 decisions.validate(action, value)
