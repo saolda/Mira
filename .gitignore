@@ -6,4 +6,5 @@ knowledge/
 *.sqlite3
 
 # Local research corpora, model interactions, transcripts and human reviews
+# Includes independent execution logs under memory/run-logs/.
 /memory/

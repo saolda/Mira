@@ -65,13 +65,16 @@ class DemoLLM(ScriptedLLM):
         return dumps({"model": self.model, "choices": [{"finish_reason": "stop", "message": {"content": dumps(value)}}], "usage": None})
 
 
-def demonstrate(root, *, max_cycles=50):
+def demonstrate(root, *, max_cycles=50, trace=None, log_directory=None):
     llm = DemoLLM()
     r = Research(root, llm, {"fixture": FixtureSearch([evidence("fixture-" + str(i)) for i in range(1,9)])})
+    if trace is not None:
+        r.trace = trace
+        trace.log.configure(llm.model, llm.settings)
     # Explicit fixture budget fits complete research prompts and forces synthesis
     # descent through all three levels. The runtime default remains configurable.
     r.initialize("What can the fictional heat-barrier fixture tell us?", ["fixture"], synthesis_interval=100,
                  context_budget=24000, output_reserve=2048, research_capacity_tokens=6000)
-    outcome = r.run(max_cycles)
+    outcome = r.run(max_cycles, log_directory=log_directory)
     return {"status": outcome["status"], "metrics": r.inspect(), "model_calls": len(llm.requests),
             "knowledge": r.knowledge.validate(), "root": str(r.store.root)}

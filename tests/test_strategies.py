@@ -135,7 +135,7 @@ class StrategyTests(unittest.TestCase):
         r=self.runner([{'keywords':['heat']}],{'a':FixtureSearch([{'status':'failed','results':[]}]),
                                                 'b':FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'120'}])})
         r.initialize('Q?',['a','b'], context_budget=12000)
-        out=r.run(10)
+        with tempfile.TemporaryDirectory() as logs: out=r.run(10, log_directory=logs)
         self.assertEqual(out['status'],'providers_unavailable')
         self.assertEqual(self.state()['nodes']['q1']['next_database_index'],2)
         self.assertEqual(self.state()['nodes']['q1']['round_outcomes'],['failed','rate_limited'])
@@ -159,7 +159,7 @@ class StrategyTests(unittest.TestCase):
         r=self.runner([{'keywords':['heat']},decision('retry')],
                       {'a':FixtureSearch([limited]),'b':FixtureSearch([limited])})
         r.initialize('Q?',['a','b'],context_budget=12000)
-        outcome=r.run(4)
+        with tempfile.TemporaryDirectory() as logs: outcome=r.run(4, log_directory=logs)
         self.assertEqual([e['action'] for e in outcome['actions']],['R1','R2','R2','R4'])
         self.assertTrue(all(e['status']=='committed' and not e.get('error') for e in outcome['actions']))
         self.assertEqual([e['tree']['q1']['next_database_index'] for e in outcome['actions'][1:3]],[1,2])

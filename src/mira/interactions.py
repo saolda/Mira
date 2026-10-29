@@ -1,6 +1,11 @@
 """Durable independent decision records; actual request text precedes every call."""
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path
+import fcntl
+import json
+import os
+import traceback
 import uuid
 
 from .format import dumps, loads, require
@@ -11,29 +16,156 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def configured_secrets(extra=()):
+    """Values only; environment names and unrelated environment data aren't logged."""
+    return tuple(dict.fromkeys([*extra, *(value for key, value in os.environ.items()
+        if set(key.upper().split("_")) & {"KEY", "TOKEN", "PASSWORD", "SECRET", "CREDENTIAL", "CREDENTIALS"} and value)]))
+
+
+def scrub(value, secrets):
+    def clean(text):
+        for secret in secrets:
+            if secret:
+                text = text.replace(secret, "[REDACTED]")
+                text = text.replace(dumps(secret).strip()[1:-1], "[REDACTED]")
+        return text
+    if isinstance(value, str): return clean(value)
+    if isinstance(value, dict): return {clean(k): scrub(v, secrets) for k, v in value.items()}
+    if isinstance(value, (list, tuple)): return [scrub(v, secrets) for v in value]
+    return value
+
+
+class ExecutionLog:
+    """An incremental export of existing interaction phases and action events."""
+    def __init__(self, directory, root, *, command, model=None, settings=None, secrets=()):
+        from .experiments import confined
+        self.root = Path(root).absolute()
+        self.directory = Path(directory).absolute()
+        confined(self.directory)
+        require(not self.directory.is_relative_to(self.root), "run logs must be outside the experiment")
+        if self.root.parent.name == "research":
+            require(not self.directory.is_relative_to(self.root.parent), "run logs must be outside the experiment catalog")
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        sync_dir(self.directory.parent)
+        self.identity = uuid.uuid4().hex
+        self.experiment = self.root.name
+        self.secrets = tuple(secrets)
+        self.model, self.settings = model, settings
+        # The random suffix prevents collisions and never reopens an old run.
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+        label = "".join(c if c.isalnum() or c in "_-" else "_" for c in self.experiment)[:96]
+        self.path = self.directory / f"{stamp}_{label}_{self.identity[:12]}.jsonl"
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        self.stream = os.fdopen(fd, "w", encoding="utf-8")
+        self.sequence, self.seen = 0, set()
+        self.reason = "completed"
+        self.append("execution_start", {"command": command, "root": str(self.root),
+                    "pid": os.getpid(), "model": model, "generation_parameters": settings})
+        sync_dir(self.directory)
+
+    def append(self, kind, data, *, key=None, **context):
+        if key is not None and key in self.seen: return
+        record = scrub({"version": 1, "execution_id": self.identity,
+            "sequence": self.sequence + 1, "timestamp": now(), "experiment_id": self.experiment,
+            "kind": kind, "model": self.model, "generation_parameters": self.settings,
+            **context, "data": data}, self.secrets)
+        # dumps() intentionally pretty-prints canonical JSON. JSONL needs one
+        # complete compact JSON object per physical line, including embedded LF.
+        self.stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n")
+        self.stream.flush(); os.fsync(self.stream.fileno())
+        self.sequence += 1
+        if key is not None: self.seen.add(key)
+
+    def configure(self, model, settings):
+        self.model, self.settings = model, settings
+        self.append("model_configuration", {"model": model, "generation_parameters": settings})
+
+    def close(self, exception=None):
+        try:
+            self.append("execution_end", {"reason": self.reason if exception is None else
+                "interrupted" if isinstance(exception, (KeyboardInterrupt, SystemExit)) else "exception",
+                **({"error": str(exception), "error_type": type(exception).__name__,
+                    "traceback": "".join(traceback.format_exception(exception))} if exception is not None else {})})
+        finally:
+            self.stream.close()
+
+
 class Interactions:
     def __init__(self, store, secrets=()):
         self.store = store
-        self.secrets = tuple(s for s in secrets if s)
+        self.secrets = configured_secrets(s for s in secrets if s)
+        self.log = None
+        self.proposals, self.normalized, self.requests = {}, {}, {}
         path = store.path("interactions")
         path.mkdir(exist_ok=True); sync_dir(path.parent)
 
     def clean(self, text):
-        for secret in self.secrets:
-            text = text.replace(secret, "[REDACTED]")
-            text = text.replace(dumps(secret).strip()[1:-1], "[REDACTED]")
-        return text
+        return scrub(text, self.secrets)
+
+    @contextmanager
+    def execution(self, directory=None, *, command="research-run", model=None, settings=None):
+        if self.log is not None:
+            yield self.log
+            return
+        root = self.store.root
+        directory = directory or ((root.parent.parent if root.parent.name == "research" else root.parent) / "run-logs")
+        self.log = ExecutionLog(directory, root, command=command, model=model, settings=settings, secrets=self.secrets)
+        exception, lease = None, None
+        try:
+            # A lease protects the entire run, including gaps between writer locks.
+            # Create the export first so even a rejected concurrent invocation is
+            # diagnosed in its own file rather than disappearing without a log.
+            lease = self.store.path(".runner.lock").open("a")
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for cache in (self.requests, self.proposals, self.normalized): cache.clear()
+            yield self.log
+        except BaseException as exc:
+            exception = exc
+            raise
+        finally:
+            try: self.log.close(exception)
+            finally:
+                self.log = None
+                for cache in (self.requests, self.proposals, self.normalized): cache.clear()
+                if lease:
+                    fcntl.flock(lease, fcntl.LOCK_UN)
+                    lease.close()
+
+    def record(self, kind, data, event=None, *, key=None):
+        if self.log is not None:
+            event = event or {}
+            self.log.append(kind, data, key=key,
+                **{k: event.get(k) for k in ("action", "node_id", "cycle", "interaction_id", "run_id")})
 
     def write(self, identity, phase, data):
         path = self.store.path(f"interactions/{identity}/{phase}.json")
-        # Immutable phase files: an interrupted write remains visible, never replaced.
-        def scrub(value):
-            if isinstance(value, str): return self.clean(value)
-            if isinstance(value, dict): return {self.clean(k): scrub(v) for k, v in value.items()}
-            if isinstance(value, list): return [scrub(v) for v in value]
-            return value
-        durable_write(path, dumps(scrub(data)))
+        if phase == "request":
+            self.requests[identity] = {k: data.get(k) for k in ("action", "node_id", "cycle", "run_id")}
+            if self.log is not None:
+                wire = data["request"]
+                settings = {k: v for k, v in wire.items() if k not in {"model", "messages"}}
+                if self.log.model != wire.get("model") or self.log.settings != settings:
+                    self.log.configure(wire.get("model"), settings)
+        if phase == "validation":
+            data = {**data, "proposed_response": self.proposals.get(identity),
+                    "normalized_response": self.normalized.get(identity, self.proposals.get(identity)) if data.get("accepted") else None}
+        # Immutable phase files remain the recovery authority. The JSONL contains
+        # their complete redacted contents, not references to removable files.
+        cleaned = scrub(data, self.secrets)
+        durable_write(path, dumps(cleaned))
         sync_dir(path.parent)
+        request = self.requests.get(identity)
+        if request is None:
+            file = self.store.path(f"interactions/{identity}/request.json")
+            request = loads(file.read_text()) if file.exists() else {}
+            saved = {"id": identity, "request": request}
+            for name in ("response", "validation"):
+                file = self.store.path(f"interactions/{identity}/{name}.json")
+                if file.exists(): saved[name] = loads(file.read_text())
+            self.record("recovered_interaction_context", saved, {**request, "interaction_id": identity}, key=(identity, "context"))
+        self.record("interaction_" + phase, cleaned, {**request, "interaction_id": identity}, key=(identity, phase))
+        if phase == "outcome":
+            for cache in (self.requests, self.proposals, self.normalized): cache.pop(identity, None)
 
     def start(self, event, request, context, *, template=None):
         # Caller holds store lock, giving monotonic order even across restarts.

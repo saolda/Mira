@@ -475,6 +475,23 @@ request, prompt source/hash/bindings, raw model response, validation, outcome,
 retrieved evidence, generated Markdown and historical tree changes. R5 is an
 independent recorded action. Exports work without a running model or SQLite.
 
+Research executions additionally export existing interaction phases and action
+events incrementally to one append-only JSONL file under `memory/run-logs/`,
+independent of the experiment directory. Each CLI initialization/run/demo and each
+`Research.run()` starts a fresh execution; custom supervisors may group calls with
+`Research.execution()`. Records retain chronological sequence, experiment/node/
+cycle and interaction IDs, model/settings, exact sent prompts and supplied inputs,
+template provenance, raw/proposed/normalized responses, token measurements, full
+returned search evidence and committed canonical after-images. Configured secrets
+are redacted. Each record is flushed/fsynced; normal termination and exceptions
+are recorded, while abrupt process death may leave no end marker or a partial last
+line. These files are diagnostic exports, not a competing recovery store.
+
+On resume, a missing interaction outcome may be reconstructed once from a proven
+committed event. Its original request/response/validation are exported as recovery
+context, without relabeling them as new model calls. Unknown calls still require
+explicit acknowledgement; incomplete journals still require existing repair.
+
 ## Persistence, compatibility and recovery
 
 Canonical live layout remains `memories/*.md`, `equations/*.json`, `identity.json`,
@@ -482,6 +499,19 @@ Canonical live layout remains `memories/*.md`, `equations/*.json`, `identity.jso
 per-term `glossary/g*.json` records.
 Independent `interactions/` records save the exact request before dispatch and
 then raw response, validation and outcome. Indexes remain disposable.
+
+Catalog metadata `experiment.json` records creation and explicit retain/disposable
+policy outside the canonical corpus. A `.runner.lock` lease spans executions;
+the existing writer lock continues to serialize individual operations. Cleanup is
+an explicit CLI/catalog operation, never a scheduling action. Its default is a
+read-only deletion plan with names, dates, sizes and status. Applying deletion
+requires named, completed, explicitly disposable experiments and rechecks runner/
+writer locks, pending work, interaction outcomes and recovery integrity. Legacy
+unclassified and retained runs are protected. Retention designation is separate
+from deletion. No symlinks are traversed; confined, fd-safe deletion follows a
+durable archive of interaction and canonical records in the independent log home.
+Cleanup never removes run logs, user reviews or milestone reports. Ordinary
+development test reports overwrite `test-results/latest.md`.
 
 Every multi-file operation uses the existing small journal: validated changed-file
 after-images are fsynced, a prepared manifest is published before canonical edits,

@@ -27,6 +27,19 @@ class Research:
         self.trace = Interactions(self.store, tuple(getattr(llm, "secrets", ())) +
             tuple(secret for adapter in adapters.values() for secret in getattr(adapter, "secrets", ())))
 
+    def execution(self, directory=None, *, command="research-run"):
+        """Group initialization/custom supervisor steps in one durable run log."""
+        return self.trace.execution(directory, command=command, model=self.llm.model, settings=self.llm.settings)
+
+    def _log_commit(self, event, state, memories, equations, ledger, previous, extras):
+        if self.trace.log is None: return
+        after = {**extras, "identity.json": dumps(ledger),
+                 **{"memories/" + m.id + ".md": render(m) for m in memories},
+                 **{"equations/" + e.id + ".json": dumps(asdict(e)) for e in equations}}
+        self.trace.record("action_outcome", {"event": event,
+            "canonical_changes": {p: raw for p, raw in after.items() if previous.get(p) != raw}}, event,
+            key=("event", tuple(sorted(extras))))
+
     def initialize(self, question, databases=None, *, strategy=None, registry=None, fault=None, **config):
         with self.store.lock():
             token, memories, equations, ledger = self.store.read()
@@ -71,6 +84,7 @@ class Research:
                 self.trace.write(identity, "validation", {"timestamp":now(), "accepted":True, "action":"R0"})
             extras.update({"research/state.json":dumps(state), "events/initialize.json":dumps(event)})
             self.store.publish(memories, equations, ledger, token, files=extras, operation_type="initialize", fault=fault)
+            self._log_commit(event, state, memories, equations, ledger, {}, extras)
             if identity:
                 self.trace.write(identity, "outcome", {"timestamp":now(), "status":"committed", "action_committed":"R0", "event_ref":"events/initialize.json"})
             return state
@@ -121,6 +135,20 @@ class Research:
                     "action_committed": None, "warning": "Model may have executed; operator authorized another attempt."})
             return [r["id"] for r in records]
 
+    def _recover_outcomes(self):
+        """Finish missing interaction receipts using proven committed events only."""
+        with self.store.lock():
+            self.store.read()
+            events = {loads(raw).get("interaction_id"): (path, loads(raw))
+                      for path, raw in self.store._files().items() if path.startswith("events/")}
+            for record in read_records(self.store.root):
+                if "outcome" in record or record["id"] not in events: continue
+                path, event = events[record["id"]]
+                self.trace.write(record["id"], "outcome", {"timestamp": now(), "status": event.get("status", "committed"),
+                    "action_committed": event.get("action_committed"), "event_ref": path,
+                    "memory_ids": event.get("memory_ids", []), "recovered_from_committed_event": True,
+                    "committed_event": event})
+
     def _model(self, event, action, context, state):
         reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
         require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
@@ -130,6 +158,9 @@ class Research:
         template["filled_messages"] = loads(serialized)["messages"]
         template["serialized_request_sha256"] = digest(serialized)
         event["context_usage"] = measure(serialized, reserve, state["context_budget"], getattr(self.llm, "count_tokens", None))
+        if event["context_usage"]["over_context_budget"]:
+            self.trace.record("model_request_blocked", {"serialized_request": serialized,
+                "context": context, "prompt_template": template, "context_usage": event["context_usage"]}, event)
         require(not event["context_usage"]["over_context_budget"],
                 "blocked_context_budget: full decision context does not fit")
         identity = self.trace.start(event, serialized, context, template=template)
@@ -148,6 +179,7 @@ class Research:
             if action == "R3": raise r3.OutputError(str(exc)) from exc
             raise
         event["model"] = info
+        self.trace.proposals[identity] = value
         return value
 
     def _extract(self, state, memories, equations, ledger, identity, evidence, context, event):
@@ -164,6 +196,8 @@ class Research:
         if error is None:
             try:
                 accepted = decisions.validate("R3", value, evidence)
+                if "interaction_id" in event:
+                    self.trace.normalized[event["interaction_id"]] = {k: accepted[k] for k in ("summary", "results")}
                 if accepted != value:
                     event["normalization"] = "discarded_summary_for_empty_results"
                 output = r3.create_memory(state, memories, equations, ledger, identity,
@@ -214,6 +248,9 @@ class Research:
                 except Exception as exc:
                     result = {"status":"failed", "results":[], "error":self.trace.clean(str(exc)), "error_type":type(exc).__name__}
             result = loads(self.trace.clean(dumps(result)))
+            self.trace.record("search_result", {"provider": provider, "query": query,
+                "query_submitted": provider in self.adapters and not bool(result.get("skipped")),
+                "retrieval": result}, event)
             unique, duplicates = sources.unique(result["results"], state.setdefault("source_index", {}))
             sources.reconcile(state["source_index"], duplicates)
             evidence = {**{k:v for k,v in result.items() if k not in {"results","raw_api_response"}},
@@ -280,6 +317,7 @@ class Research:
                 decisions.validate(action, value)
             if action == "R1":
                 accepted = r1.filter_terms(value["keywords"], self.control_terms)
+                self.trace.normalized[event["interaction_id"]] = {"keywords": accepted}
                 event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
                 n["keywords"] = accepted
                 n["search_round"] = n.get("search_round",0) + 1
@@ -499,23 +537,29 @@ class Research:
             interaction = event.get("interaction_id")
             if interaction:
                 self.trace.write(interaction, "validation", {"timestamp": now(), "accepted": success and event.get("extraction_accepted", True),
-                    "error": event.get("error"), "action": event["action"], "model": event.get("model")})
+                    "error": event.get("error"), "action": event["action"], "model": event.get("model"),
+                    **({"glossary_admission": event["glossary"]} if "glossary" in event else {})})
             event["action_committed"] = event["action"] if success else None
             extras["research/state.json"] = dumps(state)
             extras["events/" + event_id + ".json"] = dumps(event)
             self.store.publish(memories, equations, ledger, token, files=extras,
                 operation_type="research_cycle", context={"cycle_id": event_id, "node_id": event["node_id"],
                     "interaction_id": interaction}, fault=fault)
+            self._log_commit(event, state, memories, equations, ledger, files, extras)
             if interaction:
                 self.trace.write(interaction, "outcome", {"timestamp": now(), "status": event["status"],
                     "action_committed": event["action_committed"], "event_ref": "events/" + event_id + ".json",
                     "memory_ids": event.get("memory_ids", []), "tree_changes": event.get("branching", event.get("decision")), "error": event.get("error")})
             return event
 
-    def run(self, max_cycles):
+    def run(self, max_cycles, *, log_directory=None):
         require(type(max_cycles) is int and max_cycles > 0, "positive cycle limit required")
-        events = []
-        for _ in range(max_cycles):
-            event = self.step(); events.append(event)
-            if event["status"] != "committed": break
-        return {"status": events[-1]["status"] if events[-1]["status"] != "committed" else "cycle_limit", "actions": events}
+        with self.execution(log_directory) as log:
+            self._recover_outcomes()
+            events = []
+            for _ in range(max_cycles):
+                event = self.step(); events.append(event)
+                if event["status"] != "committed": break
+            status = events[-1]["status"] if events[-1]["status"] != "committed" else "cycle_limit"
+            log.reason = status
+            return {"status": status, "actions": events, "execution_log": str(log.path)}

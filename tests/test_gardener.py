@@ -58,7 +58,9 @@ class GardenerTests(unittest.TestCase):
         self.assertEqual(state["nodes"]["q1"]["synthesis_score"], 1004)
         self.assertEqual(state["nodes"]["q2"]["synthesis_score"], 1002)
         self.assertEqual(state["nodes"]["q3"]["synthesis_score"], 0)
-        out = self.r.run(20); self.assertEqual(out["status"], "finished")
+        with tempfile.TemporaryDirectory() as logs:
+            out = self.r.run(20, log_directory=logs)
+        self.assertEqual(out["status"], "finished")
         state = self.state(); self.assertEqual(state["nodes"]["q3"]["status"], "killed")
         self.assertEqual(state["nodes"]["q1"]["status"], "answered")
         self.assertTrue(state["nodes"]["q1"]["synthesis_complete"])
@@ -89,8 +91,8 @@ class GardenerTests(unittest.TestCase):
         self.assertEqual(self.r.knowledge.validate()["documents"], 6)
 
     def test_bounded_batches_and_three_level_upward_demo(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result = demonstrate(directory)
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as logs:
+            result = demonstrate(directory, log_directory=logs)
             self.assertEqual(result["status"], "finished")
             state = loads(Path(directory, "research/state.json").read_text())
             self.assertEqual(state["research_cycles"], 28)

@@ -13,6 +13,7 @@ from .format import require
 def register(sub):
     init = sub.add_parser("research-init")
     init.add_argument("question")
+    init.add_argument("--disposable", action="store_true", help="designate this development experiment for explicit cleanup after completion")
     selection = init.add_mutually_exclusive_group()
     selection.add_argument("--database", action="append", help="explicit database sequence (compatibility)")
     selection.add_argument("--strategy", help="named strategy; omit for mandatory R0 selection")
@@ -43,6 +44,13 @@ def register(sub):
     run.add_argument("--acknowledge-interrupted", action="store_true")
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
+    cleanup = sub.add_parser("research-cleanup", help="list experiments; delete explicitly selected, completed disposable experiments only with --apply")
+    cleanup.add_argument("--experiment", action="append", default=[])
+    cleanup.add_argument("--older-than-days", type=float)
+    cleanup.add_argument("--apply", action="store_true")
+    policy = cleanup.add_mutually_exclusive_group()
+    policy.add_argument("--disposable", dest="retention", action="store_const", const="disposable", help="designate selected experiments disposable; this mode never deletes")
+    policy.add_argument("--retain", dest="retention", action="store_const", const="retain", help="protect selected experiments from cleanup")
     state = sub.add_parser("research-state")
     glossary_export = sub.add_parser("glossary-export", help="regenerate research/glossary.md")
     glossary_rebuild = sub.add_parser("glossary-rebuild", help="rebuild the disposable glossary SQLite index")
@@ -64,6 +72,9 @@ def register(sub):
 
 def execute(args):
     catalog = Experiments(args.memory_dir)
+    if args.command == "research-cleanup":
+        require(not args.root, "cleanup operates only within --memory-dir, not --root")
+        return catalog.cleanup(args.experiment, apply=args.apply, older_than_days=args.older_than_days, retention=args.retention)
     if args.command == "research-import":
         require(not args.root, "research-import selects destination with --experiment, not --root")
         destination = catalog.import_run(args.source, args.experiment, transcript=args.transcript)
@@ -73,12 +84,27 @@ def execute(args):
     require(not (args.root and args.experiment), "choose --root or --experiment")
     managed = args.root is None
     if managed:
-        path = catalog.create(args.experiment) if args.command in {"research-init", "research-demo"} else catalog.select(args.experiment)
+        path = catalog.create(args.experiment, disposable=args.command == "research-demo" or getattr(args, "disposable", False)) if args.command in {"research-init", "research-demo"} else catalog.select(args.experiment)
         args.root = str(path)
         args.experiment = path.name
+    if args.command in {"research-init", "research-run", "research-demo"}:
+        from .interactions import Interactions, configured_secrets
+        from .live import LiveStore
+        import os
+        trace = Interactions(LiveStore(args.root), configured_secrets([os.environ.get(getattr(args, "api_key_env", "MIRA_LLM_API_KEY"), "")]))
+        directory = catalog.home / "run-logs" if managed or args.memory_dir else None
+        with trace.execution(directory, command=args.command) as log:
+            result = _execute(args, catalog, managed, trace)
+            log.reason = result.get("status", "initialized")
+            return {**result, "execution_log": str(log.path)}
+    return _execute(args, catalog, managed)
+
+
+def _execute(args, catalog, managed, trace=None):
     if args.command == "research-demo":
         from .research_demo import demonstrate
-        result = demonstrate(args.root, max_cycles=args.max_cycles)
+        result = demonstrate(args.root, max_cycles=args.max_cycles, trace=trace)
+        _tag_explicit_root(args, managed, disposable=True)
         if managed:
             for full in (False, True): catalog.export_transcript(args.experiment, transcript(args.root, full=full), full=full)
         return result
@@ -118,6 +144,11 @@ def execute(args):
     else:
         llm, adapters = ScriptedLLM([]), {}
     research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []))
+    if trace is not None:
+        trace.secrets = tuple(dict.fromkeys([*trace.secrets, *research.trace.secrets]))
+        trace.log.secrets = trace.secrets
+        trace.log.configure(llm.model, llm.settings)
+        research.trace = trace
     if args.command == "research-init":
         result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve,
@@ -125,6 +156,7 @@ def execute(args):
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
             max_children=args.max_children, synthesis_output_reserve=args.synthesis_output_reserve,
             glossary_token_budget=args.glossary_token_budget, glossary_limit=args.glossary_limit)
+        _tag_explicit_root(args, managed, disposable=args.disposable)
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.command == "research-prune": return research.prune_retrievals(apply=args.apply)
@@ -137,3 +169,11 @@ def execute(args):
             return {"path": str(research.glossary.path), "rebuilt": True}
     if args.acknowledge_interrupted: research.acknowledge_interrupted()
     return research.run(args.max_cycles)
+
+
+def _tag_explicit_root(args, managed, *, disposable):
+    if managed: return
+    from .experiments import atomic_text
+    from .interactions import now
+    atomic_text(Path(args.root).absolute() / "experiment.json", dumps({"version": 1,
+        "created_at": now(), "retention": "disposable" if disposable else "retain"}))

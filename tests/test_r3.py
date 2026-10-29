@@ -160,7 +160,8 @@ class CompactResearchTests(unittest.TestCase):
             runner, llm = self.runner(root, [{"summary": raw_summary, "results": []},
                                             {"summary": "Useful second source.", "results": [{**result(), "source_ids": ["source-b"]}]},
                                             {"decision": "answered", "reason": "Fixture completed."}], rows)
-            outcome = runner.run(3)
+            with tempfile.TemporaryDirectory() as logs:
+                outcome = runner.run(3, log_directory=logs)
             self.assertEqual([e["action"] for e in outcome["actions"]], ["R3", "R3", "R4"])
             first = outcome["actions"][0]
             self.assertEqual(first["status"], "committed")
@@ -185,7 +186,8 @@ class CompactResearchTests(unittest.TestCase):
                 runner, llm = self.runner(root, [bad, {"summary": "Second source.", "results": [{**result(), "source_ids": ["source-b"]}]},
                                                 {"decision": "answered", "reason": "Fixture completed."}], rows)
                 resumed = Research(root, llm, runner.adapters)
-                outcome = resumed.run(3)
+                with tempfile.TemporaryDirectory() as logs:
+                    outcome = resumed.run(3, log_directory=logs)
                 self.assertEqual([e["action"] for e in outcome["actions"]], ["R3", "R3", "R4"])
                 skipped = outcome["actions"][0]
                 self.assertEqual(skipped["status"], "committed")
@@ -212,7 +214,8 @@ class CompactResearchTests(unittest.TestCase):
             runner = Research(root, llm, {"first": FixtureSearch([research()]),
                                           "second": FixtureSearch([{"status": "empty", "results": []}])})
             runner.initialize("Physics?", ["first", "second"], context_budget=24000)
-            outcome = runner.run(4)
+            with tempfile.TemporaryDirectory() as logs:
+                outcome = runner.run(4, log_directory=logs)
             self.assertEqual([e["action"] for e in outcome["actions"]], ["R1", "R2", "R3", "R2"])
             self.assertEqual(outcome["actions"][-1]["provider"], "second")
             self.assertEqual(len(llm.requests), 2)
