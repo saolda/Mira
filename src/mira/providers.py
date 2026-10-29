@@ -117,9 +117,11 @@ class PubMedSearch(PublicAPI):
             identifiers = {'pmid':pmid}
             identifiers.update({n.get('IdType'): n.text for n in a.findall('PubmedData/ArticleIdList/ArticleId') if n.get('IdType') in {'doi','pmc'}})
             if 'pmc' in identifiers: identifiers['pmcid'] = identifiers.pop('pmc')
+            date = a.find('.//JournalIssue/PubDate')
+            if date is None: date = a.find('.//Article/ArticleDate')
             rows.append(self.result('pmid:'+str(pmid), ''.join(title.itertext()) if title is not None else '',
                 f'https://pubmed.ncbi.nlm.nih.gov/{pmid}/', abstract, authors=authors,
-                published=a.findtext('.//JournalIssue/PubDate/Year') or a.findtext('.//PubDate/MedlineDate') or '',
+                published=plain(' '.join(date.itertext())) if date is not None else '',
                 identifiers=identifiers))
         require(len(rows) == len(ids), 'incomplete PubMed batch')
         return rows
@@ -152,10 +154,14 @@ class EuropePMCSearch(PublicAPI):
             authors = [a.get('fullName') or ' '.join(filter(None,[a.get('firstName'),a.get('lastName')]))
                        for a in (item.get('authorList') or {}).get('author',[])]
             if not authors and item.get('authorString'): authors = [item['authorString']]
+            identifiers = {k:item[k] for k in ('doi','pmid','pmcid') if item.get(k)}
+            # The source-qualified record ID is itself a supplied identifier.
+            if source == 'MED' and str(identity).isdigit(): identifiers.setdefault('pmid', str(identity))
+            if source == 'PMC' and re.fullmatch(r'PMC\d+', str(identity), re.I): identifiers.setdefault('pmcid', identity)
             rows.append(self.result(f'europe_pmc:{source}:{identity}', item['title'],
                 f'https://europepmc.org/article/{source}/{identity}', item.get('abstractText',''), authors=authors,
                 published=item.get('firstPublicationDate') or item.get('pubYear',''),
-                identifiers={k:item[k] for k in ('doi','pmid','pmcid') if item.get(k)}))
+                identifiers=identifiers))
         return rows
 
 
@@ -181,9 +187,12 @@ class OpenAlexSearch(PublicAPI):
             inverted = item.get('abstract_inverted_index') or {}
             abstract = ' '.join(word for _, word in sorted((position,word) for word, positions in inverted.items() for position in positions))
             identifiers = {'openalex':item['id']}
-            if item.get('doi'): identifiers['doi'] = item['doi']
+            doi = item.get('doi') or (item.get('ids') or {}).get('doi')
+            if doi: identifiers['doi'] = doi
             pmid = (item.get('ids') or {}).get('pmid')
             if pmid: identifiers['pmid'] = pmid.rstrip('/').split('/')[-1]
+            pmcid = (item.get('ids') or {}).get('pmcid')
+            if pmcid: identifiers['pmcid'] = pmcid.rstrip('/').split('/')[-1]
             authors = [(a.get('author') or {}).get('display_name','') for a in item.get('authorships',[])]
             location = item.get('primary_location') or {}
             rows.append(self.result(item['id'], item['display_name'], item.get('doi') or location.get('landing_page_url') or item['id'],

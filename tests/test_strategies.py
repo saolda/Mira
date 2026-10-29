@@ -48,7 +48,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_registry_domains_custom_file_and_validation(self):
         values = strategies.registry()
-        self.assertEqual({s['id'] for s in values},{'general','engineering','humanities','biomedical','education'})
+        self.assertEqual({s['id'] for s in values},{'general','engineering','humanities','biomedical','medical','education'})
         self.assertEqual(strategies.select(values,'biomedical')['databases'][:2],['pubmed','europe_pmc'])
         path = Path(self.temp.name)/'strategies.json'
         path.write_text(dumps([{'id':'focused','name':'Focused','description':'One database.','databases':['arxiv']}]))

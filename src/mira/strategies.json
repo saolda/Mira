@@ -3,5 +3,6 @@
   {"id":"engineering","name":"Engineering","description":"Engineering, computing, mathematics and technical methods.","databases":["arxiv","crossref","openalex","wikipedia"]},
   {"id":"humanities","name":"Humanities","description":"History, philosophy, arts and cultural scholarship.","databases":["crossref","openalex","wikipedia"]},
   {"id":"biomedical","name":"Biomedical","description":"Clinical, biomedical and life-science evidence.","databases":["pubmed","europe_pmc","crossref","openalex","wikipedia"]},
+  {"id":"medical","name":"Medical","description":"Biomedical and clinical research, including diseases, diagnosis, treatment, pathology, epidemiology and medical evidence.","databases":["pubmed","europe_pmc","openalex","crossref","wikipedia"]},
   {"id":"education","name":"Education","description":"Education, teaching, learning and educational research.","databases":["eric","crossref","openalex","wikipedia"]}
 ]
