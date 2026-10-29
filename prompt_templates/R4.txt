@@ -22,3 +22,7 @@ PREVIOUS SEARCHES
 
 Return JSON only:
 {"decision":"retry","reason":"Brief explanation."}
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

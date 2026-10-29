@@ -16,7 +16,8 @@ class OutputError(ValueError):
 def context(state, node_id, research):
     # Preserve the provider's structured fields, including explicit truncation and
     # content kind. The raw feed is retained on disk, not duplicated in the prompt.
-    return {"question": state["nodes"][node_id]["question"],
+    from .questions import context as brief
+    return {"question": state["nodes"][node_id]["question"], **brief(state, "R3", node_id),
             "question_context": question_context(state, node_id),
             "research": {"status": research["status"], "results": research["results"]}}
 

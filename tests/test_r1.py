@@ -37,7 +37,7 @@ class R1Tests(unittest.TestCase):
 
     def test_identical_root_and_selected_question(self):
         self.assertEqual(self.context()["question_context"], [])
-        self.assertEqual(set(self.context()), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context"})
+        self.assertEqual(set(self.context()), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "research_brief"})
 
     def test_duplicate_ancestors_normalize_whitespace_preserve_wording(self):
         self.state["nodes"]["q1"]["question"] = "  Root thermal  question? "

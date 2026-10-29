@@ -159,7 +159,8 @@ def context(state, memories, files, node_id, control_terms=()):
         # The committed after-state records exact components. Never guess them by
         # splitting a provider's joined query or treating failed queries as bans.
         previous.extend(event.get("tree", {}).get(node_id, {}).get("keywords") or [])
-    return {"question": question, "question_context": additional,
+    from .questions import context as brief
+    return {"question": question, "question_context": additional, **brief(state, "R1", node_id),
             "previous_search_terms": unique(previous), "control_terms": controls(control_terms),
             "memory_context": memory_context(memories, set(node["memory_ids"]), [question, *additional]),
             "glossary_context": {"entries": [], "untrusted_glossary_data": True,

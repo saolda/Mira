@@ -68,3 +68,7 @@ For each term provide its canonical term, a source-supported definition or null,
 Return terminology in an additional "terms" array, empty if none is useful. Each object has exactly these fields:
 {"term":"Technical concept","definition":null,"aliases":[],"relationships":[],"source_id":"supplied-source-id","passage":"Exact short quote containing the term","qualification":"Source scope or uncertainty, or empty string"}
 Passages must occur verbatim in the supplied source content (not metadata). A non-null definition must itself be a verbatim definitional statement containing the term, inside that passage; otherwise use null. Prefer an expanded canonical name over a bare acronym. Include aliases only with explicit naming evidence, such as Expanded Name (ABC). Relationships use {"term":"Other concept","type":"RELATED_TO"}; types are SYNONYM_OF, BROADER_THAN, NARROWER_THAN or RELATED_TO. Include only explicitly stated relationships, quoting both terms in the passage; propose their target as another term in this array unless already known. Do not infer relationships from co-occurrence. Keep qualifications faithful to the supplied source. Python validates optional terms independently of substantive results. Legacy responses may omit terms.
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

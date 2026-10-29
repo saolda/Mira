@@ -21,3 +21,7 @@ ACCUMULATED RESEARCH
 
 Return JSON only:
 {"questions":["A specific research question?","Another useful research question?"]}
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

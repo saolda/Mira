@@ -337,12 +337,12 @@ class R3Tests(unittest.TestCase):
         memory=r3.create_memory(state, memories, equations, ledger, "q1", results, research(), summary="Scoped summary of all extracted results and their limitations.")
         return memory, equations, memories, state
 
-    def test_context_exact_three_fields_and_research_metadata(self):
+    def test_context_named_fields_and_research_metadata(self):
         state=tree.initial(" Root question? ", ["fixture"])
         state["nodes"]["q2"]=tree.node("q2", "Root   question?", "q1")
         state["nodes"]["q3"]=tree.node("q3", "Selected question?", "q2")
         data=r3.context(state,"q3",research())
-        self.assertEqual(set(data), {"question","question_context","research"})
+        self.assertEqual(set(data), {"question","question_context","research","research_brief"})
         self.assertEqual(data["question_context"],[" Root question? "])
         row=data["research"]["results"][0]
         for key in ("id","title","authors","published","url","content","content_kind","truncated","figures"):
@@ -449,7 +449,7 @@ class R3Tests(unittest.TestCase):
             self.assertEqual([u.kind for u in r.knowledge.document("r1").units],["finding","equation","image"])
             self.assertEqual(r.knowledge.directory.integrity()["integrity"],"ok")
             viewed=Inspector(directory).decision("ordered-r3",read_records(root)[-1]["id"])
-            self.assertEqual({s["name"] for s in viewed["prompt_slots"]},{"question","question_context","research"})
+            self.assertEqual({s["name"] for s in viewed["prompt_slots"]},{"question","question_context","research","research_brief"})
             self.assertTrue(viewed["template_verification"]["matches_recorded_request"])
             self.assertEqual(viewed["plain_text_prompt"],loads(llm.requests[-1])["messages"][0]["content"])
             self.assertEqual(len(viewed["generated_memories"]),1)

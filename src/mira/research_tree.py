@@ -211,6 +211,8 @@ def upgrade(state, memories):
 
 
 def validate(state, memories, files):
+    from .questions import validate as validate_question
+    validate_question(state, files)
     if isinstance(state, dict) and state.get("mira_research") == 1:
         from .research_tree_v1 import validate as legacy_validate
         return legacy_validate(state, memories, files)
@@ -386,6 +388,7 @@ def metrics(state):
             "branching_policy": {k: state.get(k) for k in ("branching_interval", "max_children", "research_cycles_since_branching")},
             "research_capacity_tokens": state.get("research_capacity_tokens"),
             "context_budget": state["context_budget"], "output_reserve": state["output_reserve"],
+            "question_document": state.get("question_document"),
             "synthesis_output_reserve": state.get("synthesis_output_reserve", state["output_reserve"]),
             "synthesis_deferred": state.get("synthesis_deferred"),
             "synthesis_attempts": state.get("synthesis_attempts", []),
@@ -396,6 +399,7 @@ def metrics(state):
 
 def validate_transition(before, after):
     """A durable split receipt cannot be cleared or replayed by any writer."""
+    require(after.get("question_document") == before.get("question_document"), "question document is immutable")
     if before.get("mira_research") != 2: return
     require(after.get("mira_research") == 2, "cannot downgrade research state")
     for identity, old in before["nodes"].items():

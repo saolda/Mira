@@ -3,7 +3,7 @@ from dataclasses import asdict
 from collections import Counter
 from functools import lru_cache
 
-from . import research_tree as tree, decisions
+from . import research_tree as tree, decisions, questions
 from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, parse, render, require
 from .budget import measure
 
@@ -33,6 +33,7 @@ def context(state, memories, equations, identity, inputs, *, summarized=False, o
     n = state["nodes"][identity]
     equation_ids = {u.fields["Equation"] for m in inputs for u in m.units if u.kind == "equation"}
     return {"root_question": state["nodes"][state["root_id"]]["question"],
+            **questions.context(state, "S2", identity),
             "node": {**{k: n[k] for k in ("id", "question", "status")},
                      "input_memory_ids": [m.id for m in inputs], "input_memory_count": len(inputs)}, "question": n["question"],
             "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, identity)],
@@ -68,6 +69,7 @@ def selection_context(state, memories, equations, model, settings, counter=None)
                            "relationships": [r.payload() for r in m.relationships]},
             "lineage": m.metadata.get("source_memories", []), "estimated_s2_tokens": costs})
     return {"root_question": state["nodes"][state["root_id"]]["question"],
+        **questions.context(state, "S1"),
         "question": state["nodes"][state["root_id"]]["question"],
         "research_tree": [{k: n[k] for k in ("id", "question", "parent_id", "status")}
                           for i, n in state["nodes"].items() if i in tree.eligible_subtree(state, state["root_id"])],

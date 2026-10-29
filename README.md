@@ -29,6 +29,23 @@ Open http://127.0.0.1:8767 and select an experiment and decision. New research
 runs default to ignored `memory/research/` directories; annotations and exports
 are separate.
 
+Initialize with a positional question or `research-init --question-file PATH`,
+never both. A question file starts with `# Research question` and a nonempty
+prose question. Optional `## Context` and `## Research objectives` sections contain
+background and a Markdown list of objectives, respectively. Other or duplicate
+headings and empty sections are rejected. For example:
+
+```bash
+PYTHONPATH=src python3 -m mira research-init --question-file memory/questions/topic.md --strategy medical --experiment topic
+```
+
+The original UTF-8 Markdown is frozen at the experiment's `research/question.md`;
+its SHA-256, exact question, separate context and objective list are persisted in
+`research/state.json` and exposed by `research-state`. Restart uses this snapshot,
+even if the input file changes. Prompts keep the question and objectives intact
+while bounding supplementary background. Oversized essential inputs fail the
+existing token-budget checks. Keep private question files under ignored `memory/`.
+
 LLM prompts are editable in [prompt_templates/](prompt_templates/).
 The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.

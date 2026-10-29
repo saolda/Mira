@@ -102,7 +102,7 @@ class ResearchTests(unittest.TestCase):
         prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
                    for record in read_records(self.root)}
         r1 = prompts["R1"]["context"]
-        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context"})
+        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "research_brief"})
         self.assertEqual(r1["question"], self.state()["nodes"]["q1"]["question"])
         self.assertEqual(r1["question_context"], [])
         self.assertEqual(r1["previous_search_terms"], [])

@@ -2,13 +2,13 @@
 from copy import deepcopy
 from dataclasses import asdict
 
-from . import decisions, research_tree as tree
+from . import decisions, research_tree as tree, questions
 from .format import digest, render, require
 from .r1 import question_context
 from .budget import measure
 
 
-def context(state, memories, equations, identity):
+def context(state, memories, equations, identity, *, action="R5"):
     research = []
     for memory in sorted(memories, key=lambda m: m.metadata["created_order"]):
         if memory.metadata.get("node_id") == identity and memory.metadata.get("kind") == "research":
@@ -19,6 +19,7 @@ def context(state, memories, equations, identity):
             research.append(memory)
     equation_ids = {u.fields["Equation"] for m in research for u in m.units if u.kind == "equation"}
     return {"max_children": state["max_children"], "question": state["nodes"][identity]["question"],
+            **questions.context(state, action, identity),
             "question_context": question_context(state, identity),
             "research_results": {"memories": [{"id": m.id, "markdown": render(m)} for m in research],
                                  "equations": [asdict(e) for e in equations if e.id in equation_ids]}}

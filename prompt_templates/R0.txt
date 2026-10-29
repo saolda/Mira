@@ -10,3 +10,7 @@ AVAILABLE STRATEGIES
 
 Return JSON only, containing the selected identifier and a brief justification:
 {"strategy":"engineering","reason":"The question concerns technical methods and implementation."}
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

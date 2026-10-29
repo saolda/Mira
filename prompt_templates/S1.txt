@@ -59,3 +59,7 @@ No suitable combination:
 }
 
 Do not invent evidence or memory IDs. Return JSON only.
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

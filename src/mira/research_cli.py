@@ -12,7 +12,8 @@ from .format import require
 
 def register(sub):
     init = sub.add_parser("research-init")
-    init.add_argument("question")
+    init.add_argument("question", nargs="?", help="research question (alternative to --question-file)")
+    init.add_argument("--question-file", metavar="PATH", help="Markdown question, optional context and research objectives")
     init.add_argument("--disposable", action="store_true", help="designate this development experiment for explicit cleanup after completion")
     selection = init.add_mutually_exclusive_group()
     selection.add_argument("--database", action="append", help="explicit database sequence (compatibility)")
@@ -71,6 +72,12 @@ def register(sub):
 
 
 def execute(args):
+    if args.command == "research-init":
+        require((args.question is not None) != (args.question_file is not None),
+                "provide a question or --question-file, but not both")
+        if args.question_file is not None:
+            from .questions import read
+            read(args.question_file)  # Validate before creating an experiment or contacting the model.
     catalog = Experiments(args.memory_dir)
     if args.command == "research-cleanup":
         require(not args.root, "cleanup operates only within --memory-dir, not --root")
@@ -150,7 +157,7 @@ def _execute(args, catalog, managed, trace=None):
         trace.log.configure(llm.model, llm.settings)
         research.trace = trace
     if args.command == "research-init":
-        result = research.initialize(args.question, args.database, synthesis_interval=args.synthesis_interval,
+        result = research.initialize(args.question, args.database, question_file=args.question_file, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve,
             strategy=args.strategy, registry=args.strategies,
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,

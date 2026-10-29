@@ -27,7 +27,7 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 CANONICAL = re.compile(
     r"(?:memories/[rs][1-9a-z][0-9a-z]*\.md|"
     r"equations/e_[rs][1-9a-z][0-9a-z]*_[1-9][0-9]*\.json|"
-    r"identity\.json|research/state\.json|glossary/g[1-9][0-9]*\.json|"
+    r"identity\.json|research/state\.json|research/question\.md|glossary/g[1-9][0-9]*\.json|"
     r"research/results/[A-Za-z0-9_-]+\.json|events/[A-Za-z0-9_-]+\.json)\Z")
 
 
@@ -45,6 +45,11 @@ def decode(files):
     documents, equations = [], []
     for name, text in sorted(files.items()):
         require(CANONICAL.fullmatch(name), "unsafe canonical path")
+        if name == "research/question.md":
+            require("research/state.json" in files, "question Markdown requires research state")
+            from .questions import parse as parse_question
+            parse_question(text)
+            continue
         if TERM_PATH.fullmatch(name):
             record = loads(text)
             validate_record(record)
@@ -162,7 +167,7 @@ class LiveStore:
                     if relative == "research/glossary.md":
                         continue  # Explicitly regenerated, disposable export.
                     require(CANONICAL.fullmatch(relative), "unexpected canonical file: " + relative)
-                    result[relative] = p.read_text(encoding="utf-8")
+                    result[relative] = p.read_bytes().decode("utf-8")
         ledger = self.path("identity.json")
         if ledger.exists():
             result["identity.json"] = ledger.read_text(encoding="utf-8")
@@ -244,7 +249,9 @@ class LiveStore:
         for name, text in extras.items():
             require(isinstance(name, str) and CANONICAL.fullmatch(name) and
                     (name.startswith("research/") or name.startswith("events/") or TERM_PATH.fullmatch(name)), "invalid auxiliary path")
-            require(isinstance(text, str) and isinstance(loads(text), dict), "auxiliary JSON required")
+            require(isinstance(text, str), "auxiliary text required")
+            if name != "research/question.md":
+                require(isinstance(loads(text), dict), "auxiliary JSON required")
             if name != "research/state.json" and not TERM_PATH.fullmatch(name):
                 require(name not in old or old[name] == text, "evidence/events are immutable")
         proposed.update(extras)
@@ -338,7 +345,7 @@ class LiveStore:
                 if not payload.is_file():
                     problems.append("missing payload: " + name)
                 else:
-                    text = payload.read_text(encoding="utf-8")
+                    text = payload.read_bytes().decode("utf-8")
                     if digest(text) != entry["after"]:
                         problems.append("damaged payload: " + name)
                     else:
@@ -371,10 +378,10 @@ class LiveStore:
         self._save_manifest(m)
         for entry in m["files"]:
             path = self.path(entry["path"])
-            current = digest(path.read_text(encoding="utf-8")) if path.exists() else None
+            current = digest(path.read_bytes().decode("utf-8")) if path.exists() else None
             if current != entry["after"]:
                 require(current == entry["before"], "file changed during apply")
-                text = self.path(entry["payload"]).read_text(encoding="utf-8")
+                text = self.path(entry["payload"]).read_bytes().decode("utf-8")
                 require(digest(text) == entry["after"], "payload changed during apply")
                 self._replace(entry["path"], text)
             if fault:

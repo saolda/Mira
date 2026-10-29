@@ -14,7 +14,7 @@ from . import strategies, sources
 import time
 from email.utils import parsedate_to_datetime
 from .budget import measure
-from . import glossary
+from . import glossary, questions
 
 
 class Research:
@@ -40,7 +40,10 @@ class Research:
             "canonical_changes": {p: raw for p, raw in after.items() if previous.get(p) != raw}}, event,
             key=("event", tuple(sorted(extras))))
 
-    def initialize(self, question, databases=None, *, strategy=None, registry=None, fault=None, **config):
+    def initialize(self, question=None, databases=None, *, question_file=None, strategy=None, registry=None, fault=None, **config):
+        require((question is not None) != (question_file is not None), "provide a question or --question-file, but not both")
+        markdown, document = questions.read(question_file) if question_file is not None else (None, None)
+        if document is not None: question = document["question"]
         with self.store.lock():
             token, memories, equations, ledger = self.store.read()
             require(not self.store._files() and not read_records(self.store.root), "research initialization requires an empty isolated corpus")
@@ -53,13 +56,15 @@ class Research:
                     "configured context budget exceeds the active model context window")
             state = tree.initial(question, databases or (chosen["databases"] if chosen else ["selection_pending"]), **config)
             state.update(source_index={}, provider_cooldowns={}, retrieval_storage="temporary")
+            if document is not None: state["question_document"] = document
             event = {"run_id": state["run_id"], "timestamp": now(), "cycle": 0, "action": "initialize",
                      "node_id": "q1", "question": question, "config": config}
-            extras = {}
+            extras = {questions.PATH: markdown} if document is not None else {}
             if chosen is None and databases is None:
                 event.update(action="R0", status="committed")
                 try:
-                    value = self._model(event, "R0", {"question": question, "strategies": values}, state)
+                    value = self._model(event, "R0", {"question": question, "strategies": values,
+                        **questions.context(state, "R0")}, state)
                     decisions.validate("R0", value, values)
                     chosen = strategies.select(values, value["strategy"])
                     event.update(decision=value, action_committed="R0")
@@ -78,7 +83,7 @@ class Research:
             state["strategies"] = [deepcopy(chosen)]
             event.update(databases=chosen["databases"], strategy=chosen)
             branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
-            tree.validate(state, memories, {})
+            tree.validate(state, memories, extras)
             identity = event.get("interaction_id")
             if identity:
                 self.trace.write(identity, "validation", {"timestamp":now(), "accepted":True, "action":"R0"})
@@ -150,6 +155,7 @@ class Research:
                     "committed_event": event})
 
     def _model(self, event, action, context, state):
+        context = {"research_brief": None, **context}
         reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
         require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
         unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
@@ -303,7 +309,7 @@ class Research:
                 context = r3.context(state, identity, evidence)
             else:
                 old_context, searches = self._context(state, memories, equations, files, identity)
-                context = {k: v for k, v in branching.context(state, memories, equations, identity).items() if k != "max_children"}
+                context = {k: v for k, v in branching.context(state, memories, equations, identity, action="R4").items() if k != "max_children"}
                 context = {**context,
                            "search_history": old_context["search_history"]}
             if action == "R3":

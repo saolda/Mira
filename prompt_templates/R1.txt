@@ -29,3 +29,7 @@ RELEVANT GLOSSARY AND RECENT SEARCH OUTCOMES
 
 Return JSON only:
 {"keywords": ["a distinctive topic phrase", "one necessary qualifier"]}
+
+SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
+{{research_brief}}
+Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.

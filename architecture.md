@@ -19,6 +19,34 @@ priorities, memory construction, transitions, persistence and scheduling. Extrac
 claims and model reasoning remain unverified; structural validity does not prove
 scientific correctness.
 
+## Research question documents
+
+`research-init` accepts either the existing positional question or
+`--question-file PATH`. The UTF-8 Markdown document starts with a single
+`# Research question` containing mandatory prose. Optional, unique `## Context`
+and `## Research objectives` sections contain background and a Markdown list.
+Unknown/deeper headings, empty sections and non-list objectives are rejected.
+The parsed question preserves its original text, excluding blank separators,
+and becomes the root node's question without normalization.
+
+Initialization publishes the exact original bytes at `research/question.md`
+together with `question_document` in `research/state.json`: canonical path,
+SHA-256, question, separate context and verbatim objective Markdown items.
+Both source and parsed fields are immutable and validated together on reads,
+publication and journal recovery. Restart does not reread the external input.
+Experiments without a question document retain the positional/legacy interface.
+
+R0, R1, R3–R5 and S1/S2 receive a `research_brief` projection, alongside their
+existing exact question/root/ancestor slots. All objectives are retained;
+background paragraphs are ranked by selected-question word overlap, then bounded
+to 2048 UTF-8 bytes for R0/R1, 1536 for R3, 3072 for S1 and 4096 for R4/R5/S2.
+The projection identifies the source hash and explicitly flags excerpted context.
+The raw document is never repeated in prompts. R2 has no model prompt and uses
+R1's query. Existing exact rendered-request token validation includes the brief
+for research capacity, selection and synthesis; essential questions/objectives
+are never silently shortened to fit. A saved legacy S2 context defaults to no
+brief. `research-state` exposes the parsed fields separately.
+
 ## Persistent tree and action states
 
 New experiments use `mira_research: 2` in `research/state.json`. Each node stores:
