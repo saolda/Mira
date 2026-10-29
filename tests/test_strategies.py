@@ -125,7 +125,6 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual([e['action'] for e in events],['R1','R2','R2','R2','R3'])
         self.assertTrue(all(e['status']=='committed' for e in events))
         self.assertEqual(a.queries,b.queries);self.assertEqual(b.queries,c.queries)
-        self.assertEqual(r.step()['action'],'S1')
         self.assertEqual(r.step()['action'],'R4')
         n=self.state()['nodes']['q1'];self.assertIsNone(n['keywords']);self.assertEqual(n['next_database_index'],0)
         self.assertEqual(n['previous_search_terms'],['heat'])
@@ -148,7 +147,6 @@ class StrategyTests(unittest.TestCase):
         r=self.runner([{'keywords':['heat']},decision('retry'),{'keywords':['thermal']}],{'a':a,'b':b})
         r.initialize('Q?',['a','b'], context_budget=12000)
         for _ in range(5):r.step()
-        self.assertEqual(r.step()['action'],'S1')
         until=self.state()['provider_cooldowns']['a']
         restarted=Research(self.root,self.llm,{'a':a,'b':b})
         e=restarted.step();self.assertEqual(e['action'],'R2');self.assertEqual(e['search_status'],'rate_limited')

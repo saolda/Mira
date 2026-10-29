@@ -25,7 +25,11 @@ class DemoLLM(ScriptedLLM):
     def complete(self, serialized_request):
         self.requests.append(serialized_request)
         content = loads(serialized_request)["messages"][-1]["content"]
-        action = "R1" if content.startswith("Generate concise, targeted search terms") else "R3" if "RETRIEVED RESEARCH\n" in content else content.split(":", 1)[0]
+        action = ("R1" if content.startswith("Generate concise, targeted search terms") else
+                  "R3" if "RETRIEVED RESEARCH\n" in content else
+                  "R4" if "PREVIOUS SEARCHES\n" in content else
+                  "R5" if "ACCUMULATED RESEARCH\n" in content else
+                  "S1" if "Eligible memory catalogue:\n" in content else "S2")
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
@@ -42,9 +46,18 @@ class DemoLLM(ScriptedLLM):
                         ["How do fixture conditions matter?", "What uncertainties remain?"],
                         "How do fixture conditions matter?": ["What measurement assumptions apply?"]}.get(question, [])
             value = {"questions": children}
+        elif action == "S1":
+            catalogue = decoder.raw_decode(content.split("Eligible memory catalogue:\n", 1)[1])[0]
+            groups = [[m for m in catalogue if m["node_id"] == identity]
+                      for identity in dict.fromkeys(m["node_id"] for m in catalogue)]
+            chosen = next((g for g in groups if len(g) >= 2), catalogue)
+            value = {"disposition": "select", "memory_ids": [m["id"] for m in chosen],
+                     "objective": "Compare the fictional barrier measurements and their uncertainty.",
+                     "scores": {"R": 5, "C": 4, "X": 0, "N": 3, "E": 3},
+                     "reason": "Prewritten comparison of related fixture evidence."}
         else:
             # Stable fixtures reference exactly the selected inputs; text is prewritten.
-            value = {"title": "Fixture synthesis", "summary": "Synthetic comparison with uncertainty.",
+            value = {"disposition": "synthesis", "title": "Fixture synthesis", "summary": "Synthetic comparison with uncertainty.",
                 "findings": [{"label": "Comparison", "proposition": "The fictional values differ, with no claim of real-world validity.",
                     "explanation": "This scripted synthesis tests traceability rather than research quality.",
                     "provenance": "Prewritten demonstration; see every input finding.",
@@ -58,7 +71,7 @@ def demonstrate(root, *, max_cycles=50):
     # Explicit fixture budget fits complete research prompts and forces synthesis
     # descent through all three levels. The runtime default remains configurable.
     r.initialize("What can the fictional heat-barrier fixture tell us?", ["fixture"], synthesis_interval=100,
-                 context_budget=12000, output_reserve=2048, research_capacity_tokens=6000)
+                 context_budget=24000, output_reserve=2048, research_capacity_tokens=6000)
     outcome = r.run(max_cycles)
     return {"status": outcome["status"], "metrics": r.inspect(), "model_calls": len(llm.requests),
             "knowledge": r.knowledge.validate(), "root": str(r.store.root)}

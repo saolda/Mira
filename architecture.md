@@ -30,8 +30,10 @@ New experiments use `mira_research: 2` in `research/state.json`. Each node store
 - An optional immutable `split_attempt` receipt, including proposed and accepted
   questions, discarded duplicates and whether the committed attempt was empty.
 - Auditable `research_capacity`, structured ripeness counts and score.
-- Separate synthesis frontier count, score, living-descendant count and
+- Separate synthesis frontier count, living-descendant count and
   `synthesis_complete` flag.
+- Experiment-wide synthesis-attempt register, pending S2 selection and
+  terminal catalogue-evaluation fingerprint.
 
 R1–R5 and S1–S2 are **actions**, selected for one controller cycle. They are not
 persistent node statuses. Research statuses are:
@@ -263,7 +265,8 @@ Rejected/transport-failed attempts commit no split receipt and can be retried.
 
 ## Research priorities and controller scheduling
 
-Each cycle performs one activity and **at most one model call**. There is no
+Each cycle performs one action and **at most one model call**. S1 and S2
+occupy separate cycles; a validated S1 selection persists for S2. There is no
 uninterrupted global R1–R4 sequence: a different living node can run between any
 two actions. After each successful direct research action, active priority loses
 one down to zero and other living nodes gain one up to `priority_max` (10).
@@ -274,11 +277,13 @@ R5 and synthesis never age/reset another node's research progress.
 Controller order is:
 
 1. Reassess capacity and refresh queues.
-2. If the synthesis cadence is due, run one S1/S2 and reset its counter.
+2. If an S2 selection is pending, run S2. Otherwise, when synthesis is due
+   and a permitted candidate combination exists, run S1.
 3. Otherwise, if exhausted nodes exist and either no living nodes remain or
    `research_cycles_since_branching >= branching_interval`, run R5 on the ripest.
 4. Otherwise run the active living node's next R1–R4 action.
-5. With no living or exhausted nodes, drain eligible synthesis and then finish.
+5. With no living or exhausted nodes, invoke S1 on unevaluated eligible
+   combinations, then finish when no pending S2 or permitted opportunity remains.
 
 `branching_interval` defaults to five **direct research actions** between attempts
 while living nodes exist. Successful R5 resets this counter. Consequently R5 can
@@ -289,43 +294,95 @@ of unresearched children added; there is intentionally no speculative global
 balancing algorithm or guarantee of bounded total tree size.
 
 The synthesis cadence defaults to five research/branching work actions; R5 counts
-as a work slot so branching cannot starve synthesis. S1 is a deterministic empty
-or blocked selection; S2 consumes one model call. Branching and synthesis never
-share a cycle with research. A terminal event is recorded only when neither
-living research nor pending R5 remains; zero living nodes alone is not completion.
+as a work slot so branching cannot starve synthesis. S1 and S2 each consume one
+model call and run in separate cycles. Branching and synthesis never share a
+cycle with research. A terminal `no_candidate` must not trigger repeated S1
+calls against an unchanged catalogue. A terminal event is recorded only when
+neither living research, pending R5, pending S2 nor permitted synthesis work
+remains; zero living nodes alone is not completion.
+
+## Synthesis actions: S1 and S2
+
+### S1: model-assisted synthesis selection
+
+S1 is eligible whenever at least two frontier memories form a permitted,
+previously unattempted combination. Python schedules S1 after every five
+completed research or branching actions (configurable through
+`synthesis_interval`), or immediately when no research or branching work
+remains. A pending S2 action always takes precedence.
+
+Python supplies a catalogue of eligible research and synthesis memories:
+ID, content hash, owning question and ancestor context, summary, knowledge-unit
+types, provenance, lineage and estimated S2 token cost. Killed branches and
+ineligible synthesis lineage are excluded. S1 makes **one fresh LLM call**
+to propose at least two memories and a specific analytical objective, or
+return `no_candidate`. Selections may cross research branches.
+
+S1 estimates *synthesizability* with five 0–5 scores: shared-question
+relevance (R), complementarity (C), contradictions worth examining (X),
+potential new understanding (N), and evidence adequacy (E). The initial
+score is R+C+X+N+E. Addressing the same question increases R, but is neither
+required nor sufficient. Prefer focused, coherent groups over large,
+weakly related collections. Record the component scores and rationale.
+
+Python rejects unknown, ineligible, previously attempted or oversized
+selections. Budget measurement includes the full S2 request, chat overhead
+and output reserve. Complete memories are preferred; deterministic structured
+projections may omit bookkeeping but must preserve substantive units,
+qualifications, sources and relationships. An oversized selection is rejected
+or deferred, never silently reduced. Each S1 invocation reassesses current
+evidence; model decisions are never cached or reused. `no_candidate`
+creates no memory and consumes nothing.
+
+### S2: analytical synthesis
+
+S2 receives S1's objective and selected memories and performs cross-memory
+analysis in **one LLM call**. It returns `synthesis` or `no_synthesis`.
+A valid synthesis requires at least one substantive finding integrating
+knowledge units from **two distinct input memories**. Findings cite stable
+anchors, preserve uncertainty and provenance, and distinguish reported
+claims from independently demonstrated results.
+
+Python validates references and derives contributing memory IDs from the
+accepted findings. Only contributing memories are consumed; unused inputs
+remain on the frontier. A partial synthesis is valid. `no_synthesis` creates
+no memory and consumes nothing. Both dispositions complete the attempt.
+Invalid output commits no synthesis or consumption. On success, Python
+atomically commits the synthesis memory, consumption marks and attempt record;
+original memories remain stored and traceable.
+
+### Synthesis-attempt register
+
+Persist each S2 attempt with selected memory IDs and content hashes, S1
+objective/scores, interaction IDs, S2 disposition, contributing/unused IDs,
+reasons and resulting synthesis ID (if any).
+
+For a **completed** attempt with memory-version set A, reject subsequent
+selections B whenever **B ⊆ A**. Thus attempting `{r1,r2,r3}` excludes
+`{r1,r2}`, but not `{r1,r2,r4}`. The rule applies to successful, partial
+and `no_synthesis` outcomes; changed memory hashes count as new versions.
+Pending and failed attempts do not permanently exclude combinations.
+Record pending dispatches for crash recovery; completed attempt registration,
+synthesis creation and consumption marks commit atomically.
 
 ## Synthesis integration
 
-The frontier consists of unconsumed direct research **and synthesis** memories
-from the eligible subtree. Consumed originals are not included alongside their
-synthesis. Killed branches retain all files and provenance but contribute neither
-inputs nor candidates to normal ancestor synthesis. Existing syntheses whose
-lineage contains a now-killed branch are excluded too, without deleting them.
+The frontier contains eligible, unconsumed research and synthesis memories
+within a node's subtree. A synthesis replaces only contributing inputs in
+the frontier; unused inputs remain. Consumed originals are retained. Killed
+branches and syntheses with killed-branch lineage are excluded.
 
-A node's `synthesis_complete` flag means no living/exhausted work remains in its
-eligible subtree and its frontier has at most one memory. An answered parent can
-therefore remain synthesis-incomplete while its descendants research or await
-R5. Exhausted nodes always retain their branching opportunity. Split nodes can
-remain incomplete while descendants work. Completion does not relocate or consume
-the final memory: it remains available to an ancestor.
+A node is `synthesis_complete` when no living/exhausted work remains in its
+eligible subtree and no permitted synthesis combination remains. Multiple
+frontier memories may remain after all combinations are attempted or S1
+returns `no_candidate`. To prevent repeated terminal S1 calls on unchanged
+evidence, record the evaluated catalogue fingerprint; this is a scheduling
+guard, **not reuse of an S1 decision**. New or revised memories invalidate
+the guard and reopen eligibility.
 
-Candidates need at least two frontier memories. Score is frontier count plus a
-1000 terminal bonus when no living/exhausted eligible work remains below or at the
-node. Candidate ties use creation order. Selection prefers broad collections;
-when complete memories do not fit, cached deterministic structured summaries
-retain every unit, qualification, source reference and relationship, omitting
-storage bookkeeping. Smaller summaries are packed first when necessary; other
-candidates are tried before deferring. Token counts include chat overhead and a
-configurable synthesis output reserve. S1 records deferrals and retries at the
-normal cadence while other work continues; an explicit blocked outcome is returned
-only when no collection fits and no other research or branching remains.
-
-S2 validates every referenced stable finding/question/equation/image anchor and
-requires coverage of every supplied input. Input hashes and representation receipts
-record exactly what the model received. Its new synthesis and input consumption marks
-commit atomically with state. It never consumes a single memory, deletes research
-or overwrites originals. Question-only memories are valid synthesis inputs;
-unresolved questions must remain qualified as unresolved.
+Answered or split parents may remain incomplete while descendants work.
+Exhausted nodes retain their R5 opportunity. A final synthesis memory
+remains available to ancestors.
 
 ## Tree health and inspection
 

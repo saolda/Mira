@@ -347,7 +347,7 @@ class R3Tests(unittest.TestCase):
         memory,eq,docs,state=self.make([equation(None),image(None,None)])
         second=deepcopy(memory);second.id="r2";second.units=[Unit("i1","Figure",{"Image":"Caption","Figure reference":"Fig 2","Provenance":"Fixture"})]
         second.relationships=[];second.metadata.pop("source")
-        value={"title":"Combined","summary":"Scoped integration","findings":[{"label":"Combined","proposition":"A scoped integration.","explanation":"No verification implied.","provenance":"Supplied media only.","source_findings":["r1#e1","r2#i1"]}]}
+        value={"disposition":"synthesis","title":"Combined","summary":"Scoped integration","findings":[{"label":"Combined","proposition":"A scoped integration.","explanation":"No verification implied.","provenance":"Supplied media only.","source_findings":["r1#e1","r2#i1"]}]}
         gardener.validate(value,[memory,second])
         second.metadata.update(created_order=2)
         state["nodes"]["q1"]["memory_ids"].append("r2")

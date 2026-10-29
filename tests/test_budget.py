@@ -142,7 +142,7 @@ class BudgetTests(unittest.TestCase):
             seed(r,own=1,child=0,leaf=0,living=('q1',))
             model.prompt_tokens=1952
             event=r.step()
-            self.assertEqual((event['action'],event['reason']),('S1','capacity_transition'))
+            self.assertEqual((event['action'],event['reason']),('capacity_transition','capacity_transition'))
             self.assertEqual(r.inspect()['nodes']['q1']['status'],'exhausted')
             self.assertFalse(model.requests)
             event=r.step()

@@ -82,8 +82,8 @@ class GardenerTests(unittest.TestCase):
             state = self.state(); state["context_budget"] = 2100; state["research_capacity_tokens"] = 2000
             self.r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
         event = self.r.step()
-        self.assertEqual(event["status"], "blocked_synthesis")
-        self.assertEqual(event["reason"], "no_fitting_collection")
+        self.assertEqual(event["status"], "rejected")
+        self.assertIn("blocked_context_budget", event["error"])
         self.assertFalse(self.llm.requests)
         self.assertEqual(self.state()["nodes"]["q1"]["unsynthesized_memory_count"], 6)
         self.assertEqual(self.r.knowledge.validate()["documents"], 6)
@@ -125,30 +125,36 @@ class GardenerTests(unittest.TestCase):
                 tree.refresh(state, memories)
                 r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
             r.llm = DemoLLM()
+            self.assertEqual(r.step()["action"], "S1")
             self.assertEqual(r.step()["action"], "S2")
             state = loads(Path(directory, "research/state.json").read_text())
-            self.assertEqual(state["research_cycles"], 5); self.assertEqual(state["synthesis_cycles"], 1)
+            self.assertEqual(state["research_cycles"], 5); self.assertEqual(state["synthesis_cycles"], 2)
             self.assertEqual(state["research_cycles_since_synthesis"], 0)
             self.assertEqual(state["nodes"]["q1"]["priority"], 5)
 
-    def test_rejected_synthesis_does_not_consume_or_increment_counters(self):
+    def test_rejected_synthesis_records_failure_without_consuming_or_research_aging(self):
         seed(self.r)
-        self.r.llm = ScriptedLLM([{"title": "Invalid", "summary": "No traceability.", "findings": []}])
+        self.assertEqual(self.r.step()["action"], "S1")
+        self.r.llm = ScriptedLLM([{"disposition": "synthesis", "title": "Invalid", "summary": "No traceability.", "findings": []}])
         before = self.state()
         event = self.r.step(); self.assertEqual(event["status"], "rejected")
-        self.assertEqual(self.state(), before)
+        self.assertEqual(self.state()["research_cycles"], before["research_cycles"])
+        self.assertEqual(self.state()["synthesis_attempts"][0]["status"], "failed")
+        self.assertIsNone(self.state()["pending_synthesis"])
         self.assertEqual(self.r.knowledge.document("r1").metadata["synthesized_by"], None)
         self.assertIn('"accepted": false', transcript(self.root, full=True))
 
     def test_guard_against_partial_source_coverage(self):
         seed(self.r)
         memories = [self.r.knowledge.document("r1"), self.r.knowledge.document("r2")]
-        invalid = {"title": "Invalid", "summary": "Drops second source.", "findings": [{"label": "Partial",
+        invalid = {"disposition": "synthesis", "title": "Invalid", "summary": "Drops second source.", "findings": [{"label": "Partial",
             "proposition": "Only one input", "explanation": "Fixture", "provenance": "Fixture", "source_findings": ["r1#f1"]}]}
-        self.assertRaisesRegex(ValueError, "every consumed input", gardener.validate, invalid, memories)
+        self.assertRaisesRegex(ValueError, "two distinct input memories", gardener.validate, invalid, memories)
 
     def test_interrupted_gardener_repair_resolves_transcript_without_second_call(self):
         seed(self.r, own=2, child=0, leaf=0)
+        self.assertEqual(self.r.step()["action"], "S1")
+        self.llm.requests.clear()
         p = multiprocessing.get_context("fork").Process(target=crash_gardener, args=(str(self.root),))
         p.start(); p.join(10); self.assertEqual(p.exitcode, 72)
         report = self.r.store.recovery_status()["operations"][0]

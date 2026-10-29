@@ -12,6 +12,7 @@ from mira.interactions import read_records
 from mira.research import Research
 from mira.research_demo import DemoLLM
 from test_gardener import seed
+from test_synthesis import selection
 
 
 def crash_collection(root, stage):
@@ -44,7 +45,7 @@ def populate(r, count=8):
         tree.refresh(state,memories)
         r.store.publish(memories,equations,ledger,token,files={'research/state.json':dumps(state)})
         # Budget exactly for all condensed inputs, while full Markdown cannot fit.
-        supplied=gardener.context(state,memories,equations,'q1',memories,summarized=True)
+        supplied=gardener.context(state,memories,equations,'q1',memories,summarized=True, objective='Compare the fictional barrier measurements and their uncertainty.')
         limit=len(decisions.request(r.llm.model,r.llm.settings,'S2',supplied).encode())+2048
         state.update(context_budget=limit,research_capacity_tokens=limit*3//4)
         token,_,_,_=r.store.read()
@@ -62,12 +63,13 @@ class CollectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             r=self.make(root); original=populate(r)
             self.assertTrue(all(len(render(m).encode())>6000 for m in original.values()))
+            self.assertEqual(r.step()['action'], 'S1')
             event=r.step()
             self.assertEqual((event['action'],event['status']),('S2','committed'))
             self.assertEqual(len(event['input_ids']),8)
-            record=read_records(root)[0]
+            record=read_records(root)[1]
             supplied=record['request']['context']['input_memories']
-            self.assertEqual(len(r.llm.requests),1)
+            self.assertEqual(len(r.llm.requests),2)
             self.assertLessEqual(event['context_usage']['estimated_tokens'],r.inspect()['context_budget'])
             for summary in supplied:
                 m=original[summary['id']]
@@ -100,7 +102,7 @@ class CollectionTests(unittest.TestCase):
 
     def test_deferral_preserves_memories_and_other_research_continues(self):
         with tempfile.TemporaryDirectory() as root:
-            llm=ScriptedLLM([{'keywords':['measurement']}])
+            llm=ScriptedLLM([selection(['r1','r2']), {'keywords':['measurement']}, selection(['r1','r2'])])
             r=Research(root,llm,{})
             r.initialize('Research?', ['fixture'],context_budget=12000)
             seed(r,own=2,child=0,leaf=0,living=('q3',))
@@ -116,9 +118,9 @@ class CollectionTests(unittest.TestCase):
             event=r.step()
             self.assertEqual((event['action'],event['status']),('S1','committed'))
             self.assertEqual(event['deferred']['attempts'],1)
-            self.assertFalse(llm.requests)
-            self.assertEqual(r.step()['action'],'R1')
             self.assertEqual(len(llm.requests),1)
+            self.assertEqual(r.step()['action'],'R1')
+            self.assertEqual(len(llm.requests),2)
             self.assertTrue(all(r.knowledge.document(i).metadata['synthesized_by'] is None for i in ('r1','r2')))
             # Deferral is recorded and retried at cadence, rather than abandoned.
             with r.store.lock():
@@ -134,17 +136,18 @@ class CollectionTests(unittest.TestCase):
             state=loads(Path(root,'research/state.json').read_text())
             supplied=gardener.context(state,memories,[],'q1',memories,summarized=True)['input_memories']
             supplied[0]['units']=[u for u in supplied[0]['units'] if u['id']!='r1#f1']
-            value={'title':'Test','summary':'Test','findings':[{'label':'Test','proposition':'Test','explanation':'Test',
+            value={'disposition':'synthesis','title':'Test','summary':'Test','findings':[{'label':'Test','proposition':'Test','explanation':'Test',
                 'provenance':'Fixture','source_findings':['r1#f1','r2#f1','r3#f1']}]}
             self.assertRaisesRegex(ValueError,'invalid synthesis finding reference',gardener.validate,value,memories,supplied)
 
     def test_unresolved_question_references_survive_corpus_admission(self):
         with tempfile.TemporaryDirectory() as root:
             r=self.make(root); populate(r,3)
-            r.llm=ScriptedLLM([{'title':'Unresolved generalization','summary':'The fixtures leave generalization open.',
+            r.llm=ScriptedLLM([selection(['r1','r2','r3']), {'disposition':'synthesis','title':'Unresolved generalization','summary':'The fixtures leave generalization open.',
                 'findings':[{'label':'Open question','proposition':'Cross-domain generalization remains unresolved.',
                     'explanation':'These synthetic inputs provide no measurement answering the question.',
                     'provenance':'Supplied open questions only.', 'source_findings':['r1#q1','r2#q1','r3#q1']}]}])
+            self.assertEqual(r.step()['action'],'S1')
             e=r.step()
             self.assertEqual((e['action'],e['status']),('S2','committed'))
             output=r.knowledge.document('s1')
@@ -156,6 +159,8 @@ class CollectionTests(unittest.TestCase):
         for stage in ('prepared','replaced:memories/s1.md','before_commit'):
             with self.subTest(stage=stage),tempfile.TemporaryDirectory() as root:
                 r=self.make(root); original=populate(r,4)
+                self.assertEqual(r.step()['action'],'S1')
+                r.llm.requests.clear()
                 process=multiprocessing.get_context('fork').Process(target=crash_collection,args=(root,stage))
                 process.start(); process.join(10)
                 self.assertEqual(process.exitcode,74)
@@ -165,7 +170,7 @@ class CollectionTests(unittest.TestCase):
                 r.store.repair(pending['id'],apply=True)
                 self.assertEqual(r.step()['status'],'finished')
                 self.assertFalse(r.llm.requests)
-                self.assertEqual(len(read_records(root)),1)
+                self.assertEqual(len(read_records(root)),2)
                 output=r.knowledge.document('s1')
                 self.assertEqual(output.metadata['source_memories'],list(original))
                 self.assertEqual({s['memory_id']:s['memory_sha256'] for s in output.metadata['synthesis_inputs']},
@@ -175,6 +180,7 @@ class CollectionTests(unittest.TestCase):
     def test_separate_synthesis_output_reserve_is_used_and_validated(self):
         with tempfile.TemporaryDirectory() as root:
             r=self.make(root,synthesis_output_reserve=4096); seed(r,own=3,child=0,leaf=0)
+            self.assertEqual(r.step()['action'],'S1')
             e=r.step()
             self.assertEqual(e['context_usage']['output_reserve'],4096)
             self.assertEqual(e['selection']['output_reserve'],4096)

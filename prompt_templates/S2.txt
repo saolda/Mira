@@ -1,7 +1,9 @@
-S2: Synthesize findings across memories
+Synthesize findings across memories
 
-Integrate the supplied unconsumed memories into one synthesis that advances the
-selected question and its ancestors. Preserve source attribution, uncertainty,
+Evaluate whether the selected memories support substantive, evidence-grounded
+synthesis addressing the supplied analytical objective and research questions.
+Examine complementary findings, contradictions, methodological differences,
+limitations and unresolved questions. Preserve source attribution, uncertainty,
 disagreements, assumptions, limitations and unresolved questions. Distinguish
 reported evidence from new inference. Do not manufacture agreement or treat
 repeated claims as independent confirmation. Unverified inputs remain unverified.
@@ -16,8 +18,14 @@ missing memories were included. Do not claim coverage beyond this collection.
 
 For every synthesis finding, cite exact finding IDs from input_memories in
 source_findings (for example r1#f1 or s2#f1). For question-only inputs, reference question anchors (such as r1#q1) and preserve their unresolved status. For equation- or image-only inputs,
-reference their supplied stable equation/image anchors (such as r1#e1 or r1#i1). Every selected input memory must
-contribute at least one referenced finding; cover at least two distinct memories.
+reference their supplied stable equation/image anchors (such as r1#e1 or r1#i1).
+A valid synthesis requires at least one substantive integrated finding supported
+by knowledge units from at least two distinct input memories. Merely summarising
+or concatenating separate findings is insufficient. Distinguish reported claims,
+experimental observations, independently established results and new inferences.
+Do not force every selected memory into the synthesis. Include only memories that
+genuinely contribute. If some inputs contribute and others do not, produce a partial
+synthesis. Python determines contributing memories from validated references.
 When an input is already a synthesis, reference its supplied findings without
 also treating unsupplied originals as additional consumed inputs. Use equation
 definitions only as supplied and preserve their assumptions.
@@ -40,16 +48,25 @@ Selected node:
 Ancestor questions:
 {{ancestor_questions}}
 
+Analytical objective:
+{{objective}}
+
 Input memories:
 {{input_memories}}
 
 Referenced equation definitions:
 {{equations}}
 
-Return JSON only, with exactly title, summary and a nonempty findings list.
+If no substantive synthesis is justified, return exactly:
+{"disposition": "no_synthesis", "reason": "Brief explanation"}
+
+Otherwise return JSON only, with exactly disposition "synthesis", title, summary
+and a nonempty findings list.
 Example structure (use actual supplied finding IDs):
-{"title": "A concise synthesis title", "summary": "The integration and its limits", "findings": [{"label": "A concise finding label", "proposition": "The scoped conclusion", "explanation": "How the inputs combine, including disagreement and uncertainty", "provenance": "How this conclusion follows from the attributed inputs", "source_findings": ["r1#f1", "r2#f1"]}]}
+{"disposition": "synthesis", "title": "A concise synthesis title", "summary": "The integration and its limits", "findings": [{"label": "A concise finding label", "proposition": "The scoped conclusion", "explanation": "How the inputs combine, including disagreement and uncertainty", "provenance": "How this conclusion follows from the attributed inputs", "source_findings": ["r1#f1", "r2#f1"]}]}
 
 Include only the fields shown. All text fields must be nonempty; titles and labels
 must be single-line. Each source_findings list must contain nonempty, distinct,
 exact supplied finding references. Preserve finding-level lineage for each conclusion.
+
+Return JSON only.
