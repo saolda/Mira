@@ -63,8 +63,8 @@ class PublicAPI:
             return validate_search({'status': 'ok' if rows else 'empty', 'results': rows})
         except HTTPError as exc:
             outcome = {'status': 'rate_limited' if exc.code == 429 else 'failed', 'results': [],
-                       'http_status': exc.code, 'retry_after': exc.headers.get('Retry-After') if exc.headers else None,
-                       'error': 'provider HTTP request failed'}
+                       'http_status': exc.code, 'retry_after': exc.headers.get('Retry-After') if exc.headers else None}
+            if exc.code != 429: outcome['error'] = 'provider HTTP request failed'
             exc.close()
             return outcome
         except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError) as exc:

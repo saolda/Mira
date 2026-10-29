@@ -40,17 +40,18 @@ def image(related=0, url="https://example.org/fig2.png"):
     return {"type": "image", "text": "Synthetic caption", "url": url, "reference": "Figure 2", "source_ids": ["source-a"], "related_to": related}
 
 
-def crash_extraction(root, stage):
+def crash_extraction(root, stage, response=None):
     def fault(point):
         if point == stage: os._exit(75)
-    Research(root, ScriptedLLM([{"summary": "Two results with important limitations.",
-                               "results": [result(), result("claim")]}]), {}).step(fault=fault)
+    response = response if response is not None else {"summary": "Two results with important limitations.",
+                                                     "results": [result(), result("claim")]}
+    Research(root, ScriptedLLM([response]), {}).step(fault=fault)
 
 
 class CompactResearchTests(unittest.TestCase):
-    def test_summary_contract_rejects_missing_invalid_and_inconsistent_summaries(self):
+    def test_summary_contract_rejects_missing_invalid_summaries(self):
         for value in ({"results": [result()]}, {"summary": None, "results": []},
-                      {"summary": "", "results": [result()]}, {"summary": "No results", "results": []},
+                      {"summary": "", "results": [result()]},
                       {"summary": "Valid", "results": [result()], "extra": True}):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 r3.validate(value, research())
@@ -58,6 +59,16 @@ class CompactResearchTests(unittest.TestCase):
         evidence["results"].append({**evidence["results"][0], "id": "source-b"})
         with self.assertRaisesRegex(ValueError, "one source"):
             r3.validate({"summary": "Multiple sources", "results": [result()]}, evidence)
+
+    def test_empty_results_discard_summary_without_changing_raw_proposal(self):
+        proposal = {"summary": "The source contains no relevant scientific research.", "results": []}
+        normalized = validate("R3", proposal, research())
+        self.assertEqual(normalized, {"summary": "", "results": []})
+        self.assertEqual(proposal["summary"], "The source contains no relevant scientific research.")
+        ledger = {"r": 1, "s": 1}
+        self.assertIsNone(r3.create_memory(tree.initial("Q?", ["fixture"]), [], [], ledger,
+                                          "q1", [], research(), proposal["summary"]))
+        self.assertEqual(ledger, {"r": 1, "s": 1})
 
     def test_compact_prose_preserves_literal_structure_and_omits_empty_fields(self):
         state = tree.initial("Q?", ["fixture"])
@@ -141,6 +152,100 @@ class CompactResearchTests(unittest.TestCase):
             self.assertEqual(runner.step()["memory_ids"], ["r1"])
             self.assertEqual(runner.knowledge.document("r1").metadata["source"]["id"], "source-b")
 
+    def test_endurance_summary_mismatch_is_normalized_and_run_continues(self):
+        rows = research()["results"]
+        rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+        raw_summary = "This source defines AI agents but provides no useful scientific research results."
+        with tempfile.TemporaryDirectory() as root:
+            runner, llm = self.runner(root, [{"summary": raw_summary, "results": []},
+                                            {"summary": "Useful second source.", "results": [{**result(), "source_ids": ["source-b"]}]},
+                                            {"decision": "answered", "reason": "Fixture completed."}], rows)
+            outcome = runner.run(3)
+            self.assertEqual([e["action"] for e in outcome["actions"]], ["R3", "R3", "R4"])
+            first = outcome["actions"][0]
+            self.assertEqual(first["status"], "committed")
+            self.assertEqual(first["normalization"], "discarded_summary_for_empty_results")
+            self.assertEqual(first["memory_ids"], [])
+            self.assertEqual(outcome["actions"][1]["memory_ids"], ["r1"])
+            record = read_records(root)[1]
+            self.assertIn(raw_summary, record["response"]["raw"])
+            self.assertTrue(record["validation"]["accepted"])
+            self.assertEqual(len(llm.requests), 4)
+
+    def test_invalid_r3_output_logs_error_and_skips_only_failed_source(self):
+        bad_source = {"summary": "Invalid reference.", "results": [{**result(), "source_ids": ["invented"]}]}
+        malformed_content = dumps({"choices": [{"finish_reason": "stop", "message": {"content": "{not JSON"}}]})
+        for bad in ("{not JSON", malformed_content, dumps({"choices": [None]}),
+                    dumps({"choices": [{"finish_reason": "stop", "message": None}]}),
+                    bad_source, {"memories": []},
+                    {"summary": None, "results": []}):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as root:
+                rows = research()["results"]
+                rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+                runner, llm = self.runner(root, [bad, {"summary": "Second source.", "results": [{**result(), "source_ids": ["source-b"]}]},
+                                                {"decision": "answered", "reason": "Fixture completed."}], rows)
+                resumed = Research(root, llm, runner.adapters)
+                outcome = resumed.run(3)
+                self.assertEqual([e["action"] for e in outcome["actions"]], ["R3", "R3", "R4"])
+                skipped = outcome["actions"][0]
+                self.assertEqual(skipped["status"], "committed")
+                self.assertEqual(skipped["reason"], "invalid_extraction_skipped")
+                self.assertEqual(skipped["skipped_source_ids"], ["source-a"])
+                self.assertTrue(skipped["error"])
+                self.assertFalse(skipped["extraction_accepted"])
+                self.assertEqual(skipped["memory_ids"], [])
+                self.assertEqual(outcome["actions"][1]["memory_ids"], ["r1"])
+                records = read_records(root)
+                self.assertFalse(records[1]["validation"]["accepted"])
+                self.assertEqual(records[1]["validation"]["error"], skipped["error"])
+                self.assertEqual(records[1]["outcome"]["action_committed"], "R3")
+                state = loads(Path(root, "research/state.json").read_text())
+                self.assertEqual(len(state["source_index"]), 2)
+                self.assertIsNone(state["nodes"]["q1"]["pending_results"])
+                self.assertEqual(state["research_cycles"], 5)
+                self.assertEqual(resumed.knowledge.validate()["documents"], 1)
+                self.assertEqual(len(llm.requests), 4)
+
+    def test_skipped_source_advances_to_next_database_without_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            llm = ScriptedLLM([{"keywords": ["physics"]}, "{not JSON"])
+            runner = Research(root, llm, {"first": FixtureSearch([research()]),
+                                          "second": FixtureSearch([{"status": "empty", "results": []}])})
+            runner.initialize("Physics?", ["first", "second"], context_budget=24000)
+            outcome = runner.run(4)
+            self.assertEqual([e["action"] for e in outcome["actions"]], ["R1", "R2", "R3", "R2"])
+            self.assertEqual(outcome["actions"][-1]["provider"], "second")
+            self.assertEqual(len(llm.requests), 2)
+
+    def test_failed_source_is_not_extracted_again_after_retrieval_and_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            runner, llm = self.runner(root, ["{not JSON"])
+            self.assertEqual(runner.step()["skipped_source_ids"], ["source-a"])
+            with runner.store.lock():
+                token, docs, equations, ledger = runner.store.read()
+                state = loads(runner.store._files()["research/state.json"])
+                state["nodes"]["q1"]["next_database_index"] = 0
+                runner.store.publish(docs, equations, ledger, token, files={"research/state.json": dumps(state)})
+            event = Research(root, llm, runner.adapters).step()
+            self.assertEqual(event["action"], "R2")
+            self.assertEqual(event["duplicate_count"], 1)
+            self.assertEqual(len(llm.requests), 2)
+
+    def test_r3_context_and_transport_errors_keep_source_pending(self):
+        for blocked in (True, False):
+            with self.subTest(blocked=blocked), tempfile.TemporaryDirectory() as root:
+                runner, llm = self.runner(root, [RuntimeError("temporary transport failure")])
+                pending = loads(Path(root, "research/state.json").read_text())["nodes"]["q1"]["pending_results"]
+                if blocked:
+                    llm.count_tokens = lambda _: {"prompt_tokens": 24000}
+                event = runner.step()
+                self.assertEqual(event["status"], "rejected")
+                state = loads(Path(root, "research/state.json").read_text())
+                self.assertEqual(state["nodes"]["q1"]["pending_results"], pending)
+                self.assertEqual(state["source_index"], {})
+                self.assertNotIn("skipped_source_ids", event)
+                self.assertEqual(len(llm.requests), 1 if blocked else 2)
+
     def test_inherited_provenance_retrieval_graph_synthesis_and_index_rebuild(self):
         question = {**result("question", 0), "origin": "derived"}
         with tempfile.TemporaryDirectory() as root:
@@ -200,6 +305,26 @@ class CompactResearchTests(unittest.TestCase):
                 self.assertEqual(runner.step()["memory_ids"], ["r2"])
                 self.assertEqual(len(runner.llm.requests), 1)
                 self.assertEqual(runner.knowledge.validate()["documents"], 2)
+
+    def test_recovered_empty_or_skipped_source_is_not_retried(self):
+        for response in ({"summary": "No useful results.", "results": []}, "{not JSON"):
+            for stage in ("prepared", "replaced:research/state.json"):
+                with self.subTest(response=response, stage=stage), tempfile.TemporaryDirectory() as root:
+                    rows = research()["results"]
+                    rows.append({**rows[0], "id": "source-b", "url": "https://example.org/second"})
+                    runner, _ = self.runner(root, [], rows)
+                    process = multiprocessing.get_context("fork").Process(target=crash_extraction, args=(root, stage, response))
+                    process.start(); process.join(10)
+                    self.assertEqual(process.exitcode, 75)
+                    operation = runner.store.recovery_status()["operations"][0]
+                    runner.store.repair(operation["id"], apply=True)
+                    runner.store.repair(operation["id"], apply=True)
+                    self.assertEqual(runner.knowledge.validate()["documents"], 0)
+                    state = loads(Path(root, "research/state.json").read_text())
+                    self.assertEqual(len(state["source_index"]), 1)
+                    runner.llm = ScriptedLLM([{"summary": "Second source.", "results": [{**result(), "source_ids": ["source-b"]}]}])
+                    self.assertEqual(runner.step()["memory_ids"], ["r1"])
+                    self.assertEqual(len(runner.llm.requests), 1)
 
 
 class R3Tests(unittest.TestCase):
@@ -328,17 +453,19 @@ class R3Tests(unittest.TestCase):
             self.assertEqual(viewed["inputs"]["search_evidence"],viewed["structured_context"]["research"])
             self.assertEqual(viewed["inputs"]["question"],"What does the physics research show?")
 
-    def test_rejected_equation_batch_rolls_back_equations_and_ids(self):
+    def test_skipped_equation_batch_rolls_back_equations_and_ids(self):
         with tempfile.TemporaryDirectory() as root:
             bad=equation(None);bad["latex"]="x=y\n## Relationships"
             llm=ScriptedLLM([{"keywords":["physics"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("Physics?",["fixture"],context_budget=20000)
             r.step();r.step()
-            before=Path(root,"research/state.json").read_text()
+            before=Path(root,"identity.json").read_text()
             event=r.step()
-            self.assertEqual(event["status"],"rejected")
-            self.assertEqual(Path(root,"research/state.json").read_text(),before)
+            self.assertEqual(event["status"],"committed")
+            self.assertEqual(event["skipped_source_ids"],["source-a"])
+            self.assertEqual(Path(root,"identity.json").read_text(),before)
+            self.assertIsNone(loads(Path(root,"research/state.json").read_text())["nodes"]["q1"]["pending_results"])
             self.assertEqual(r.knowledge.validate()["documents"],0)
             self.assertEqual(r.knowledge.validate()["equations"],0)
             self.assertEqual(list(Path(root,"equations").glob("*.json")),[])

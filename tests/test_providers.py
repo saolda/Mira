@@ -113,6 +113,7 @@ class ProviderTests(unittest.TestCase):
                 with patch('mira.providers.time.sleep'):
                     result=self.adapter(cls,[error]).search('test')
                 self.assertEqual(result['status'],'rate_limited');self.assertEqual(result['retry_after'],'10')
+                self.assertNotIn('error',result)
 
     def test_explicit_content_truncation_and_shared_host_pacing(self):
         item={'id':'EJ1','title':'Study','description':'long '*100}

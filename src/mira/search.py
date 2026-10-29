@@ -78,7 +78,8 @@ class ArxivSearch:
             except HTTPError as exc:
                 result = {"status": "rate_limited" if exc.code == 429 else "failed", "results": [],
                         "http_status": exc.code, "retry_after": exc.headers.get("Retry-After"),
-                        "request_url": url, "error": "arXiv HTTP request failed"}
+                        "request_url": url}
+                if exc.code != 429: result["error"] = "arXiv HTTP request failed"
                 exc.close()
                 return result
             except (OSError, TimeoutError) as exc:

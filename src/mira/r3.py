@@ -9,6 +9,10 @@ from .sources import descriptor
 TEXT_TYPES = {"finding", "observation", "claim", "inference", "hypothesis"}
 
 
+class OutputError(ValueError):
+    """A received R3 response could not be decoded as a complete proposal."""
+
+
 def context(state, node_id, research):
     # Preserve the provider's structured fields, including explicit truncation and
     # content kind. The raw feed is retained on disk, not duplicated in the prompt.
@@ -31,9 +35,11 @@ def strings(value):
 
 
 def validate(value, evidence):
+    """Validate extraction, discarding unused summary text for empty results."""
     require(isinstance(value, dict) and set(value) == {"summary", "results"} and isinstance(value["results"], list), "R3 requires summary and an ordered results array")
+    if not value["results"] and isinstance(value["summary"], str):
+        value = {**value, "summary": ""}
     text(value["summary"], allow_empty=not value["results"])
-    require(value["results"] or value["summary"] == "", "empty extraction requires empty summary")
     require(len(evidence["results"]) <= 1, "R3 extracts one source at a time")
     sources = {row["id"]: row for row in evidence["results"]}
     results = value["results"]

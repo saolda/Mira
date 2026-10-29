@@ -154,6 +154,19 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(self.state()['provider_cooldowns']['a'],until)
         self.assertEqual(self.state()['nodes']['q1']['next_database_index'],1)
 
+    def test_all_rate_limited_round_advances_pointers_and_continues_without_error(self):
+        limited={'status':'rate_limited','results':[],'http_status':429,'retry_after':'3600'}
+        r=self.runner([{'keywords':['heat']},decision('retry')],
+                      {'a':FixtureSearch([limited]),'b':FixtureSearch([limited])})
+        r.initialize('Q?',['a','b'],context_budget=12000)
+        outcome=r.run(4)
+        self.assertEqual([e['action'] for e in outcome['actions']],['R1','R2','R2','R4'])
+        self.assertTrue(all(e['status']=='committed' and not e.get('error') for e in outcome['actions']))
+        self.assertEqual([e['tree']['q1']['next_database_index'] for e in outcome['actions'][1:3]],[1,2])
+        self.assertEqual(set(self.state()['provider_cooldowns']),{'a','b'})
+        self.assertEqual(self.state()['nodes']['q1']['status'],'living')
+        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],0)
+
     def test_cross_provider_dedup_and_empty_extraction_marks_processed(self):
         first=evidence();first['results'][0].update(identifiers={'doi':'10.1234/PAPER'},authors=['Jane Smith'])
         second=deepcopy(first);second['results'][0].update(id='other-provider-id',url='https://doi.org/10.1234/paper')

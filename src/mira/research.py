@@ -140,9 +140,47 @@ class Research:
             raise
         raw = self.trace.clean(raw)
         self.trace.write(identity, "response", {"timestamp": now(), "raw": raw, "status": "received"})
-        value, info = decisions.proposal(raw)
+        try:
+            value, info = decisions.proposal(raw)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            if action == "R3": raise r3.OutputError(str(exc)) from exc
+            raise
         event["model"] = info
         return value
+
+    def _extract(self, state, memories, equations, ledger, identity, evidence, context, event):
+        """Reject bad source output without blocking the pending-source cursor."""
+        memory_count, equation_count = len(memories), len(equations)
+        old_ledger = dict(ledger)
+        node_memories = state["nodes"][identity]["memory_ids"]
+        old_ids = list(node_memories)
+        error, output = None, None
+        try:
+            value = self._model(event, "R3", context, state) if evidence["results"] else {"summary": "", "results": []}
+        except r3.OutputError as exc:
+            error = exc
+        if error is None:
+            try:
+                accepted = decisions.validate("R3", value, evidence)
+                if accepted != value:
+                    event["normalization"] = "discarded_summary_for_empty_results"
+                output = r3.create_memory(state, memories, equations, ledger, identity,
+                                          accepted["results"], evidence, accepted["summary"])
+                markdown = [render(output)] if output is not None else []
+            except ValueError as exc:
+                error = exc
+        if error is not None:
+            # Construction may have appended equations or allocated an ID before
+            # rendering exposed invalid output. Keep only the skipped-source log.
+            del memories[memory_count:]; del equations[equation_count:]
+            ledger.clear(); ledger.update(old_ledger)
+            node_memories[:] = old_ids
+            event.update(error=self.trace.clean(str(error)), error_type=type(error).__name__,
+                         reason="invalid_extraction_skipped", extraction_accepted=False,
+                         skipped_source_ids=[row["id"] for row in evidence["results"]])
+            output, markdown = None, []
+        event["memory_ids"] = [output.id] if output is not None else []
+        event["generated_memories"] = markdown
 
     def _research(self, state, memories, equations, ledger, files, event):
         identity = state["active_node_id"]; n = state["nodes"][identity]
@@ -195,7 +233,7 @@ class Research:
                 event["retry_at"] = cooldowns[provider]
             if result["status"] in {"ok","empty"}: cooldowns.pop(provider, None)
             if unique: n["pending_results"] = evidence_ref
-            if n["next_database_index"] == len(databases) and outcomes and all(o in {"failed","rate_limited"} for o in outcomes):
+            if n["next_database_index"] == len(databases) and "failed" in outcomes and all(o in {"failed","rate_limited"} for o in outcomes):
                 event.update(status="providers_unavailable", reason="All databases were unavailable this round; progress saved for explicit resumption.")
         else:
             if action == "R1":
@@ -216,12 +254,13 @@ class Research:
                            "search_history": old_context["search_history"]}
             if action == "R3":
                 event["evidence_ref"] = n["pending_results"]
-            if action == "R3" and not evidence["results"]:
-                value = {"summary": "", "results": []}
-                event["reason"] = "All pending sources were processed by another node."
+            if action == "R3":
+                if not evidence["results"]:
+                    event["reason"] = "All pending sources were processed by another node."
+                self._extract(state, memories, equations, ledger, identity, evidence, context, event)
             else:
                 value = self._model(event, action, context, state)
-            decisions.validate(action, value, evidence if action == "R3" else None)
+                decisions.validate(action, value)
             if action == "R1":
                 accepted = r1.filter_terms(value["keywords"], self.control_terms)
                 event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
@@ -229,11 +268,8 @@ class Research:
                 n["search_round"] = n.get("search_round",0) + 1
                 n["round_outcomes"] = []
             elif action == "R3":
-                output = r3.create_memory(state, memories, equations, ledger, identity, value["results"], evidence, value["summary"])
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
-                event["memory_ids"] = [output.id] if output is not None else []
-                event["generated_memories"] = [render(m) for m in memories if m.id in event["memory_ids"]]
                 if not remaining: n["pending_results"] = None
             else:
                 decision = value["decision"]
@@ -445,7 +481,7 @@ class Research:
                     tree.refresh(state, memories)
             interaction = event.get("interaction_id")
             if interaction:
-                self.trace.write(interaction, "validation", {"timestamp": now(), "accepted": success,
+                self.trace.write(interaction, "validation", {"timestamp": now(), "accepted": success and event.get("extraction_accepted", True),
                     "error": event.get("error"), "action": event["action"], "model": event.get("model")})
             event["action_committed"] = event["action"] if success else None
             extras["research/state.json"] = dumps(state)

@@ -52,6 +52,7 @@ class IntegrationTests(unittest.TestCase):
         adapter = ArxivSearch(opener=limited)
         result = adapter.search("test")
         self.assertEqual(result["status"], "rate_limited"); self.assertEqual(result["retry_after"], "10")
+        self.assertNotIn("error", result)
         with patch("time.sleep") as sleep:
             self.assertEqual(adapter.search("test")["status"], "rate_limited")
             sleep.assert_called_once()

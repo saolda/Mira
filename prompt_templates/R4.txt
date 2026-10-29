@@ -1,4 +1,4 @@
-R4: Evaluate the selected research question using the accumulated research and its wider context.
+Evaluate the selected research question using the accumulated research and its wider context.
 
 Choose exactly one decision:
 - kill: The research direction does not meaningfully contribute to answering or understanding its parent or root question. It is off-track. An unsuccessful search alone is not grounds for killing a question.

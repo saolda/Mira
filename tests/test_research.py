@@ -153,28 +153,28 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(state["active_node_id"], "q2")
         self.assertEqual(tree.metrics(state)["max_depth"], 1)
 
-    def test_rejected_raw_response_and_pending_evidence_preserved(self):
+    def test_invalid_raw_response_logged_and_pending_source_advanced(self):
         r = self.make([{"keywords": ["heat"]}, "{not JSON"], [evidence()])
         r.step(); r.step(); before = self.state()
-        event = r.step(); self.assertEqual(event["status"], "rejected")
-        self.assertEqual(before, self.state())
+        event = r.step(); self.assertEqual(event["status"], "committed")
+        self.assertEqual(event["skipped_source_ids"], ["fixture-1"])
+        self.assertIsNone(self.state()["nodes"]["q1"]["pending_results"])
+        self.assertEqual(self.state()["research_cycles"], before["research_cycles"] + 1)
         records = read_records(self.root)
         self.assertEqual(records[-1]["response"]["raw"], "{not JSON")
         self.assertFalse(records[-1]["validation"]["accepted"])
-        self.assertIsNone(records[-1]["outcome"]["action_committed"])
+        self.assertEqual(records[-1]["outcome"]["action_committed"], "R3")
+        self.assertTrue(records[-1]["outcome"]["error"])
         self.assertIn("{not JSON", transcript(self.root, full=True))
 
     def test_unsupported_evidence_no_second_llm_pass(self):
         bad = draft(); bad["source_ids"] = ["invented"]
         r = self.make([{"keywords": ["heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [bad]}], [evidence()])
-        r.step(); r.step(); self.assertEqual(r.step()["status"], "rejected")
+        r.step(); r.step(); event = r.step()
+        self.assertEqual(event["status"], "committed")
+        self.assertEqual(event["skipped_source_ids"], ["fixture-1"])
         self.assertEqual(len(self.llm.requests), 2)
         self.assertEqual(r.knowledge.validate()["documents"], 0)
-        # Old memory proposals are rejected, not silently migrated or admitted.
-        r.llm = ScriptedLLM([{"memories": [], "no_finding_reason": "Old contract"}])
-        event = r.step()
-        self.assertEqual(event["status"], "rejected")
-        self.assertNotIn("memory_ids", event)
         self.assertEqual(read_records(self.root)[-1]["outcome"]["memory_ids"], [])
         self.assertEqual(r.knowledge.validate()["documents"], 0)
 

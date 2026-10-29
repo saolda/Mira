@@ -97,8 +97,11 @@ An empty search skips R3. A non-responsive, failed or rate-limited database is
 recorded distinctly and **skipped for the current round**, allowing the next
 configured database to be searched; a failed retrieval is not evidence that the
 source has no relevant material. The pointer advances once per attempted provider.
+Rate limits are non-error outcomes: retain cooldown/Retry-After information and
+continue normal scheduling, including when every provider in a round is rate-limited.
 Respect provider rate limits and avoid repeated immediate calls to unavailable
-providers; keep failures inspectable. If every provider is unavailable, report a
+providers; keep failures inspectable. If every provider is unavailable and at least
+one retrieval actually failed, report a
 clear degraded/blocked outcome rather than silently spinning or claiming that
 research was answered. Per-node keywords, pointer, pending results and history
 survive scheduling switches.
@@ -155,14 +158,23 @@ edges. Derived questions must be grounded in cited research, and are not attribu
 to its authors. Equations
 preserve LaTeX, variable descriptions/units and source/derived attribution. Images
 must reference supplied URLs or figure references. Empty extraction is valid and
-creates no memory or ID and requires an empty summary. R3 never emits memory IDs
-or writes canonical files.
+creates no memory or ID. Python discards any supplied summary string when results
+are empty and records that normalization; the raw response remains unchanged.
+R3 never emits memory IDs or writes canonical files.
 
 Each independently identifiable source produces at most one research memory per
 experiment. A pending batch is processed one source per R3 action; its processed
 source index and memory commit together, allowing restart without duplicate
 extraction. Empty sources are also marked processed. R3 remains extractive; S2
 integrates across memories.
+
+Invalid received R3 output (decoding, schema or memory-format errors) is logged
+with the source ID and raw response. Python discards partial memory/equation/ID
+changes, marks the source processed, and continues to the next pending source or
+database without retrying it. The source disposition and scheduling counters commit
+atomically; the interaction's validation record still marks the response invalid.
+Context, transport, retrieval-cache and persistence failures retain their existing
+safeguards rather than silently discarding evidence.
 
 New single-source research Markdown has compact metadata (including the source
 identifier, title, publication date, URL and content kind when supplied), Summary,

@@ -1,4 +1,4 @@
-R0: Select the most appropriate research strategy for the root question.
+Select the most appropriate research strategy for the root question.
 
 Choose exactly one identifier from the available strategies. Each strategy lists its name, purpose and ordered research databases. Do not invent a strategy or change its databases.
 

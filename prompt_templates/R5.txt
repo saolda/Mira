@@ -1,4 +1,4 @@
-R5: Develop useful child research questions for the selected exhausted node.
+Develop useful child research questions for the selected exhausted node.
 
 Examine all supplied research in the context of the selected question and its parent and root questions.
 Identify important gaps, unresolved questions, hypotheses, contradictions and opportunities for deeper investigation.

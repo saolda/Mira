@@ -53,7 +53,7 @@ def validate(action, value, evidence=None):
         for question in value["questions"]: text(question)
     elif action == "R3":
         from .r3 import validate
-        validate(value, evidence)
+        return validate(value, evidence)
     return value
 
 
