@@ -1,6 +1,6 @@
 # S1/S2 synthesis redesign — 29 October 2026
 
-Implementation commit: recorded in the follow-up metadata update.
+Implementation commit: `907cef3efd5d72d68cac4fcce41b9c6ccc0a860a`.
 
 ## Implementation
 
