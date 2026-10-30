@@ -1,0 +1,147 @@
+{
+  "profiles": [
+    {
+      "id": "default",
+      "version": 1,
+      "providers": [
+        "wikipedia",
+        "arxiv",
+        "pubmed",
+        "crossref",
+        "europe_pmc",
+        "eric",
+        "openalex"
+      ],
+      "compiler": "legacy",
+      "combination": "provider_legacy",
+      "quoting": "provider_legacy",
+      "escaping": "provider_legacy",
+      "max_terms": 6,
+      "min_interval_seconds": 0,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "pubmed_balanced",
+      "version": 1,
+      "providers": [
+        "pubmed"
+      ],
+      "compiler": "pubmed",
+      "combination": "AND",
+      "quoting": "unquoted_atm",
+      "escaping": "literal_words",
+      "max_terms": 3,
+      "min_interval_seconds": 0.35,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "europe_pmc_balanced",
+      "version": 1,
+      "providers": [
+        "europe_pmc"
+      ],
+      "compiler": "phrase_and",
+      "combination": "AND",
+      "quoting": "phrase",
+      "escaping": "backslash",
+      "max_terms": 3,
+      "min_interval_seconds": 1,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "openalex_broad",
+      "version": 1,
+      "providers": [
+        "openalex"
+      ],
+      "compiler": "text",
+      "combination": "spaces",
+      "quoting": "none",
+      "escaping": "literal_words",
+      "max_terms": 3,
+      "min_interval_seconds": 1,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "crossref_bibliographic",
+      "version": 1,
+      "providers": [
+        "crossref"
+      ],
+      "compiler": "text",
+      "combination": "spaces",
+      "quoting": "none",
+      "escaping": "literal_words",
+      "max_terms": 4,
+      "min_interval_seconds": 1,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "wikipedia_general",
+      "version": 1,
+      "providers": [
+        "wikipedia"
+      ],
+      "compiler": "text",
+      "combination": "spaces",
+      "quoting": "none",
+      "escaping": "literal_words",
+      "max_terms": 3,
+      "min_interval_seconds": 1,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "arxiv_subject",
+      "version": 1,
+      "providers": [
+        "arxiv"
+      ],
+      "compiler": "arxiv",
+      "combination": "AND",
+      "quoting": "all_field_phrase",
+      "escaping": "backslash",
+      "max_terms": 3,
+      "min_interval_seconds": 3,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    },
+    {
+      "id": "eric_education",
+      "version": 1,
+      "providers": [
+        "eric"
+      ],
+      "compiler": "phrase_and",
+      "combination": "AND",
+      "quoting": "phrase",
+      "escaping": "backslash",
+      "max_terms": 4,
+      "min_interval_seconds": 1,
+      "retry_initial_seconds": 60,
+      "retry_max_seconds": 3600,
+      "max_attempts": 3
+    }
+  ],
+  "host_min_intervals": {
+    "en.wikipedia.org": 1,
+    "export.arxiv.org": 3,
+    "eutils.ncbi.nlm.nih.gov": 0.35,
+    "api.crossref.org": 1,
+    "www.ebi.ac.uk": 1,
+    "api.ies.ed.gov": 1,
+    "api.openalex.org": 1
+  }
+}

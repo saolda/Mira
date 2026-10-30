@@ -313,7 +313,7 @@ class GlossaryTests(unittest.TestCase):
         r = self.research
         with r.store.lock():
             token, docs, eqs, ledger = r.store.read(); state = self.state()
-            state["provider_cooldowns"] = {"fixture": time.time() + 120}
+            state["provider_availability"] = {"fixture": {"next_request_at":time.time() + 120, "consecutive_rate_limits":1}}
             r.store.publish(docs, eqs, ledger, token, files={"research/state.json": dumps(state)})
         r.llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}]); r.step()
         event = r.step()

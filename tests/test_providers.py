@@ -6,13 +6,13 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 
-from mira import providers
+from mira import providers, transport
 from mira.providers import (WikipediaSearch, PubMedSearch, CrossrefSearch,
                             EuropePMCSearch, ERICSearch, OpenAlexSearch)
 
 
 class ProviderTests(unittest.TestCase):
-    def setUp(self): providers._LAST.clear()
+    def setUp(self): transport._LAST.clear()
 
     def adapter(self, cls, responses, **kwargs):
         queue=iter(responses);self.calls=[]
@@ -60,7 +60,7 @@ class ProviderTests(unittest.TestCase):
     def test_wikipedia_extract_metadata_and_no_hidden_fallback(self):
         data={'query':{'pages':[{'pageid':123,'title':'Artificial intelligence','fullurl':'https://en.wikipedia.org/wiki/Artificial_intelligence','extract':'A useful introductory description.'}]}}
         adapter=self.adapter(WikipediaSearch,[data,{'batchcomplete':True}])
-        with patch('mira.providers.time.sleep'):
+        with patch('mira.transport.time.sleep'):
             result=adapter.search('artificial intelligence');empty=adapter.search('missing topic')
         row=result['results'][0]
         self.assertEqual(row['id'],'wikipedia:en:123');self.assertEqual(row['authors'],[])
@@ -78,7 +78,7 @@ class ProviderTests(unittest.TestCase):
         <PubmedData><ArticleIdList><ArticleId IdType="doi">10.1234/trial</ArticleId><ArticleId IdType="pmc">PMC1234</ArticleId></ArticleIdList></PubmedData>
         </PubmedArticle></PubmedArticleSet>'''
         a=self.adapter(PubMedSearch,[{'esearchresult':{'idlist':['1234']}},xml],api_key='fake-secret',contact='test@example.org')
-        with patch('mira.providers.time.sleep') as sleep:result=a.search('asthma biologics')
+        with patch('mira.transport.time.sleep') as sleep:result=a.search('asthma biologics')
         row=result['results'][0]
         self.assertEqual(row['title'],'A controlled trial');self.assertEqual(row['authors'],['Jane Smith'])
         self.assertEqual(row['content'],'METHODS: A useful abstract.')
@@ -95,7 +95,7 @@ class ProviderTests(unittest.TestCase):
               'author':[{'given':'Jane','family':'Smith'}],'published':{'date-parts':[[2024,2,1]]}}
         a=self.adapter(CrossrefSearch,[{'status':'ok','message':{'items':[item]}},
             {'status':'ok','message':{'items':[{k:v for k,v in item.items() if k!='abstract'}]}}],contact='test@example.org')
-        with patch('mira.providers.time.sleep'):
+        with patch('mira.transport.time.sleep'):
             result=a.search('research');metadata=a.search('research')
         self.assertEqual(result['results'][0]['content'],'Some useful research.')
         self.assertEqual(result['results'][0]['identifiers'],{'doi':'10.1234/paper'})
@@ -144,7 +144,7 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(self.adapter(cls,[b'not JSON/XML']).search('test')['status'],'failed')
                 self.assertEqual(self.adapter(cls,[URLError('offline')]).search('test')['status'],'failed')
                 error=HTTPError('https://example.org',429,'limited',{'Retry-After':'10'},BytesIO(b'limited'))
-                with patch('mira.providers.time.sleep'):
+                with patch('mira.transport.time.sleep'):
                     result=self.adapter(cls,[error]).search('test')
                 self.assertEqual(result['status'],'rate_limited');self.assertEqual(result['retry_after'],'10')
                 self.assertNotIn('error',result)
@@ -152,7 +152,7 @@ class ProviderTests(unittest.TestCase):
     def test_explicit_content_truncation_and_shared_host_pacing(self):
         item={'id':'EJ1','title':'Study','description':'long '*100}
         a=self.adapter(ERICSearch,[{'response':{'docs':[item]}},{'response':{'docs':[item]}}],max_abstract_chars=30)
-        with patch('mira.providers.time.sleep') as sleep:
+        with patch('mira.transport.time.sleep') as sleep:
             self.assertEqual(a.search('test')['status'],'ok');second=a.search('test')
         self.assertTrue(second['results'][0]['truncated']);self.assertEqual(len(second['results'][0]['content']),30)
         sleep.assert_called_once()

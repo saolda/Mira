@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
-from mira import providers, sources, strategies
+from mira import providers, transport, sources, strategies
 from mira.decisions import ScriptedLLM
 from mira.format import loads
 from mira.interactions import read_records
@@ -63,13 +63,14 @@ class MedicalTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)/'run'
-        providers._LAST.clear()
+        transport._LAST.clear()
 
     def state(self): return loads((self.root/'research/state.json').read_text())
 
     def test_medical_registry_description_and_registered_provider_order(self):
         medical = strategies.select(strategies.registry(), 'medical')
-        self.assertEqual(medical, {'id':'medical', 'name':'Medical', 'description':DESCRIPTION, 'databases':MEDICAL})
+        self.assertEqual({k:v for k,v in medical.items() if k!='profiles'}, {'id':'medical', 'name':'Medical', 'description':DESCRIPTION, 'databases':MEDICAL})
+        self.assertEqual(set(medical['profiles']),set(MEDICAL))
         adapters = providers.adapters()
         expected = [PubMedSearch, EuropePMCSearch, OpenAlexSearch, providers.CrossrefSearch, providers.WikipediaSearch]
         self.assertEqual([type(adapters[p]) for p in medical['databases']], expected)
@@ -116,14 +117,16 @@ class MedicalTests(unittest.TestCase):
         adapters,calls=wire_adapters(data)
         llm=ScriptedLLM([{'keywords':['spiculated pulmonary mass', 'volume doubling time']}])
         r=Research(self.root,llm,adapters); r.initialize(QUESTION,strategy='medical',context_budget=24000)
-        with patch('mira.providers.time.sleep'): events=[r.step() for _ in range(6)]
+        with patch('mira.transport.time.sleep'): events=[r.step() for _ in range(6)]
         self.assertEqual([e['action'] for e in events],['R1']+['R2']*5)
         self.assertEqual([e['provider'] for e in events[1:]],MEDICAL)
         self.assertTrue(all(e['status']=='committed' for e in events))
         query_parameters=['term','query','search','query.bibliographic','gsrsearch']
         for name,key in zip(MEDICAL,query_parameters):
             self.assertEqual(len(calls[name]),1)
-            self.assertEqual(parse_qs(urlsplit(calls[name][0].full_url).query)[key],['spiculated pulmonary mass volume doubling time'])
+            expected = {'pubmed':'(spiculated pulmonary mass) AND (volume doubling time)',
+                        'europe_pmc':'\"spiculated pulmonary mass\" AND \"volume doubling time\"'}.get(name,'spiculated pulmonary mass volume doubling time')
+            self.assertEqual(parse_qs(urlsplit(calls[name][0].full_url).query)[key],[expected])
         self.assertEqual(self.state()['nodes']['q1']['next_database_index'],5)
         self.assertEqual(len(llm.requests),1)
 
@@ -139,7 +142,7 @@ class MedicalTests(unittest.TestCase):
                         'source_ids':['pmid:1234'],'related_to':None}
                 llm=ScriptedLLM([{'keywords':['pulmonary mass', 'volume doubling time']},{'summary':'Attributed fixture comparison with limitations.','results':[result]}])
                 r=Research(root,llm,adapters);r.initialize(QUESTION,strategy='medical',context_budget=24000)
-                with patch('mira.providers.time.sleep'):
+                with patch('mira.transport.time.sleep'):
                     self.assertEqual(r.step()['action'],'R1'); e=r.step(); self.assertEqual(e['provider'],'pubmed')
                     self.assertEqual(r.step()['memory_ids'],['r1'])
                     duplicate=Research(root,llm,adapters).step()
@@ -177,7 +180,7 @@ class MedicalTests(unittest.TestCase):
             with self.subTest(supplied=supplied):
                 adapters,_=wire_adapters({'pubmed':[{'esearchresult':{'idlist':['1234']}},pubmed_xml(supplied)],
                     'europe_pmc':[],'openalex':[],'crossref':[],'wikipedia':[]})
-                with patch('mira.providers.time.sleep'): result=adapters['pubmed'].search('pulmonary mass')
+                with patch('mira.transport.time.sleep'): result=adapters['pubmed'].search('pulmonary mass')
                 self.assertEqual(result['results'][0]['published'],expected)
 
     def test_europe_source_identifiers_do_not_treat_other_databases_as_pubmed(self):
@@ -187,7 +190,7 @@ class MedicalTests(unittest.TestCase):
                 item={'source':source,'id':identity,'title':'Article without further metadata'}
                 adapters,_=wire_adapters({'pubmed':[],'europe_pmc':[{'resultList':{'result':[item]}}],
                     'openalex':[],'crossref':[],'wikipedia':[]})
-                with patch('mira.providers.time.sleep'):row=adapters['europe_pmc'].search('mass')['results'][0]
+                with patch('mira.transport.time.sleep'):row=adapters['europe_pmc'].search('mass')['results'][0]
                 self.assertEqual(row['identifiers'],expected); self.assertEqual(row['authors'],[])
                 self.assertEqual(row['published'],''); self.assertEqual(row['content_kind'],'bibliographic_metadata')
 

@@ -1,6 +1,7 @@
 """Self-contained execution exports and conservative, explicit cleanup."""
 from copy import deepcopy
 import json
+import itertools
 import multiprocessing
 import os
 from pathlib import Path
@@ -89,13 +90,16 @@ class RunStorageTests(unittest.TestCase):
     def test_all_actions_r0_through_r5_s1_s2_are_recorded(self):
         root = self.catalog.create("all-actions", disposable=True)
         registry = Path(self.temp.name) / "strategies.json"
-        registry.write_text(dumps([{"id": "fixture", "name": "Fixture", "description": "Synthetic source.", "databases": ["arxiv"]}]))
+        registry.write_text(dumps([{"id": "fixture", "name": "Fixture", "description": "Synthetic source.", "databases": ["arxiv"], "profiles": {"arxiv": "arxiv_subject"}}]))
         r = Research(root, ScriptedLLM([{"strategy": "fixture", "reason": "Controlled fixture."}]),
             {"arxiv": FixtureSearch([evidence("fixture-" + str(i)) for i in range(1, 20)])})
         with r.execution(self.logs) as log:
             r.initialize("What can the fictional heat-barrier fixture tell us?", registry=registry,
                          context_budget=24000, research_capacity_tokens=6000, synthesis_interval=3)
             r.llm = DemoLLM()
+            ticks = itertools.count(1000)
+            r.clock = lambda: next(ticks)
+            r.sleep = lambda delay: None
             result = r.run(50)
         rows = self.rows(log.path)
         actions = {row.get("action") for row in rows if row["kind"] in {"interaction_request", "action_outcome"}}
@@ -110,7 +114,8 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(len(searches), 1)
         data = searches[0]["data"]
         self.assertEqual(data["query"], r.adapters["fixture"].queries[0])
-        self.assertEqual(data["retrieval"], result)
+        self.assertEqual({k:v for k,v in data["retrieval"].items() if k!='requests'}, result)
+        self.assertTrue(data['retrieval']['requests'])
         self.assertTrue(data["query_submitted"])
 
     def test_long_prompt_inputs_are_not_truncated(self):

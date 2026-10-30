@@ -1,15 +1,15 @@
 # Latest development test results
 
-Recorded: 2026-10-30T04:50:46.182180+00:00
+Recorded: 2026-10-30T05:12:44.102019+00:00
 
-Tested implementation commit: `86227cba6c0733dcaccd2591b60c44312493a64f (working tree under test)`.
+Tested implementation commit: `87ed8ae99747ab896ba5db64ac5477273ab6d9b5 (working tree under test)`.
 
-Tests: **315**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **339**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-Stage 1: standard-library HTML-aware extraction preserves scientific inequalities, Unicode, entities, nested markup, metadata and existing source length bounds.
+Stage 1 passed 315 tests. Final Stage 2 verification covers eight named profiles, legacy partial-round compatibility, durable retries, shared-host pacing, waiting, journal recovery and credential-free request logs.
 
 ## Regressions and limitations
 

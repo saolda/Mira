@@ -19,6 +19,7 @@ def register(sub):
     selection.add_argument("--database", action="append", help="explicit database sequence (compatibility)")
     selection.add_argument("--strategy", help="named strategy; omit for mandatory R0 selection")
     init.add_argument("--strategies", help="JSON strategy registry (or MIRA_RESEARCH_STRATEGIES)")
+    init.add_argument("--query-profiles", help="JSON query-profile registry (or MIRA_QUERY_PROFILES); snapshotted at initialization")
     init.add_argument("--synthesis-interval", type=int, default=5)
     init.add_argument("--context-budget", type=int, help="model token budget; default to the active server context window")
     init.add_argument("--output-reserve", type=int, default=2048)
@@ -43,6 +44,7 @@ def register(sub):
     run.add_argument("--search-limit", type=int, default=2)
     run.add_argument("--max-cycles", type=int, default=20)
     run.add_argument("--acknowledge-interrupted", action="store_true")
+    run.add_argument("--acknowledge-interrupted-searches", action="store_true", help="authorize another submission after inspecting uncertain retrieval_calls")
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
     cleanup = sub.add_parser("research-cleanup", help="list experiments; delete explicitly selected, completed disposable experiments only with --apply")
@@ -159,7 +161,7 @@ def _execute(args, catalog, managed, trace=None):
     if args.command == "research-init":
         result = research.initialize(args.question, args.database, question_file=args.question_file, synthesis_interval=args.synthesis_interval,
             context_budget=args.context_budget, output_reserve=args.output_reserve,
-            strategy=args.strategy, registry=args.strategies,
+            strategy=args.strategy, registry=args.strategies, profile_registry=args.query_profiles,
             research_capacity_tokens=args.research_capacity_tokens, branching_interval=args.branching_interval,
             max_children=args.max_children, synthesis_output_reserve=args.synthesis_output_reserve,
             glossary_token_budget=args.glossary_token_budget, glossary_limit=args.glossary_limit)
@@ -175,6 +177,7 @@ def _execute(args, catalog, managed, trace=None):
             research.glossary.ensure(state, rebuild=True)
             return {"path": str(research.glossary.path), "rebuilt": True}
     if args.acknowledge_interrupted: research.acknowledge_interrupted()
+    if args.acknowledge_interrupted_searches: research.acknowledge_interrupted_searches()
     return research.run(args.max_cycles)
 
 

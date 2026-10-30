@@ -9,19 +9,19 @@ from .format import digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
 from . import decisions, research_tree as tree, r1, r3, branching
-from .search import validate_search, ArxivSearch
-from . import strategies, sources
+from .search import validate_search
+from . import strategies, sources, query_profiles, retrieval
 import time
-from email.utils import parsedate_to_datetime
 from .budget import measure
 from . import glossary, questions
 
 
 class Research:
-    def __init__(self, root, llm, adapters, *, control_terms=()):
+    def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None):
         self.knowledge = Knowledge(store=LiveStore(root))
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
+        self.clock, self.sleep = clock or time.time, sleep or time.sleep
         self.glossary = glossary.Directory(self.store)
         self.control_terms = r1.controls(control_terms)
         self.trace = Interactions(self.store, tuple(getattr(llm, "secrets", ())) +
@@ -40,7 +40,7 @@ class Research:
             "canonical_changes": {p: raw for p, raw in after.items() if previous.get(p) != raw}}, event,
             key=("event", tuple(sorted(extras))))
 
-    def initialize(self, question=None, databases=None, *, question_file=None, strategy=None, registry=None, fault=None, **config):
+    def initialize(self, question=None, databases=None, *, question_file=None, strategy=None, registry=None, profile_registry=None, fault=None, **config):
         require((question is not None) != (question_file is not None), "provide a question or --question-file, but not both")
         markdown, document = questions.read(question_file) if question_file is not None else (None, None)
         if document is not None: question = document["question"]
@@ -48,7 +48,8 @@ class Research:
             token, memories, equations, ledger = self.store.read()
             require(not self.store._files() and not read_records(self.store.root), "research initialization requires an empty isolated corpus")
             require(not (databases is not None and strategy is not None), "choose a strategy or explicit databases")
-            values = strategies.registry(registry) if databases is None else None
+            profile_data = query_profiles.registry(profile_registry)
+            values = strategies.registry(registry, profile_data) if databases is None else None
             chosen = strategies.select(values, strategy) if strategy is not None else None
             if config.get("context_budget") is None:
                 config["context_budget"] = getattr(self.llm, "context_window", 8192)
@@ -80,6 +81,10 @@ class Research:
             else:
                 chosen = {"id":"custom", "name":"Custom", "description":"Operator-supplied database sequence.", "databases":list(databases)}
                 state["strategy_selection"] = {"method":"databases", "strategy":"custom", "reason":"Explicit database compatibility path."}
+            if databases is not None:
+                chosen['profiles'] = {p:'default' for p in databases}
+            chosen = query_profiles.snapshot(chosen, profile_data)
+            state.update(provider_availability={}, host_availability={})
             state["strategies"] = [deepcopy(chosen)]
             event.update(databases=chosen["databases"], strategy=chosen)
             branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
@@ -139,6 +144,16 @@ class Research:
                 self.trace.write(record["id"], "outcome", {"timestamp": now(), "status": "interrupted_acknowledged",
                     "action_committed": None, "warning": "Model may have executed; operator authorized another attempt."})
             return [r["id"] for r in records]
+
+    def acknowledge_interrupted_searches(self):
+        """Operator accepts unknown provider results after inspecting durable receipts."""
+        with self.store.lock():
+            self.store.read()
+            identities = retrieval.unresolved(self, self.store._files())
+            for identity in identities:
+                retrieval.receipt(self, identity, 'acknowledged', {'timestamp':now(),
+                    'warning':'Provider may have executed; operator authorized a new attempt.'})
+            return identities
 
     def _recover_outcomes(self):
         """Finish missing interaction receipts using proven committed events only."""
@@ -234,37 +249,33 @@ class Research:
         before_nodes = set(state["nodes"])
         databases = state["strategies"][state["strategy_index"]]["databases"]
         action = ("R3" if n["pending_results"] else "R1" if n["keywords"] is None else
-                  "R2" if n["next_database_index"] < len(databases) else "R4")
+                  "R2" if n["next_database_index"] < len(databases) or n.get("deferred_searches") else "R4")
         event.update(action=action, node_id=identity, question=n["question"])
         extras = {}
         if action == "R2":
-            provider = databases[n["next_database_index"]]
-            query = ArxivSearch.query(n["keywords"]) if provider == "arxiv" else " ".join(n["keywords"])
+            plan, result, submitted = retrieval.perform(self, state, n, event)
+            provider, query = plan['provider'], plan['query']
             evidence_ref = "research/results/" + uuid.uuid4().hex + ".json"
-            event.update(provider=provider, query=query, evidence_ref=evidence_ref)
-            cooldowns = state.setdefault("provider_cooldowns", {})
-            if cooldowns.get(provider, 0) > time.time():
-                result = {"status":"rate_limited", "results":[], "skipped":"provider_cooldown", "retry_at":cooldowns[provider]}
-            else:
-                used = self.glossary.used(query, state) if provider in self.adapters else []
-                n["used_glossary_term_ids"] = sorted(set(n.get("used_glossary_term_ids", [])) | set(used), key=lambda i: int(i[1:]))
-                event["used_glossary_term_ids"] = used
-                try:
-                    result = validate_search(self.adapters[provider].search(query))
-                except Exception as exc:
-                    result = {"status":"failed", "results":[], "error":self.trace.clean(str(exc)), "error_type":type(exc).__name__}
+            event.update(**plan, evidence_ref=evidence_ref)
+            if submitted:
+                used = self.glossary.used(query, state)
+                event['used_glossary_term_ids'] = used
+                n['used_glossary_term_ids'] = sorted(set(n.get('used_glossary_term_ids', [])) | set(used), key=lambda i:int(i[1:]))
             result = loads(self.trace.clean(dumps(result)))
             self.trace.record("search_result", {"provider": provider, "query": query,
-                "query_submitted": provider in self.adapters and not bool(result.get("skipped")),
-                "retrieval": result}, event)
+                "query_submitted": submitted,
+                "retrieval": result, **plan}, event)
             unique, duplicates = sources.unique(result["results"], state.setdefault("source_index", {}))
             sources.reconcile(state["source_index"], duplicates)
             evidence = {**{k:v for k,v in result.items() if k not in {"results","raw_api_response"}},
-                "provider":provider, "query":query, "timestamp":now(), "node_id":identity,
+                **plan, "provider":provider, "query":query, "timestamp":now(), "node_id":identity,
                 "round":n.get("search_round",0), "reference":evidence_ref,
                 "used_glossary_term_ids": event.get("used_glossary_term_ids", []),
-                "query_submitted": provider in self.adapters and not bool(result.get("skipped")),
-                "results":unique, "duplicates":duplicates}
+                "query_submitted": submitted,
+                "results":unique, "duplicates":duplicates,
+                "returned_record_count":len(result["results"]), "unique_record_count":len(unique),
+                "source_dispositions": {**{r['id']:'pending_r3' for r in unique},
+                                        **{r['id']:'duplicate' for r in duplicates}}}
             if state.get("retrieval_storage") == "temporary":
                 evidence["results"] = [sources.descriptor(row) for row in unique]
                 if unique:
@@ -273,23 +284,7 @@ class Research:
                 evidence["raw_api_response"] = result["raw_api_response"]  # Preserve old experiment policy.
             extras[evidence_ref] = dumps(evidence)
             event.update(search_status=result["status"], duplicate_count=len(duplicates), unique_source_count=len(unique))
-            n["next_database_index"] += 1
-            outcomes = n.setdefault("round_outcomes", [])
-            outcomes.append(result["status"])
-            if result["status"] in {"failed","rate_limited"} and not result.get("skipped"):
-                delay = 60
-                retry = result.get("retry_after")
-                if retry:
-                    try: delay = max(1, int(retry))
-                    except (TypeError,ValueError):
-                        try: delay = max(1, parsedate_to_datetime(retry).timestamp() - time.time())
-                        except (TypeError,ValueError,OverflowError): pass
-                cooldowns[provider] = max(cooldowns.get(provider, 0), time.time() + delay)
-                event["retry_at"] = cooldowns[provider]
-            if result["status"] in {"ok","empty"}: cooldowns.pop(provider, None)
             if unique: n["pending_results"] = evidence_ref
-            if n["next_database_index"] == len(databases) and "failed" in outcomes and all(o in {"failed","rate_limited"} for o in outcomes):
-                event.update(status="providers_unavailable", reason="All databases were unavailable this round; progress saved for explicit resumption.")
         else:
             if action == "R1":
                 context = r1.context(state, memories, files, identity, self.control_terms)
@@ -318,6 +313,9 @@ class Research:
                 if not evidence["results"]:
                     event["reason"] = "All pending sources were processed by another node."
                 extras.update(self._extract(state, memories, equations, ledger, identity, evidence, context, event))
+                disposition = ('invalid_extraction_skipped' if event.get('extraction_accepted') is False else
+                               'memory_created' if event['memory_ids'] else 'empty_extraction')
+                event['source_dispositions'] = {r['id']:disposition for r in evidence['results']}
             else:
                 value = self._model(event, action, context, state)
                 decisions.validate(action, value)
@@ -327,7 +325,11 @@ class Research:
                 event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
                 n["keywords"] = accepted
                 n["search_round"] = n.get("search_round",0) + 1
+                n["next_database_index"] = 0
                 n["round_outcomes"] = []
+                n["provider_outcomes"] = {}
+                n["deferred_searches"] = []
+                n['legacy_completed_provider_indices'] = []
             elif action == "R3":
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
@@ -341,6 +343,9 @@ class Research:
                     n["keywords"] = None
                     n["next_database_index"] = 0
                     n["round_outcomes"] = []
+                    n["provider_outcomes"] = {}
+                    n["deferred_searches"] = []
+                    n['legacy_completed_provider_indices'] = []
                 event["decision"] = value
         for i in before_nodes:
             other = state["nodes"][i]
@@ -447,8 +452,13 @@ class Research:
             state = loads(files["research/state.json"])
             tree.validate(state, memories, files)
             require(not self._unresolved(files), "interrupted/unknown model call: inspect transcript and explicitly acknowledge before retry")
+            require(not retrieval.unresolved(self, files),
+                "uncertain_provider_submission: inspect retrieval_calls and explicitly acknowledge before another search")
             original = deepcopy((state, memories, equations, ledger))
             state = tree.upgrade(state, memories)
+            retrieval.upgrade(state)
+            if retrieval.enabled(state): retrieval.restore_spacing(self, state)
+            self._retrieval_fault = fault
             if "source_index" not in state:
                 state["source_index"] = {}
                 for path, raw in files.items():
@@ -467,6 +477,18 @@ class Research:
             try:
                 event["exhaustion"] = branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
                 if original[0]["mira_research"] == 1: event["state_upgrade"] = {"from": 1, "to": 2}
+                if retrieval.enabled(state):
+                    ready = [i for i in state['living_priority_order'] if retrieval.ready(state, state['nodes'][i], self.adapters, self.clock())]
+                    active = state['active_node_id']
+                    if active not in ready and ready: state['active_node_id'] = ready[0]
+                    synthesis_due = state['pending_synthesis'] is not None or (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] and state['synthesis_candidate_order'])
+                    if state['living_priority_order'] and not ready and not synthesis_due and not branching.due(state):
+                        pending = {i:[{**e, 'eligible_at':retrieval.eligible_at(state,e,self.adapters.get(e['provider']))}
+                            for e in state['nodes'][i].get('deferred_searches', [])] for i in state['living_priority_order']}
+                        retry_at = min(e['eligible_at'] for entries in pending.values() for e in entries)
+                        return {'status':'waiting_for_provider', 'retry_at':retry_at, 'pending':pending,
+                            'research_cycles':state['research_cycles'], 'synthesis_cycles':state['synthesis_cycles']}
+
                 if state["pending_synthesis"] is not None or (state["research_cycles_since_synthesis"] >= state["synthesis_interval"] and state["synthesis_candidate_order"]):
                     success = self._synthesis(state, memories, equations, ledger, event)
                 elif branching.due(state):

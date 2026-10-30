@@ -3,10 +3,8 @@ from html.parser import HTMLParser
 import json
 import os
 import re
-import threading
-import time
 from urllib.error import HTTPError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
@@ -14,8 +12,6 @@ from .format import require
 from .search import ArxivSearch, validate_search
 
 USER_AGENT = 'Mira/0.3 (local research; https://github.com/saolda/Mira)'
-_PACE_LOCK = threading.Lock()
-_LAST = {}
 
 
 class ScientificText(HTMLParser):
@@ -60,8 +56,6 @@ def row(identity, title, url, abstract='', *, authors=(), published='', identifi
 
 
 class PublicAPI:
-    interval = 1.0  # Conservative local policy where no numeric minimum is published.
-
     def __init__(self, *, limit=2, timeout=25, max_abstract_chars=2500, opener=None, api_key=None, contact=None):
         require(type(limit) is int and 1 <= limit <= 10 and timeout > 0 and max_abstract_chars > 0, 'invalid provider limits')
         self.limit, self.timeout, self.max_chars = limit, timeout, max_abstract_chars
@@ -74,16 +68,20 @@ class PublicAPI:
         if key and self.api_key: params['api_key'] = self.api_key
         request = Request(endpoint + '?' + urlencode(params), headers={'User-Agent': USER_AGENT,
             'Accept': 'application/json, application/xml', 'Api-User-Agent': USER_AGENT})
-        host = urlsplit(endpoint).netloc
-        # Per-host, process-wide serialization also paces PubMed's two requests.
-        with _PACE_LOCK:
-            delay = max(0, self.interval - (time.monotonic() - _LAST.get(host, float('-inf'))))
-            if delay: time.sleep(delay)
-            _LAST[host] = time.monotonic()
-            with self.opener(request, timeout=self.timeout) as response:
-                return response.read().decode('utf-8')
+        safe = {k:v for k,v in params.items() if k != 'api_key'}
+        self.before_request(endpoint, safe)
+        self.requests.append({'endpoint': endpoint, 'parameters': safe})
+        with self.opener(request, timeout=self.timeout) as response:
+            return response.read().decode('utf-8')
 
-    def search(self, query):
+    def search(self, query, *, before_request=None):
+        from .transport import standalone
+        self.requests = []
+        self.before_request = before_request or standalone
+        result = self._search(query)
+        return {**result, 'requests': list(self.requests)}
+
+    def _search(self, query):
         try:
             rows = self.retrieve(query)
             require(isinstance(rows, list) and len(rows) <= self.limit, 'provider exceeded result bound')
@@ -119,8 +117,6 @@ class WikipediaSearch(PublicAPI):
 
 
 class PubMedSearch(PublicAPI):
-    interval = 0.35  # NCBI: no more than 3 requests/s without a key; stay below even with one.
-
     def retrieve(self, query):
         common = {'db':'pubmed', 'tool':'Mira'}
         if self.contact: common['email'] = self.contact

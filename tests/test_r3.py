@@ -136,6 +136,7 @@ class CompactResearchTests(unittest.TestCase):
                 token, memories, equations, ledger = resumed.store.read()
                 state = loads(resumed.store._files()["research/state.json"])
                 state["nodes"]["q1"]["next_database_index"] = 0
+                state["nodes"]["q1"]["provider_outcomes"] = {}
                 resumed.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
             event = resumed.step()
             self.assertEqual(event["duplicate_count"], 2)
@@ -228,6 +229,7 @@ class CompactResearchTests(unittest.TestCase):
                 token, docs, equations, ledger = runner.store.read()
                 state = loads(runner.store._files()["research/state.json"])
                 state["nodes"]["q1"]["next_database_index"] = 0
+                state["nodes"]["q1"]["provider_outcomes"] = {}
                 runner.store.publish(docs, equations, ledger, token, files={"research/state.json": dumps(state)})
             event = Research(root, llm, runner.adapters).step()
             self.assertEqual(event["action"], "R2")

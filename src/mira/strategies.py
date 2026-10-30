@@ -4,22 +4,26 @@ from pathlib import Path
 import re
 
 from .format import loads, require
+from . import query_profiles
 
 PROVIDERS = ('wikipedia', 'arxiv', 'pubmed', 'crossref', 'europe_pmc', 'eric', 'openalex')
 
 
-def registry(path=None):
+def registry(path=None, profiles=None):
     path = path or os.environ.get('MIRA_RESEARCH_STRATEGIES') or Path(__file__).with_name('strategies.json')
     values = loads(Path(path).read_text())
     require(isinstance(values, list) and values, 'nonempty strategy registry required')
     seen = set()
+    profiles = profiles or query_profiles.registry()
     for s in values:
-        require(isinstance(s, dict) and set(s) == {'id','name','description','databases'}, 'invalid strategy fields')
+        require(isinstance(s, dict) and set(s) == {'id','name','description','databases','profiles'}, 'invalid strategy fields')
         require(isinstance(s['id'], str) and re.fullmatch(r'[a-z][a-z0-9_-]*', s['id']) and s['id'] not in seen, 'invalid/duplicate strategy ID')
         seen.add(s['id'])
         require(all(isinstance(s[k], str) and s[k].strip() for k in ('name','description')), 'strategy name/description required')
         dbs = s['databases']
         require(isinstance(dbs, list) and dbs and all(isinstance(d, str) and d in PROVIDERS for d in dbs) and len(set(dbs)) == len(dbs), 'unknown/duplicate strategy databases')
+        require(isinstance(s['profiles'], dict) and set(s['profiles']) == set(dbs), 'every provider requires a profile mapping')
+        for provider, identity in s['profiles'].items(): query_profiles.select(profiles, identity, provider)
     return values
 
 

@@ -292,6 +292,8 @@ def validate(state, memories, files):
     require(len(orders) == len(set(orders)), "duplicate memory creation order")
     active = state["active_node_id"]
     require(active is None or active in nodes and nodes[active]["status"] == "living", "invalid active node")
+    from .retrieval import validate_state
+    validate_state(state)
     if "synthesis_attempts" in state:
         validate_synthesis(state, memories)
     expected = deepcopy(state); refresh(expected, memories)
@@ -379,6 +381,8 @@ def metrics(state):
             "processed_source_count": len(state.get("source_index", {})),
             "glossary": {**glossary, "term_count": glossary["next_id"] - 1},
             "provider_cooldowns": state.get("provider_cooldowns", {}),
+            "provider_availability": state.get("provider_availability", {}),
+            "host_availability": state.get("host_availability", {}),
             "retrieval_storage": state.get("retrieval_storage", "legacy_canonical"),
             "status_totals": {s: sum(n["status"] == s for n in state["nodes"].values())
                               for s in ("living", "exhausted", "answered", "killed", "split")},
@@ -400,6 +404,8 @@ def metrics(state):
 def validate_transition(before, after):
     """A durable split receipt cannot be cleared or replayed by any writer."""
     require(after.get("question_document") == before.get("question_document"), "question document is immutable")
+    if 'legacy_query_policy' in before:
+        require(after.get('legacy_query_policy') == before['legacy_query_policy'], 'legacy query policy is immutable')
     if before.get("mira_research") != 2: return
     require(after.get("mira_research") == 2, "cannot downgrade research state")
     for identity, old in before["nodes"].items():

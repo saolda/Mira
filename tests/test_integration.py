@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
+from mira import transport
 from mira.clients import HTTPModel, CallError
 from mira.decisions import request, ScriptedLLM
 from mira.prompts import SLOTS
@@ -23,7 +24,7 @@ ATOM = b'''<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry
 
 class IntegrationTests(unittest.TestCase):
     def setUp(self):
-        ArxivSearch._last_request = None
+        transport._LAST.clear()
 
     def test_arxiv_query_provenance_and_explicit_truncation(self):
         calls = []
@@ -44,7 +45,7 @@ class IntegrationTests(unittest.TestCase):
         for body, status in [(b'<feed xmlns="http://www.w3.org/2005/Atom"/>', "empty"),
             (ATOM.replace(b"http://arxiv.org/abs/1234.56789v1", b"http://arxiv.org/api/errors#bad-query"), "failed"),
             (b"bad XML", "failed"), (b"<html/>", "failed")]:
-            ArxivSearch._last_request = None
+            transport._LAST.clear()
             self.assertEqual(ArxivSearch(opener=lambda *a, **kw: BytesIO(body)).search("test")["status"], status)
 
     def test_arxiv_rate_limit_and_request_spacing(self):
@@ -56,7 +57,7 @@ class IntegrationTests(unittest.TestCase):
         with patch("time.sleep") as sleep:
             self.assertEqual(adapter.search("test")["status"], "rate_limited")
             sleep.assert_called_once()
-        ArxivSearch._last_request = None
+        transport._LAST.clear()
         def failed(*a, **kw): raise URLError("offline")
         self.assertEqual(ArxivSearch(opener=failed).search("test")["status"], "failed")
 

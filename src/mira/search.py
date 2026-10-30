@@ -33,13 +33,9 @@ class ArxivSearch:
     """Single-provider Atom adapter adapted from historical actions._arxiv.
 
     Query is passed unchanged: no hidden keyword rewriting or fallback provider.
-    Rate spacing is process-wide. Full raw Atom is retained as evidence but is
+    Pacing is supplied by the central transport policy. Full raw Atom is retained as evidence but is
     excluded from the bounded LLM context, which explicitly carries abstracts.
     """
-    import threading
-    _lock = threading.Lock()
-    _last_request = None
-
     def __init__(self, *, limit=2, timeout=30, max_abstract_chars=2500, opener=None):
         from urllib.request import urlopen
         require(type(limit) is int and 1 <= limit <= 10 and timeout > 0 and max_abstract_chars > 0, "invalid search limits")
@@ -48,42 +44,38 @@ class ArxivSearch:
 
     @staticmethod
     def query(terms):
-        """arXiv defaults to OR across bare words; require the generated topic words."""
-        require(isinstance(terms, list) and terms and all(isinstance(t, str) and t.strip() for t in terms), "arXiv search phrases required")
-        import re
-        # Preserve the existing operator-supplied exact-paper evaluation path.
-        if len(terms) == 1 and re.fullmatch(r"id:(?:[a-zA-Z.-]+/)?[0-9]+(?:\.[0-9]+)?(?:v[0-9]+)?", terms[0]):
-            return terms[0]
-        words = list(dict.fromkeys(word for term in terms for word in re.findall(r"[\w-]+", term, flags=re.UNICODE)))
-        require(words, "arXiv query has no searchable words")
-        return " AND ".join('all:"' + word + '"' for word in words)
+        """Compatibility entry point; compilation belongs to the central compiler."""
+        from .query_profiles import legacy_query
+        return legacy_query('arxiv', terms)
 
-    def search(self, query):
+    def search(self, query, *, before_request=None):
         import re
-        import time
         from urllib.request import Request
         from urllib.parse import urlencode
         from urllib.error import HTTPError
         from xml.etree import ElementTree
-        url = "https://export.arxiv.org/api/query?" + urlencode({"search_query": query, "start": 0,
-            "max_results": self.limit, "sortBy": "relevance", "sortOrder": "descending"})
+        endpoint = "https://export.arxiv.org/api/query"
+        parameters = {"search_query": query, "start": 0, "max_results": self.limit,
+                      "sortBy": "relevance", "sortOrder": "descending"}
+        url = endpoint + "?" + urlencode(parameters)
+        from .transport import standalone
+        self.requests = []
+        gate = before_request or standalone
         req = Request(url, headers={"User-Agent": "Mira/0.2 (bounded local research; https://github.com/saolda/Mira)", "Accept": "application/atom+xml"})
-        with ArxivSearch._lock:
-            if ArxivSearch._last_request is not None:
-                time.sleep(max(0, 3 - (time.monotonic() - ArxivSearch._last_request)))
-            ArxivSearch._last_request = time.monotonic()
-            try:
-                with self.opener(req, timeout=self.timeout) as response:
-                    raw = response.read().decode("utf-8")
-            except HTTPError as exc:
-                result = {"status": "rate_limited" if exc.code == 429 else "failed", "results": [],
-                        "http_status": exc.code, "retry_after": exc.headers.get("Retry-After"),
-                        "request_url": url}
-                if exc.code != 429: result["error"] = "arXiv HTTP request failed"
-                exc.close()
-                return result
-            except (OSError, TimeoutError) as exc:
-                return {"status": "failed", "results": [], "request_url": url, "error": type(exc).__name__}
+        gate(endpoint, parameters)
+        self.requests.append({'endpoint': endpoint, 'parameters': parameters})
+        try:
+            with self.opener(req, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            result = {"status": "rate_limited" if exc.code == 429 else "failed", "results": [],
+                    "http_status": exc.code, "retry_after": exc.headers.get("Retry-After"),
+                    "request_url": url, "requests": list(self.requests)}
+            if exc.code != 429: result["error"] = "arXiv HTTP request failed"
+            exc.close()
+            return result
+        except (OSError, TimeoutError) as exc:
+            return {"status": "failed", "results": [], "request_url": url, "requests": list(self.requests), "error": type(exc).__name__}
         try:
             root = ElementTree.fromstring(raw)
             ns = {"a": "http://www.w3.org/2005/Atom"}
@@ -105,7 +97,7 @@ class ArxivSearch:
                     if value: row[tag] = value.strip()
             require(len(results) <= self.limit, "provider exceeded requested result bound")
             return validate_search({"status": "ok" if results else "empty", "results": results,
-                                    "request_url": url, "raw_api_response": raw})
+                                    "request_url": url, "requests": list(self.requests), "raw_api_response": raw})
         except (ValueError, ElementTree.ParseError) as exc:
-            return {"status": "failed", "results": [], "request_url": url, "raw_api_response": raw,
+            return {"status": "failed", "results": [], "request_url": url, "requests": list(self.requests), "raw_api_response": raw,
                     "error": "invalid arXiv response: " + str(exc)}

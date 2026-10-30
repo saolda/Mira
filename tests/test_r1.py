@@ -271,7 +271,8 @@ class R1Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             search = FixtureSearch([{"status": "empty", "results": []}])
             research = Research(directory, ScriptedLLM([]), {"fixture": search})
-            research.initialize("Legacy thermal question?", ["fixture"])
+            with patch('mira.query_profiles.snapshot', side_effect=lambda s,d:{k:v for k,v in s.items() if k!='profiles'}):
+                research.initialize("Legacy thermal question?", ["fixture"])
             with research.store.lock():
                 token, memories, equations, ledger = research.store.read()
                 state = loads(research.store._files()["research/state.json"])

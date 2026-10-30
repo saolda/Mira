@@ -51,7 +51,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual({s['id'] for s in values},{'general','engineering','humanities','biomedical','medical','education'})
         self.assertEqual(strategies.select(values,'biomedical')['databases'][:2],['pubmed','europe_pmc'])
         path = Path(self.temp.name)/'strategies.json'
-        path.write_text(dumps([{'id':'focused','name':'Focused','description':'One database.','databases':['arxiv']}]))
+        path.write_text(dumps([{'id':'focused','name':'Focused','description':'One database.','databases':['arxiv'],'profiles':{'arxiv':'arxiv_subject'}}]))
         with patch.dict(os.environ,{'MIRA_RESEARCH_STRATEGIES':str(path)}):
             r=self.runner(); state=r.initialize('Q?',strategy='focused', context_budget=12000)
         self.assertEqual(state['strategies'][0]['databases'],['arxiv'])
@@ -136,36 +136,39 @@ class StrategyTests(unittest.TestCase):
                                                 'b':FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'120'}])})
         r.initialize('Q?',['a','b'], context_budget=12000)
         with tempfile.TemporaryDirectory() as logs: out=r.run(10, log_directory=logs)
-        self.assertEqual(out['status'],'providers_unavailable')
+        self.assertEqual(out['status'],'waiting_for_provider')
         self.assertEqual(self.state()['nodes']['q1']['next_database_index'],2)
         self.assertEqual(self.state()['nodes']['q1']['round_outcomes'],['failed','rate_limited'])
         self.assertEqual(len(self.llm.requests),1)
-        self.assertIn('b',self.state()['provider_cooldowns'])
+        self.assertIn('b',self.state()['provider_availability'])
 
-    def test_cooldown_persists_and_does_not_repeat_request_after_retry(self):
+    def test_cooldown_persists_and_does_not_repeat_request_after_restart(self):
         a=FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'3600'}]); b=FixtureSearch([{'status':'empty','results':[]}])
-        r=self.runner([{'keywords':['heat', 'transfer']},decision('retry'),{'keywords':['thermal', 'conductivity']}],{'a':a,'b':b})
+        r=self.runner([{'keywords':['heat', 'transfer']}],{'a':a,'b':b})
         r.initialize('Q?',['a','b'], context_budget=12000)
-        for _ in range(5):r.step()
-        until=self.state()['provider_cooldowns']['a']
+        for _ in range(3):r.step()
+        until=self.state()['provider_availability']['a']['next_request_at']
         restarted=Research(self.root,self.llm,{'a':a,'b':b})
-        e=restarted.step();self.assertEqual(e['action'],'R2');self.assertEqual(e['search_status'],'rate_limited')
+        e=restarted.step();self.assertEqual(e['status'],'waiting_for_provider')
+        self.assertEqual(e['retry_at'],until)
         self.assertEqual(len(a.queries),1)
-        self.assertEqual(self.state()['provider_cooldowns']['a'],until)
-        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],1)
+        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],2)
+        self.assertEqual(len(self.llm.requests),1)
 
-    def test_all_rate_limited_round_advances_pointers_and_continues_without_error(self):
+    def test_all_rate_limited_round_advances_pointers_and_waits_without_r4(self):
         limited={'status':'rate_limited','results':[],'http_status':429,'retry_after':'3600'}
-        r=self.runner([{'keywords':['heat', 'transfer']},decision('retry')],
+        r=self.runner([{'keywords':['heat', 'transfer']}],
                       {'a':FixtureSearch([limited]),'b':FixtureSearch([limited])})
         r.initialize('Q?',['a','b'],context_budget=12000)
         with tempfile.TemporaryDirectory() as logs: outcome=r.run(4, log_directory=logs)
-        self.assertEqual([e['action'] for e in outcome['actions']],['R1','R2','R2','R4'])
-        self.assertTrue(all(e['status']=='committed' and not e.get('error') for e in outcome['actions']))
+        self.assertEqual([e.get('action') for e in outcome['actions']],['R1','R2','R2',None])
+        self.assertTrue(all(e['status']=='committed' for e in outcome['actions'][:3]))
+        self.assertEqual(outcome['status'],'waiting_for_provider')
         self.assertEqual([e['tree']['q1']['next_database_index'] for e in outcome['actions'][1:3]],[1,2])
-        self.assertEqual(set(self.state()['provider_cooldowns']),{'a','b'})
+        self.assertEqual(set(self.state()['provider_availability']),{'a','b'})
         self.assertEqual(self.state()['nodes']['q1']['status'],'living')
-        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],0)
+        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],2)
+        self.assertEqual(len(self.llm.requests),1)
 
     def test_cross_provider_dedup_and_empty_extraction_marks_processed(self):
         first=evidence();first['results'][0].update(identifiers={'doi':'10.1234/PAPER'},authors=['Jane Smith'])

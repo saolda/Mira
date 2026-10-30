@@ -46,6 +46,15 @@ even if the input file changes. Prompts keep the question and objectives intact
 while bounding supplementary background. Oversized essential inputs fail the
 existing token-budget checks. Keep private question files under ignored `memory/`.
 
+Query profiles live in `src/mira/query_profiles.json`; strategies assign one to
+each provider. `research-init --query-profiles PATH` selects an alternative
+registry, frozen with the strategy at initialization. Existing experiments keep
+their original query semantics. Provider cooldowns retain deferred queries;
+`research-run` stops with `waiting_for_provider` and a retry timestamp when no
+other work is ready. Resume later without regenerating R1 concepts. After an
+interrupted HTTP submission, inspect `retrieval_calls/` before explicitly using
+`--acknowledge-interrupted-searches`; unknown results are never silently retried.
+
 LLM prompts are editable in [prompt_templates/](prompt_templates/).
 The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.
