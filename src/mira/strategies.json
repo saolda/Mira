@@ -5,13 +5,11 @@
     "description": "Broad orientation and multidisciplinary scholarly research.",
     "databases": [
       "wikipedia",
-      "openalex",
       "crossref",
       "arxiv"
     ],
     "profiles": {
       "wikipedia": "wikipedia_general",
-      "openalex": "openalex_broad",
       "crossref": "crossref_bibliographic",
       "arxiv": "arxiv_subject"
     }
@@ -23,13 +21,11 @@
     "databases": [
       "arxiv",
       "crossref",
-      "openalex",
       "wikipedia"
     ],
     "profiles": {
       "arxiv": "arxiv_subject",
       "crossref": "crossref_bibliographic",
-      "openalex": "openalex_broad",
       "wikipedia": "wikipedia_general"
     }
   },
@@ -39,12 +35,10 @@
     "description": "History, philosophy, arts and cultural scholarship.",
     "databases": [
       "crossref",
-      "openalex",
       "wikipedia"
     ],
     "profiles": {
       "crossref": "crossref_bibliographic",
-      "openalex": "openalex_broad",
       "wikipedia": "wikipedia_general"
     }
   },
@@ -56,14 +50,12 @@
       "pubmed",
       "europe_pmc",
       "crossref",
-      "openalex",
       "wikipedia"
     ],
     "profiles": {
       "pubmed": "pubmed_balanced",
       "europe_pmc": "europe_pmc_balanced",
       "crossref": "crossref_bibliographic",
-      "openalex": "openalex_broad",
       "wikipedia": "wikipedia_general"
     }
   },
@@ -74,14 +66,12 @@
     "databases": [
       "pubmed",
       "europe_pmc",
-      "openalex",
       "crossref",
       "wikipedia"
     ],
     "profiles": {
       "pubmed": "pubmed_balanced",
       "europe_pmc": "europe_pmc_balanced",
-      "openalex": "openalex_broad",
       "crossref": "crossref_bibliographic",
       "wikipedia": "wikipedia_general"
     }
@@ -93,13 +83,11 @@
     "databases": [
       "eric",
       "crossref",
-      "openalex",
       "wikipedia"
     ],
     "profiles": {
       "eric": "eric_education",
       "crossref": "crossref_bibliographic",
-      "openalex": "openalex_broad",
       "wikipedia": "wikipedia_general"
     }
   }

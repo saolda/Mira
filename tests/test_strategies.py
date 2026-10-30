@@ -62,7 +62,7 @@ class StrategyTests(unittest.TestCase):
         r=self.runner();s=r.initialize('Engineering?',strategy='engineering', context_budget=12000)
         self.assertEqual(self.llm.requests,[])
         self.assertEqual(s['strategy_selection']['method'],'explicit')
-        self.assertEqual(s['strategies'][0]['databases'],['arxiv','crossref','openalex','wikipedia'])
+        self.assertEqual(s['strategies'][0]['databases'],['arxiv','crossref','wikipedia'])
         self.assertEqual(r.inspect()['strategy']['id'],'engineering')
         self.assertRaisesRegex(ValueError,'immutable',self.change,lambda s:s['strategies'][0]['databases'].reverse())
 
@@ -101,6 +101,57 @@ class StrategyTests(unittest.TestCase):
                 self.assertFalse(record['validation']['accepted'])
                 self.assertEqual(record['outcome']['status'],'rejected')
                 self.assertRaises(ValueError,r.initialize,'Root?',strategy='general')
+
+    def test_predefined_suspension_preserves_remaining_order_and_profiles(self):
+        expected = {
+            'general':['wikipedia','crossref','arxiv'],
+            'engineering':['arxiv','crossref','wikipedia'],
+            'humanities':['crossref','wikipedia'],
+            'biomedical':['pubmed','europe_pmc','crossref','wikipedia'],
+            'medical':['pubmed','europe_pmc','crossref','wikipedia'],
+            'education':['eric','crossref','wikipedia'],
+        }
+        for value in strategies.registry():
+            self.assertEqual(value['databases'],expected[value['id']])
+            self.assertEqual(set(value['profiles']),set(value['databases']))
+            self.assertNotIn('openalex',value['profiles'])
+
+    def test_automatic_medical_selection_excludes_openalex(self):
+        r=self.runner([{'strategy':'medical','reason':'Clinical evidence.'}])
+        s=r.initialize('Medical question?',context_budget=12000)
+        self.assertEqual(s['strategies'][0]['databases'],['pubmed','europe_pmc','crossref','wikipedia'])
+        record=read_records(self.root)[0]
+        self.assertNotIn('openalex',record['request']['serialized_request'])
+        self.assertEqual(s['strategy_selection']['method'],'r0')
+
+    def test_existing_snapshot_and_deferred_openalex_survive_registry_change(self):
+        old=deepcopy(strategies.select(strategies.registry(),'medical'))
+        old['databases'].insert(2,'openalex');old['profiles']['openalex']='openalex_broad'
+        path=Path(self.temp.name)/'old-strategies.json';path.write_text(dumps([old]))
+        adapters={p:FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'99999'}]
+            if p=='openalex' else [{'status':'empty','results':[]}]) for p in old['databases']}
+        r=self.runner([{'keywords':['volume doubling time','spiculated nodule']}],adapters)
+        r.initialize('Medical question?',strategy='medical',registry=path,context_budget=30000)
+        r.step()
+        for _ in old['databases']:r.step()
+        frozen=deepcopy(self.state())
+        path.write_text('[]')
+        resumed=Research(self.root,self.llm,adapters)
+        self.assertEqual(resumed.step()['status'],'waiting_for_provider')
+        self.assertEqual(self.state(),frozen)
+        self.assertEqual(frozen['strategies'][0]['databases'],old['databases'])
+        self.assertEqual(frozen['nodes']['q1']['deferred_searches'][0]['provider'],'openalex')
+
+    def test_explicit_openalex_list_still_submits_with_default_profile(self):
+        adapter=FixtureSearch([{'status':'empty','results':[]}])
+        r=self.runner([{'keywords':['volume doubling time','spiculated nodule']}],{'openalex':adapter})
+        s=r.initialize('Medical question?',['openalex'],context_budget=30000)
+        self.assertEqual(s['strategies'][0]['databases'],['openalex'])
+        self.assertEqual(s['strategies'][0]['profiles'],{'openalex':'default'})
+        r.step();e=r.step()
+        self.assertEqual(e['provider'],'openalex')
+        self.assertTrue(e['query_submitted'])
+        self.assertEqual(adapter.queries,['volume doubling time spiculated nodule'])
 
     def test_cli_explicit_automatic_and_compatibility_paths(self):
         script=Path(self.temp.name)/'script.json';script.write_text(dumps({'responses':[{'strategy':'education','reason':'Teaching question.'}]}))

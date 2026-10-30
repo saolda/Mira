@@ -19,7 +19,7 @@ from mira.research import Research
 QUESTION = ('What conditions cause rapidly enlarging spiculated pulmonary masses in older adults, '
             'and which clinical, imaging, microbiological and pathological findings distinguish '
             'infectious, inflammatory and malignant causes?')
-MEDICAL = ['pubmed', 'europe_pmc', 'openalex', 'crossref', 'wikipedia']
+MEDICAL = ['pubmed', 'europe_pmc', 'crossref', 'wikipedia']
 DESCRIPTION = ('Biomedical and clinical research, including diseases, diagnosis, treatment, '
                'pathology, epidemiology and medical evidence.')
 
@@ -48,8 +48,8 @@ def europe_result(*, identifiers=True):
 
 def wire_adapters(data):
     adapters = providers.adapters()
-    calls = {name:[] for name in MEDICAL}
-    for name in MEDICAL:
+    calls = {name:[] for name in [*MEDICAL, 'openalex']}
+    for name in calls:
         responses = iter(data[name])
         def open_(request, timeout, *, name=name, responses=responses):
             calls[name].append(request)
@@ -72,7 +72,7 @@ class MedicalTests(unittest.TestCase):
         self.assertEqual({k:v for k,v in medical.items() if k!='profiles'}, {'id':'medical', 'name':'Medical', 'description':DESCRIPTION, 'databases':MEDICAL})
         self.assertEqual(set(medical['profiles']),set(MEDICAL))
         adapters = providers.adapters()
-        expected = [PubMedSearch, EuropePMCSearch, OpenAlexSearch, providers.CrossrefSearch, providers.WikipediaSearch]
+        expected = [PubMedSearch, EuropePMCSearch, providers.CrossrefSearch, providers.WikipediaSearch]
         self.assertEqual([type(adapters[p]) for p in medical['databases']], expected)
         self.assertTrue(set(MEDICAL) <= set(strategies.PROVIDERS))
         self.assertTrue(all(callable(adapters[p].search) for p in MEDICAL))
@@ -80,11 +80,11 @@ class MedicalTests(unittest.TestCase):
 
     def test_existing_strategy_sequences_and_descriptions_are_preserved(self):
         expected = {
-            'general':('Broad orientation and multidisciplinary scholarly research.', ['wikipedia','openalex','crossref','arxiv']),
-            'engineering':('Engineering, computing, mathematics and technical methods.', ['arxiv','crossref','openalex','wikipedia']),
-            'humanities':('History, philosophy, arts and cultural scholarship.', ['crossref','openalex','wikipedia']),
-            'biomedical':('Clinical, biomedical and life-science evidence.', ['pubmed','europe_pmc','crossref','openalex','wikipedia']),
-            'education':('Education, teaching, learning and educational research.', ['eric','crossref','openalex','wikipedia'])}
+            'general':('Broad orientation and multidisciplinary scholarly research.', ['wikipedia','crossref','arxiv']),
+            'engineering':('Engineering, computing, mathematics and technical methods.', ['arxiv','crossref','wikipedia']),
+            'humanities':('History, philosophy, arts and cultural scholarship.', ['crossref','wikipedia']),
+            'biomedical':('Clinical, biomedical and life-science evidence.', ['pubmed','europe_pmc','crossref','wikipedia']),
+            'education':('Education, teaching, learning and educational research.', ['eric','crossref','wikipedia'])}
         current = {s['id']:(s['description'],s['databases']) for s in strategies.registry() if s['id']!='medical'}
         self.assertEqual(current, expected)
 
@@ -110,24 +110,24 @@ class MedicalTests(unittest.TestCase):
         self.assertIn(DESCRIPTION,record['request']['serialized_request'])
         self.assertTrue(record['validation']['accepted'])
 
-    def test_r1_r2_use_all_five_real_adapters_in_order_without_query_rewriting(self):
+    def test_r1_r2_use_all_four_real_adapters_in_order_without_query_rewriting(self):
         data={'pubmed':[{'esearchresult':{'idlist':[]}}], 'europe_pmc':[{'resultList':{'result':[]}}],
               'openalex':[{'results':[]}], 'crossref':[{'status':'ok','message':{'items':[]}}],
               'wikipedia':[{'batchcomplete':True}]}
         adapters,calls=wire_adapters(data)
         llm=ScriptedLLM([{'keywords':['spiculated pulmonary mass', 'volume doubling time']}])
         r=Research(self.root,llm,adapters); r.initialize(QUESTION,strategy='medical',context_budget=24000)
-        with patch('mira.transport.time.sleep'): events=[r.step() for _ in range(6)]
-        self.assertEqual([e['action'] for e in events],['R1']+['R2']*5)
+        with patch('mira.transport.time.sleep'): events=[r.step() for _ in range(5)]
+        self.assertEqual([e['action'] for e in events],['R1']+['R2']*4)
         self.assertEqual([e['provider'] for e in events[1:]],MEDICAL)
         self.assertTrue(all(e['status']=='committed' for e in events))
-        query_parameters=['term','query','search','query.bibliographic','gsrsearch']
+        query_parameters=['term','query','query.bibliographic','gsrsearch']
         for name,key in zip(MEDICAL,query_parameters):
             self.assertEqual(len(calls[name]),1)
             expected = {'pubmed':'(spiculated pulmonary mass) AND (volume doubling time)',
                         'europe_pmc':'\"spiculated pulmonary mass\" AND \"volume doubling time\"'}.get(name,'spiculated pulmonary mass volume doubling time')
             self.assertEqual(parse_qs(urlsplit(calls[name][0].full_url).query)[key],[expected])
-        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],5)
+        self.assertEqual(self.state()['nodes']['q1']['next_database_index'],4)
         self.assertEqual(len(llm.requests),1)
 
     def test_pubmed_europe_pmc_dedup_metadata_and_provenance_through_r3_restart(self):
