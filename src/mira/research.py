@@ -16,6 +16,24 @@ from .budget import measure
 from . import glossary, questions
 
 
+def search_outcome(result):
+    """Project retrieval outcomes for R4 without transport/configuration details.
+
+    Older records may lack round/profile/submission metadata. Keep those unknown
+    rather than inventing it, and derive missing counts from their retained rows.
+    The original record and scientific evidence are never changed.
+    """
+    duplicates = len(result.get("duplicates", []))
+    unique = result.get("unique_record_count", len(result.get("results", [])))
+    outcome = {key: result.get(key) for key in
+               ("round", "provider", "profile_id", "query", "query_submitted", "status")}
+    outcome.update(returned_record_count=result.get("returned_record_count", unique + duplicates),
+                   unique_record_count=unique, duplicate_count=duplicates)
+    if result.get("http_status") is not None:
+        outcome["http_status"] = result["http_status"]
+    return outcome
+
+
 class Research:
     def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None):
         self.knowledge = Knowledge(store=LiveStore(root))
@@ -120,7 +138,7 @@ class Research:
                 if result.get("node_id") == node_id:
                     searches.append({key: value for key, value in result.items() if key != "raw_api_response"})
         searches.sort(key=lambda item: (item.get("timestamp", ""), item.get("reference", "")))
-        history = [{key: value for key, value in result.items() if key not in {"results", "duplicates", "payload_ref", "payload_sha256"}} for result in searches]
+        history = [search_outcome(result) for result in searches]
         return {"root_question": state["nodes"][state["root_id"]]["question"], "question": n["question"],
                 "node": deepcopy(n),
                 "ancestor_questions": [state["nodes"][i]["question"] for i in tree.ancestors(state, node_id)],

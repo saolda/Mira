@@ -113,7 +113,11 @@ class ResearchTests(unittest.TestCase):
         r4 = prompts["R4"]["context"]
         self.assertEqual([s["status"] for s in r4["search_history"]], ["failed", "ok"])
         self.assertEqual([s["query"] for s in r4["search_history"]], ["heat transfer", "heat transfer"])
-        self.assertEqual(r4["search_history"][0]["error"], "offline")
+        self.assertEqual(r4["search_history"][0]["provider"], "offline")
+        self.assertNotIn("error", r4["search_history"][0])
+        failed = next(loads(p.read_text()) for p in (self.root / "research/results").glob("*.json")
+                      if loads(p.read_text())["provider"] == "offline")
+        self.assertEqual(failed["error"], "offline")
         self.assertIn("r1", [m["id"] for m in r4["research_results"]["memories"]])
         self.assertNotIn("raw_api_response", dumps(prompts))
         files = r.store._files()
