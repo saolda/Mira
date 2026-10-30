@@ -114,7 +114,7 @@ class MedicalTests(unittest.TestCase):
               'openalex':[{'results':[]}], 'crossref':[{'status':'ok','message':{'items':[]}}],
               'wikipedia':[{'batchcomplete':True}]}
         adapters,calls=wire_adapters(data)
-        llm=ScriptedLLM([{'keywords':['spiculated pulmonary mass']}])
+        llm=ScriptedLLM([{'keywords':['spiculated pulmonary mass', 'volume doubling time']}])
         r=Research(self.root,llm,adapters); r.initialize(QUESTION,strategy='medical',context_budget=24000)
         with patch('mira.providers.time.sleep'): events=[r.step() for _ in range(6)]
         self.assertEqual([e['action'] for e in events],['R1']+['R2']*5)
@@ -123,7 +123,7 @@ class MedicalTests(unittest.TestCase):
         query_parameters=['term','query','search','query.bibliographic','gsrsearch']
         for name,key in zip(MEDICAL,query_parameters):
             self.assertEqual(len(calls[name]),1)
-            self.assertEqual(parse_qs(urlsplit(calls[name][0].full_url).query)[key],['spiculated pulmonary mass'])
+            self.assertEqual(parse_qs(urlsplit(calls[name][0].full_url).query)[key],['spiculated pulmonary mass volume doubling time'])
         self.assertEqual(self.state()['nodes']['q1']['next_database_index'],5)
         self.assertEqual(len(llm.requests),1)
 
@@ -137,7 +137,7 @@ class MedicalTests(unittest.TestCase):
                 result={'type':'claim','text':'The fixture authors report a diagnostic comparison.',
                         'qualification':'Fixture only; no clinical inference or independent validation.',
                         'source_ids':['pmid:1234'],'related_to':None}
-                llm=ScriptedLLM([{'keywords':['pulmonary mass']},{'summary':'Attributed fixture comparison with limitations.','results':[result]}])
+                llm=ScriptedLLM([{'keywords':['pulmonary mass', 'volume doubling time']},{'summary':'Attributed fixture comparison with limitations.','results':[result]}])
                 r=Research(root,llm,adapters);r.initialize(QUESTION,strategy='medical',context_budget=24000)
                 with patch('mira.providers.time.sleep'):
                     self.assertEqual(r.step()['action'],'R1'); e=r.step(); self.assertEqual(e['provider'],'pubmed')

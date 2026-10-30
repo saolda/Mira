@@ -25,7 +25,7 @@ class PromptTests(unittest.TestCase):
 
     def call(self, name):
         root = self.catalog.create(name)
-        llm = ScriptedLLM([{"keywords": ["test"]}])
+        llm = ScriptedLLM([{"keywords": ["test", "measurement"]}])
         r = Research(root, llm, {}); r.initialize("Recorded context?", ["fixture"])
         self.assertEqual(r.step()["status"], "committed")
         file = next((root / "interactions").glob("*/request.json"))

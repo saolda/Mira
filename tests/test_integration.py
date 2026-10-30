@@ -92,7 +92,7 @@ class IntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             result = ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM)).search("uncertainty")
             proposal = draft(); proposal["source_ids"] = [result["results"][0]["id"]]
-            llm = ScriptedLLM([{"keywords": ["uncertainty"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [proposal]}])
+            llm = ScriptedLLM([{"keywords": ["uncertainty", "measurement"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [proposal]}])
             r = Research(root, llm, {"arxiv": ArxivSearch(opener=lambda *a, **kw: BytesIO(ATOM))})
             r.initialize("What does this abstract claim?", ["arxiv"], context_budget=12000)
             with patch("time.sleep"):
@@ -109,7 +109,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_server_usage_identifier_and_rejected_complete_response_retained(self):
         envelope = dumps({"model": "actual-server-model", "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            "choices": [{"finish_reason": "stop", "message": {"content": '{"keywords":["test"]}'}}]})
+            "choices": [{"finish_reason": "stop", "message": {"content": '{"keywords":["test", "measurement"]}'}}]})
         with tempfile.TemporaryDirectory() as root:
             r = Research(root, ScriptedLLM([envelope]), {}); r.initialize("Q?", ["fixture"])
             self.assertEqual(r.step()["status"], "committed")

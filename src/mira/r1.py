@@ -50,6 +50,25 @@ def validate_terms(components, control_terms):
         require(not re.search(pattern, query), "R1 query contains a supplied control term")
 
 
+# Recognisable query grammar only; scientific relevance and phrase meaning are
+# model responsibilities. Lowercase conjunctions in established phrases are prose.
+BOOLEAN = re.compile(r"\b(?:AND|OR|NOT|XOR|NEAR|WITHIN)\b|(?i:\b(?:NEAR|WITHIN|ADJ)\s*/\s*\d+\b|\bADJ\d+\b)")
+QUERY_SYNTAX = re.compile(r'[\[\]{}:"*?|&\\=<>~`;]|(?:^|\s)[+-](?=\S)|[\x00-\x1f\x7f]')
+PROVIDERS = re.compile(r"\b(?:arxiv|pubmed|crossref|europe[ _-]*pmc|eric|openalex|wikipedia)\b", re.I)
+
+
+def validate_concepts(components):
+    """Validate the R1 proposal without revalidating legacy persisted keywords."""
+    require(isinstance(components, list) and 2 <= len(components) <= 6,
+            "R1 requires 2–6 concepts")
+    for concept in components:
+        require(isinstance(concept, str) and concept.strip(), "R1 concepts must be nonempty strings")
+        require(len(concept.split()) <= 5, "R1 concepts must contain at most five words")
+        require(not BOOLEAN.search(concept), "R1 concepts must not contain Boolean operators")
+        require(not QUERY_SYNTAX.search(concept), "R1 concepts must not contain field tags or query syntax")
+        require(not PROVIDERS.search(concept), "R1 concepts must not contain provider names")
+
+
 # Deliberately conservative textual filtering, not a semantic security classifier.
 INSTRUCTIONS = re.compile(
     r"\b(ignore|disregard|override)\b.{0,60}\b(instructions?|prompts?|previous|above|rules?)\b|"
@@ -163,14 +182,26 @@ def context(state, memories, files, node_id, control_terms=()):
     return {"question": question, "question_context": additional, **brief(state, "R1", node_id),
             "previous_search_terms": unique(previous), "control_terms": controls(control_terms),
             "memory_context": memory_context(memories, set(node["memory_ids"]), [question, *additional]),
-            "glossary_context": {"entries": [], "untrusted_glossary_data": True,
-                "recent_search_outcomes": recent_outcomes(files, node_id)}}
+            "glossary_context": {"entries": [], "untrusted_glossary_data": True},
+            "search_outcomes": recent_outcomes(files, node_id)}
 
 
 def recent_outcomes(files, node_id):
+    """Project committed retrieval metadata, independently of glossary budgets.
+
+    LiveStore's read/recovery gate supplies committed canonical files, not pending
+    journal payloads or diagnostic search attempts. Keep the actual query intact:
+    prose sanitisation would remove or alter provider syntax. The enclosing prompt
+    treats these records as data and checks the full rendered request's budget.
+    """
     rows = [loads(raw) for path, raw in files.items() if path.startswith("research/results/")]
     rows = sorted((row for row in rows if row.get("node_id") == node_id),
-                  key=lambda row: (row.get("timestamp", ""), row.get("reference", "")))[-8:]
-    return [{"query": clean_text(row.get("query", ""), 180)[0], "provider": row.get("provider"),
-             "status": row.get("status"), "used_glossary_term_ids": row.get("used_glossary_term_ids", [])}
+                  key=lambda row: (row.get("timestamp", ""), row.get("reference", "")))[-12:]
+    return [{"provider": row.get("provider"), "profile_id": row.get("profile_id"),
+             "query": row.get("query", ""),
+             # Absent legacy submission metadata is unknown, not a failed search.
+             "query_submitted": row.get("query_submitted"), "status": row.get("status"),
+             "returned_record_count": row.get("returned_record_count",
+                 len(row.get("results", [])) + len(row.get("duplicates", []))),
+             "unique_record_count": row.get("unique_record_count", len(row.get("results", [])))}
             for row in rows]

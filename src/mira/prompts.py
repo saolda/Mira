@@ -9,7 +9,7 @@ from .format import digest, dumps, require
 ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S1", "S2")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
                 "children", "strategy", "next_database", "search_history", "equations")
-SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context"), "R3": ("question", "question_context", "research"),
+SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "search_outcomes"), "R3": ("question", "question_context", "research"),
          "R4": ("question", "question_context", "research_results", "search_history"),
          "R5": ("question", "question_context", "research_results", "max_children"),
          "S1": ("root_question", "question", "research_tree", "memory_catalogue", "synthesis_budget", "previous_attempt_exclusions"),

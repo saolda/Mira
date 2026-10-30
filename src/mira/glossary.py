@@ -366,10 +366,7 @@ class Directory:
             names = r1.tokens(row["term"] + " " + row["aliases"])
             return (4 * len(names & relevant) + len(names & findings) + .1 * (row["id"] not in used), -int(row["id"][1:]))
         entries = []
-        result = {"entries": entries, "untrusted_glossary_data": True,
-                  "recent_search_outcomes": list(context.get("glossary_context", {}).get("recent_search_outcomes", []))}
-        while result["recent_search_outcomes"] and len(dumps(result).encode("utf-8")) > meta["token_budget"] // 3:
-            result["recent_search_outcomes"].pop(0)
+        result = {"entries": entries, "untrusted_glossary_data": True}
         for row in sorted(candidates.values(), key=score, reverse=True):
             term, _ = r1.clean_text(row["term"], 160)
             if not term: continue

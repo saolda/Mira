@@ -25,7 +25,7 @@ class DemoLLM(ScriptedLLM):
     def complete(self, serialized_request):
         self.requests.append(serialized_request)
         content = loads(serialized_request)["messages"][-1]["content"]
-        action = ("R1" if "PREVIOUSLY USED SEARCH TERMS\n" in content else
+        action = ("R1" if "PREVIOUSLY GENERATED SEARCH TERMS\n" in content else
                   "R3" if "RETRIEVED RESEARCH\n" in content else
                   "R4" if "PREVIOUS SEARCHES\n" in content else
                   "R5" if "ACCUMULATED RESEARCH\n" in content else

@@ -57,7 +57,7 @@ class BranchingTests(unittest.TestCase):
     def exhaust(self, state, *_): state['nodes']['q1']['status'] = 'exhausted'
 
     def test_threshold_uses_exact_r5_wire_and_crossing_memory_is_kept(self):
-        r = self.make([{'keywords': ['heat']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
+        r = self.make([{'keywords': ['heat', 'transfer']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
         empty_total = self.state()['nodes']['q1']['research_capacity']['estimated_tokens']
         self.change(lambda s, *_: s.update(research_capacity_tokens=empty_total + 1))
         for expected in ('R1', 'R2', 'R3'):
@@ -166,7 +166,7 @@ class BranchingTests(unittest.TestCase):
         self.assertEqual(self.state()['nodes']['q2']['next_database_index'], 1)
 
     def test_no_exhausted_node_never_schedules_r5(self):
-        self.make([{'keywords': ['heat']}], branching_interval=1)
+        self.make([{'keywords': ['heat', 'transfer']}], branching_interval=1)
         self.change(lambda s, *_: s.update(research_cycles_since_branching=100))
         self.assertEqual(self.r.step()['action'], 'R1')
         self.assertEqual(self.state()['branching_cycles'], 0)
@@ -262,7 +262,7 @@ class BranchingTests(unittest.TestCase):
                 self.assertEqual(s['nodes']['q1']['status'], 'split'); self.assertEqual(s['next_node'], 3)
                 self.assertEqual(s['branching_cycles'], 1)
                 self.assertFalse(r.llm.requests)
-                r.llm = ScriptedLLM([{'keywords': ['mechanism']}])
+                r.llm = ScriptedLLM([{'keywords': ['mechanism', 'measurement']}])
                 self.assertEqual(r.step()['action'], 'R1')
 
     def test_legacy_state_is_readable_and_upgrade_is_journaled(self):

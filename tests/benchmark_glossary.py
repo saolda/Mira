@@ -9,7 +9,7 @@ from mira.format import dumps,loads
 from mira import r1
 from test_glossary import seed_benchmark
 with TemporaryDirectory(prefix='mira-glossary-benchmark-') as directory:
- r=Research(directory,ScriptedLLM([{'keywords':['pulmonary granuloma 1']}]),{})
+ r=Research(directory,ScriptedLLM([{'keywords':['pulmonary granuloma 1', 'inflammation']}]),{})
  r.initialize('Which pulmonary masses involve granuloma or infection?',['fixture'],context_budget=24000)
  start=time.perf_counter();state=seed_benchmark(r);setup=time.perf_counter()-start
  with r.store.lock():context=r1.context(state,[],r.store._files(),'q1')

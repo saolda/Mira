@@ -83,7 +83,7 @@ class CompactResearchTests(unittest.TestCase):
         self.assertEqual(set(memory.units[0].fields), {"Kind", "Proposition"})
 
     def runner(self, root, responses, rows=None):
-        llm = ScriptedLLM([{"keywords": ["physics"]}, *responses])
+        llm = ScriptedLLM([{"keywords": ["physics", "measurement"]}, *responses])
         evidence = research()
         if rows is not None: evidence["results"] = rows
         runner = Research(root, llm, {"fixture": FixtureSearch([evidence, evidence])})
@@ -210,7 +210,7 @@ class CompactResearchTests(unittest.TestCase):
 
     def test_skipped_source_advances_to_next_database_without_retry(self):
         with tempfile.TemporaryDirectory() as root:
-            llm = ScriptedLLM([{"keywords": ["physics"]}, "{not JSON"])
+            llm = ScriptedLLM([{"keywords": ["physics", "measurement"]}, "{not JSON"])
             runner = Research(root, llm, {"first": FixtureSearch([research()]),
                                           "second": FixtureSearch([{"status": "empty", "results": []}])})
             runner.initialize("Physics?", ["first", "second"], context_budget=24000)
@@ -440,7 +440,7 @@ class R3Tests(unittest.TestCase):
     def test_live_pipeline_exact_prompt_and_atomic_equation_image_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog=Experiments(directory);root=catalog.create("ordered-r3")
-            llm=ScriptedLLM([{"keywords":["physics"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(),equation(),image()]}])
+            llm=ScriptedLLM([{"keywords":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(),equation(),image()]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("What does the physics research show?",["fixture"],context_budget=20000)
             for _ in range(3):self.assertEqual(r.step()["status"],"committed")
@@ -459,7 +459,7 @@ class R3Tests(unittest.TestCase):
     def test_skipped_equation_batch_rolls_back_equations_and_ids(self):
         with tempfile.TemporaryDirectory() as root:
             bad=equation(None);bad["latex"]="x=y\n## Relationships"
-            llm=ScriptedLLM([{"keywords":["physics"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
+            llm=ScriptedLLM([{"keywords":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("Physics?",["fixture"],context_budget=20000)
             r.step();r.step()

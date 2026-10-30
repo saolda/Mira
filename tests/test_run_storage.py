@@ -41,7 +41,7 @@ class RunStorageTests(unittest.TestCase):
     def make(self, name="fixture", *, disposable=True, responses=None, search=None):
         root = self.catalog.create(name, disposable=disposable)
         llm = ScriptedLLM(responses if responses is not None else [
-            {"keywords": ["fictional heat"]}, extraction(), {"decision": "answered", "reason": "Fixture finished."}])
+            {"keywords": ["fictional heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Fixture finished."}])
         r = Research(root, llm, {"fixture": FixtureSearch(search if search is not None else [evidence()])})
         return r
 
@@ -121,13 +121,13 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(request["context"]["research"]["results"][0]["content"], supplied["results"][0]["content"])
 
     def test_rejected_output_and_normalized_response_are_preserved(self):
-        r = self.make(responses=[{"keywords": ["heat"]}, {"summary": "Unused nonempty summary", "results": []},
+        r = self.make(responses=[{"keywords": ["heat", "transfer"]}, {"summary": "Unused nonempty summary", "results": []},
             {"decision": "answered", "reason": "Fixture complete."}])
         self.initialize(r); result = r.run(8)
         checks = [row["data"] for row in self.rows(Path(result["execution_log"])) if row["kind"] == "interaction_validation"]
         self.assertEqual(checks[1]["proposed_response"]["summary"], "Unused nonempty summary")
         self.assertEqual(checks[1]["normalized_response"], {"summary": "", "results": []})
-        r = self.make("invalid", responses=[{"keywords": ["heat"]}, "{not json", {"decision": "answered", "reason": "Fixture complete."}])
+        r = self.make("invalid", responses=[{"keywords": ["heat", "transfer"]}, "{not json", {"decision": "answered", "reason": "Fixture complete."}])
         self.initialize(r); result = r.run(8)
         rows = self.rows(Path(result["execution_log"]))
         rejected = next(row for row in rows if row["kind"] == "interaction_validation" and not row["data"]["accepted"])
@@ -185,7 +185,7 @@ class RunStorageTests(unittest.TestCase):
 
     def test_cli_invocations_have_separate_logs_including_setup_failure(self):
         script = Path(self.temp.name) / "script.json"
-        script.write_text(dumps({"responses": [{"keywords": ["heat"]}, extraction(), {"decision": "answered", "reason": "Done."}], "providers": {"fixture": [evidence()]}}))
+        script.write_text(dumps({"responses": [{"keywords": ["heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Done."}], "providers": {"fixture": [evidence()]}}))
         cmd = [sys.executable, "-m", "mira", "--memory-dir", str(self.home)]
         init = loads(subprocess.check_output([*cmd, "research-init", "Heat?", "--experiment", "cli", "--database", "fixture", "--disposable", "--script", str(script), "--context-budget", "60000"], text=True))
         run = loads(subprocess.check_output([*cmd, "research-run", "--experiment", "cli", "--script", str(script)], text=True))

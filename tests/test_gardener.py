@@ -113,8 +113,8 @@ class GardenerTests(unittest.TestCase):
 
     def test_five_research_actions_then_one_synthesis_same_process(self):
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft(), draft("B")]},
-                decision("retry"), {"keywords": ["thermal"]}])
+            llm = ScriptedLLM([{"keywords": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft(), draft("B")]},
+                decision("retry"), {"keywords": ["thermal", "conductivity"]}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
             r.initialize("Q?", ["fixture"], context_budget=12000)
             actions = [r.step()["action"] for _ in range(5)]

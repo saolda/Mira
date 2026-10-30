@@ -157,7 +157,7 @@ class GlossaryTests(unittest.TestCase):
         r = self.research
         r.adapters = {"fixture": FixtureSearch([evidence()])}
         result = {"type": "claim", "text": "The source describes granuloma.", "qualification": "Source assertion.", "source_ids": ["source-1"], "related_to": None}
-        r.llm = ScriptedLLM([{"keywords": ["granuloma"]}, {"summary": "Source terminology.", "results": [result], "terms": [proposal(passage="fabricated")]}])
+        r.llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}, {"summary": "Source terminology.", "results": [result], "terms": [proposal(passage="fabricated")]}])
         for _ in range(3): event = r.step(); self.assertEqual(event["status"], "committed", event.get("error"))
         self.assertEqual(event["memory_ids"], ["r1"])
         self.assertEqual(event["glossary"]["accepted"], 0)
@@ -166,7 +166,7 @@ class GlossaryTests(unittest.TestCase):
     def test_glossary_only_atomic_recovery_at_each_boundary(self):
         for point in ("prepared", "replaced:glossary/g1.json", "replaced:research/state.json", "before_commit"):
             with self.subTest(point=point), tempfile.TemporaryDirectory() as directory:
-                llm = ScriptedLLM([{"keywords": ["granuloma"]}, {"summary": "Terms only.", "results": [], "terms": [proposal()]}])
+                llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}, {"summary": "Terms only.", "results": [], "terms": [proposal()]}])
                 r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])})
                 r.initialize("Pulmonary granuloma?", ["fixture"], context_budget=24000)
                 r.step(); r.step()
@@ -251,7 +251,7 @@ class GlossaryTests(unittest.TestCase):
     def test_recovery_rejects_modified_term_payload_even_with_updated_entry_hash(self):
         r = self.research
         r.adapters = {"fixture": FixtureSearch([evidence()])}
-        r.llm = ScriptedLLM([{"keywords": ["granuloma"]}, {"summary": "", "results": [], "terms": [proposal()]}])
+        r.llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}, {"summary": "", "results": [], "terms": [proposal()]}])
         r.step(); r.step()
         def fault(stage):
             if stage == "prepared": raise RuntimeError("interrupted")
@@ -271,7 +271,7 @@ class GlossaryTests(unittest.TestCase):
         self.add([proposal(), proposal(term="Pulmonary granuloma", definition=None)])
         r = self.research
         r.adapters = {"fixture": FixtureSearch([{"status": "empty", "results": []}])}
-        r.llm = ScriptedLLM([{"keywords": ["granuloma"]}])
+        r.llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}])
         event = r.step()
         self.assertIn("g1", event["glossary_retrieval"]["suggested_ids"])
         self.assertEqual(self.state()["nodes"]["q1"]["used_glossary_term_ids"], [])
@@ -285,7 +285,28 @@ class GlossaryTests(unittest.TestCase):
             retrieved = r.glossary.retrieve(self.state(), context, "q1")
         self.assertTrue(next(t for t in retrieved["entries"] if t["id"] == "g1")["used_in_submitted_search"])
         self.assertFalse(next(t for t in retrieved["entries"] if t["id"] == "g2")["used_in_submitted_search"])
-        self.assertEqual(retrieved["recent_search_outcomes"][-1]["status"], "empty")
+        self.assertNotIn("recent_search_outcomes", retrieved)
+        self.assertEqual(context["search_outcomes"][-1]["status"], "empty")
+
+    def test_search_history_does_not_consume_glossary_retrieval_budget(self):
+        self.add([proposal(), proposal(term="Pulmonary granuloma", definition=None)])
+        state = self.state()
+        for limit, budget in ((1, 450), (12, 3200)):
+            with self.subTest(limit=limit, budget=budget), self.research.store.lock():
+                state["glossary"].update(limit=limit, token_budget=budget)
+                context = r1.context(state, [], {}, "q1")
+                baseline = self.research.glossary.retrieve(state, context, "q1")
+                files = {f"research/results/{i}.json": dumps({"node_id": "q1", "timestamp": f"{i:02}",
+                    "provider": "fixture", "query": "thermal resistance " * 50,
+                    "status": "deferred", "query_submitted": False, "results": []}) for i in range(12)}
+                context = r1.context(state, [], files, "q1")
+                history = deepcopy(context["search_outcomes"])
+                retrieved = self.research.glossary.retrieve(state, context, "q1")
+                self.assertEqual(retrieved, baseline)
+                self.assertEqual(context["search_outcomes"], history)
+                self.assertEqual(len(history), 12)
+                self.assertNotIn("recent_search_outcomes", retrieved)
+                self.assertLessEqual(len(dumps(retrieved).encode()), budget)
 
     def test_rate_limit_cooldown_does_not_count_as_submitted(self):
         self.add([proposal()])
@@ -294,7 +315,7 @@ class GlossaryTests(unittest.TestCase):
             token, docs, eqs, ledger = r.store.read(); state = self.state()
             state["provider_cooldowns"] = {"fixture": time.time() + 120}
             r.store.publish(docs, eqs, ledger, token, files={"research/state.json": dumps(state)})
-        r.llm = ScriptedLLM([{"keywords": ["granuloma"]}]); r.step()
+        r.llm = ScriptedLLM([{"keywords": ["granuloma", "inflammation"]}]); r.step()
         event = r.step()
         self.assertNotIn("used_glossary_term_ids", event)
         self.assertEqual(self.state()["nodes"]["q1"]["used_glossary_term_ids"], [])
@@ -315,7 +336,7 @@ class GlossaryTests(unittest.TestCase):
             token, docs, eqs, ledger = r.store.read(); state = self.state()
             state.pop("glossary"); state["nodes"]["q1"].pop("used_glossary_term_ids")
             r.store.publish(docs, eqs, ledger, token, files={"research/state.json": dumps(state)})
-        r.llm = ScriptedLLM([{"keywords": ["pulmonary masses"]}])
+        r.llm = ScriptedLLM([{"keywords": ["pulmonary masses", "inflammation"]}])
         self.assertEqual(r.step()["status"], "committed")
         self.add([proposal()]); self.assertEqual(self.get()["id"], "g1")
 
@@ -331,7 +352,7 @@ class GlossaryTests(unittest.TestCase):
             self.assertLessEqual(len(result["entries"]), 12)
             self.assertLessEqual(len(dumps(result).encode()), state["glossary"]["token_budget"])
             self.assertTrue(all("Pulmonary" in row["term"] for row in result["entries"]))
-        self.research.llm = ScriptedLLM([{"keywords": ["pulmonary granuloma 1"]}])
+        self.research.llm = ScriptedLLM([{"keywords": ["pulmonary granuloma 1", "inflammation"]}])
         before = self.research.glossary.records_read
         self.assertEqual(self.research.step()["status"], "committed")
         self.assertLessEqual(self.research.glossary.records_read - before, 12)

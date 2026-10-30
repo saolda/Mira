@@ -1,73 +1,58 @@
-# Question-file implementation and medical validation
+# R1 prompt, inputs and output validation
 
-Recorded: 2026-10-29. Tested implementation: `94cbe5e1c74f235d38d26dfc19336710528bd2b1`.
+Recorded: 2026-10-30 (Australia/Hobart). Base: approved architecture commit `04ae3f7` on `main`.
 
-**PASS: 301 tests, 0 failures, 0 errors, 0 skipped** (`PYTHONPATH=src python3 -m unittest discover -s tests -q`, 53.079 seconds). Fourteen new tests cover parsing, positional/CLI compatibility, long inputs, exact Unicode/CRLF preservation, immutable publication, four journal interruption/recovery points, restart, research/synthesis inputs and budget rejection. Existing non-failing SQLite resource warnings remain in legacy fixtures.
+PASS: **313 tests, 0 failures, 0 errors, 0 skipped** in **54.235 seconds**.
 
-## Implementation
+Command: `PYTHONPATH=src python3 -m unittest discover -s tests -q`.
 
-`research-init --question-file PATH` is mutually exclusive with the positional question. Python validates the documented Markdown sections, journals the original at `research/question.md`, and persists its SHA-256, exact main question, separate context and verbatim objective list in immutable `question_document` state. Restart uses the saved snapshot. R0, R1, R3–R5 and S1/S2 receive complete objectives and bounded supplementary background; R2 uses R1's query. Existing native token-budget checks include these inputs and reject oversized essential text. README and architecture describe the interface. Canonical memory formats and controller scheduling are unchanged.
+The suite emitted existing non-failing SQLite resource warnings. Validation used deterministic fixtures; no live model or external provider evaluation was performed.
 
-## Live experiment
+## Changes
 
-Experiment: `medical-question-file-20261029-074524`, initialized through the new CLI option with explicit `medical` strategy and the requested question, without added background or a predetermined answer.
+- Replaced `prompt_templates/R1.txt` with the user's exact supplied UTF-8 text; verified byte-for-byte against the attachment. SHA-256: `118ab9500a04b6908cfa424ecb726e52ac673ff0f052fda2b5cdfa4824aa89bd`.
+- Declared all eight prompt variables. Preserved selected versus ancestor questions, bounded memory findings/gaps, research brief and indexed glossary retrieval.
+- Added independent `search_outcomes`: the latest 12 committed retrieval records for the selected node, sorted chronologically. Entries retain provider, nullable profile ID, exact compiled query, submission flag, status, returned record count and unique record count. Counts come from persisted retrieval metadata or unique results plus duplicates; cached source payloads are unnecessary. Missing legacy profile or submission metadata stays null/unknown rather than being invented. Previous proposed terms never imply search success or failure.
+- Removed `recent_search_outcomes` from glossary context and its budget accounting. The complete rendered request, including independent search history, still passes the existing context validation before dispatch; oversized requests are blocked without truncating queries.
+- Validated exactly one `keywords` field with 2–6 nonempty strings, each at most five whitespace-delimited words. Rejected explicit Boolean operators, field tags, known provider names and query syntax; retained scientific punctuation and lowercase conjunctions in phrases. Scientific meaning is not assessed with string heuristics. The existing literal control filter preserves order and requires a nonempty accepted list.
+- Verified raw, proposed and accepted outputs remain available in interaction phases and independent execution logs. Rejections retain their raw/proposed output without advancing research progress.
+- Updated single-concept scripted responses to conform to the new proposal contract and updated the demo transport's R1 heading recognition. Legacy persisted keywords and historical prompt snapshots remain readable without revalidation or rewriting.
 
-Qwen3.6-35B-A3B Q4_K_M; native context **16,384** tokens; temperature 0; thinking disabled; generation limit/output reserve **4,096**; default research-capacity threshold **12,288**. The temporary local server was stopped after validation.
+## Coverage
 
-Run: **113.095 seconds**, 07:45:24–07:47:18 UTC; **40 research cycles**, **42 total controller cycles**, **18 model actions**. Actions: R1×5, R2×24, R3×7, R4×4, S1×1, S2×1. Stopped normally at the requested research-cycle limit, below five minutes; the experiment remains resumable.
+Twelve additional tests cover eight populated slots and selected-question roles; explicit trust/interpretation instructions; all six provider outcome statuses and counts; submitted versus deferred outcomes; node scoping, chronological ordering and the 12-entry cap; legacy records without payload/profile/submission metadata; valid 2–6-concept responses and invalid structures/syntax; raw/proposed/accepted logs; rejected-output rollback; legacy single-concept restart; full rendered history budget checks; and independence from glossary token/entry limits. Existing tests retain coverage for relevant findings/unresolved questions, complete research objectives/background, experiment upgrades, restart, deduplication and journal recovery.
 
-| Provider | Opportunities | Returned records | Unique / R3-processed | Duplicate records | Outcome |
-| --- | ---: | ---: | ---: | ---: | --- |
-| PubMed | 5 | 0 | 0 | 0 | Empty for these queries |
-| Europe PMC | 5 | 10 | 4 | 6 | Successful |
-| OpenAlex | 5 | 0 | 0 | 0 | One HTTP 429; four cooldown skips |
-| Crossref | 5 | 10 | 3 | 7 | Successful |
-| Wikipedia | 4 | 0 | 0 | 0 | Empty for these queries |
+## Scope and synchronization
 
-Four complete database rounds followed the configured order; the fifth reached Crossref. Rate limiting was an ordinary pointer advance, not an error. Seven unique publications/records were processed once; 13 repeated records were suppressed. No PubMed/Europe PMC overlap was returned, so cross-provider deduplication was not exercised live; existing deterministic coverage passed.
+The initial working tree was clean on `main`. `git fetch origin main` retrieved `830c0aa` and `04ae3f7`; both changed only `architecture.md`, so a safe `git merge --ff-only origin/main` synchronized local history. Local architecture exactly matched the fetched approved file (Git blob `2a53def63b89d007e0edeefdca2ab915186d6cca`). No local architecture edits were made.
 
-Europe PMC supplied three abstracts: a pictorial review, a retrospective single-centre deep-learning study, and another PET-CT review; plus metadata for a conference abstract book. Crossref supplied metadata for a Radiopaedia case, an educational doubling-time mnemonic and an NCI terminology record. Publication descriptions follow supplied titles/abstracts, not independent study appraisal. Available authors, dates, identifiers and URLs survived; no full texts or images were examined by Mira.
+`git diff --check` passed. Architecture, all other LLM prompts, R2, provider adapters and query compilation/configuration remain unchanged relative to `04ae3f7`. The larger query-profile/retry architecture remains outside this task; the new input can project deferred/unavailable records when persisted, without implementing new R2 scheduling.
 
-## Search, extraction and synthesis
+The implementation and this report are committed together on `main`; the final chat records the resulting SHA and verified GitHub synchronization.
 
-The first R1 query joined “spiculated pulmonary nodule volume doubling time” with “malignancy versus infection differentiation”. Later queries added “rapid interval growth granuloma versus carcinoma”, mostly exchanging “lung” and “pulmonary”. Five R1 decisions produced four distinct joined queries; one repeated a previous query. Later rounds added no research memories. Search diversification was weak.
+## Changed files
 
-R3 created `r1` (review: two findings and one explicitly derived question; 711 Qwen tokens) and `r2` (case-title report: one finding; 496 tokens). Five other sources produced empty results. One nonempty summary accompanying empty results was discarded successfully, without rejection or repeated extraction.
-
-The glossary admitted four source-grounded candidates: **metabolically occult**, **waxing-and-waning interval changes**, **Pulmonary invasive mucinous adenocarcinoma / PIMA**, and **SE-DAS ResNet**. Two other proposals failed deterministic passage/alias checks. Each subsequent R1 received the first two candidates and recent provider outcomes; none was used in submitted queries. Operational retrieval worked but did not improve the searches here.
-
-S1 selected `r1+r2`, scored **17/25** (R5/C4/X3/N3/E2), and persisted the analytical objective. S2 created `s1` (1,371 tokens, three findings), with a substantive integration referencing `r1#f2` and `r2#f1`. All references validated; the attempt completed and consumed exactly `r1/r2`, leaving `s1` on the frontier. No branching occurred: the root remained living, with R5 capacity 5,798 tokens including reserve, below threshold. R4 requested further research four times.
-
-Attribution needs improvement despite structural success. `r1` used generic findings rather than consistently naming the review authors; `r2` treated a title's biopsy account too directly as confirmed evidence. `s1#f2` incorrectly expanded missing information in one abstract into a claim about current guidelines and attributed a derived evidence gap to the source. `s1#f3` overreached from insufficient evidence to a general statement about diagnostic discrimination. Those stronger claims are not accepted as scientific conclusions here.
-
-## Mira's evidence-grounded answer
-
-The actual `s1` summary begins:
-
-> The supplied materials do not provide sufficient evidence to determine whether a spiculated pulmonary lesion doubling in volume over four weeks favors infection over malignancy with any statistical strength.
-
-That limited conclusion is supported by the run's inputs. [Lee, Yoon and Yoo's pictorial review](https://pubmed.ncbi.nlm.nih.gov/42793695/) discusses infectious/inflammatory mimics, but its supplied abstract provides no comparative doubling-time estimates. The [Radiopaedia case record](https://doi.org/10.53347/rid-157867) title reports a very rapidly doubling nodule, granuloma on biopsy and later resolution. Mira had only that title/metadata: no exact four-week interval, confirmed spiculation or microbiological proof of infection. A single such account cannot quantify an infection-versus-malignancy probability shift.
-
-| Requested evidence | Actually obtained |
-| --- | --- |
-| Typical malignant volume doubling times | No numerical estimates; mnemonic title alone insufficient |
-| Very rapid malignant growth | No relevant rates or examples |
-| Infectious/inflammatory growth rates | One title-described rapid-growth granuloma; no measured rate distribution |
-| Spiculation and malignancy risk | No quantitative risk estimate |
-| CT volumetric uncertainty | No repeatability/error bounds; PET motion/partial-volume discussion is not such an estimate |
-| Quantitative infection versus malignancy comparison | No likelihood ratios, comparative frequencies or calibrated probabilities |
-
-**Confidence:** low in any etiological preference or its strength; high that this run's limited inputs do not establish one. Empty searches and rate limits are retrieval limitations, not negative clinical evidence. This is an incomplete literature search, not evidence that comparative studies do not exist.
-
-## Persistence, budgets and local artifacts
-
-All 18 responses passed JSON/schema validation; no context-budget or transport failures occurred. Largest prompt: 5,084 tokens, or 9,180 including reserve, below 16,384. All 18 saved prompt bindings and exact request/context/raw-response pairs matched the independent log. Both logs have end markers. Corpus/lineage, four glossary records, restart and immutable question/hash checks passed; no unresolved interactions or incomplete journals. All **5,023 historical files** checked retained their hashes.
-
-Full local results, kept out of GitHub:
-
-- Experiment, memories, source payloads, prompts/responses and journal: `/home/eric/Dev/Mira/memory/research/medical-question-file-20261029-074524/` (`validation.json` contains supervisor results).
-- Original question file: `/home/eric/Dev/Mira/memory/questions/lung-growth.md`.
-- Initialization log: `/home/eric/Dev/Mira/memory/run-logs/2026-10-29_074525_medical-question-file-20261029-074524_3082b866ca79.jsonl`.
-- Research log: `/home/eric/Dev/Mira/memory/run-logs/2026-10-29_074525_medical-question-file-20261029-074524_1e7c4c76f9e5.jsonl` (140 records, 1,964,784 bytes).
-
-Live validation used a short question without context/objectives. Long documents, automatic R0, branching projections and interruption recovery were verified deterministically. The run confirms the new interface and persistence; it does not establish a clinically reliable answer or repair the observed search/attribution limitations.
+- `prompt_templates/R1.txt`
+- `src/mira/decisions.py`
+- `src/mira/glossary.py`
+- `src/mira/prompts.py`
+- `src/mira/r1.py`
+- `src/mira/research_demo.py`
+- `test-results/latest.md`
+- `tests/benchmark_glossary.py`
+- `tests/test_branching.py`
+- `tests/test_budget.py`
+- `tests/test_collections.py`
+- `tests/test_gardener.py`
+- `tests/test_glossary.py`
+- `tests/test_integration.py`
+- `tests/test_medical.py`
+- `tests/test_prompts.py`
+- `tests/test_questions.py`
+- `tests/test_r1.py`
+- `tests/test_r3.py`
+- `tests/test_research.py`
+- `tests/test_run_storage.py`
+- `tests/test_strategies.py`
+- `tests/test_synthesis.py`
+- `tests/test_viewer.py`

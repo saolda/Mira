@@ -102,7 +102,7 @@ class CollectionTests(unittest.TestCase):
 
     def test_deferral_preserves_memories_and_other_research_continues(self):
         with tempfile.TemporaryDirectory() as root:
-            llm=ScriptedLLM([selection(['r1','r2']), {'keywords':['measurement']}, selection(['r1','r2'])])
+            llm=ScriptedLLM([selection(['r1','r2']), {'keywords':['measurement', 'uncertainty']}, selection(['r1','r2'])])
             r=Research(root,llm,{})
             r.initialize('Research?', ['fixture'],context_budget=12000)
             seed(r,own=2,child=0,leaf=0,living=('q3',))

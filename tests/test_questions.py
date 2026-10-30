@@ -109,7 +109,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0); self.assertFalse(self.root.exists())
 
     def test_api_alternatives_and_legacy_restart(self):
-        r = Research(self.root, ScriptedLLM([{"keywords": ["heat"]}]), {})
+        r = Research(self.root, ScriptedLLM([{"keywords": ["heat", "transfer"]}]), {})
         for args, kwargs in (((), {}), (("Q?",), {"question_file": self.input})):
             with self.assertRaisesRegex(ValueError, "provide a question"):
                 r.initialize(*args, databases=["fixture"], **kwargs)
@@ -130,7 +130,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn("Controlled fixture", record["serialized_request"])
 
     def test_research_prompts_and_restart_do_not_reread_input(self):
-        r = self.make([{"keywords": ["heat"]}, {"summary": "Fixture evidence.", "results": [draft()]}, decision()])
+        r = self.make([{"keywords": ["heat", "transfer"]}, {"summary": "Fixture evidence.", "results": [draft()]}, decision()])
         self.input.write_text("External file changed after initialization.")
         self.assertEqual(r.step()["action"], "R1")
         self.assertEqual(r.step()["action"], "R2")
