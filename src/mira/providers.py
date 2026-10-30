@@ -1,5 +1,5 @@
 """Small public API adapters adapted from autonomous_ai/actions.py, without routing/fallbacks."""
-import html
+from html.parser import HTMLParser
 import json
 import os
 import re
@@ -18,8 +18,35 @@ _PACE_LOCK = threading.Lock()
 _LAST = {}
 
 
+class ScientificText(HTMLParser):
+    """Recognise markup before decoding entities, preserving literal inequalities."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.boundary = False
+        self.block_boundary = False
+
+    def handle_starttag(self, tag, attrs):
+        self.boundary = True
+        self.block_boundary |= tag in {'p', 'div', 'br', 'li', 'section', 'jats:p'}
+
+    def handle_endtag(self, tag):
+        self.handle_starttag(tag, [])
+
+    def handle_data(self, data):
+        if (self.boundary and self.parts and data and
+                (self.block_boundary or self.parts[-1][-1:].isalnum() and data[0].isalnum())):
+            self.parts.append(' ')
+        self.parts.append(data)
+        self.boundary = False
+        self.block_boundary = False
+
+
 def plain(value):
-    return ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', str(value or ''))).split())
+    parser = ScientificText()
+    parser.feed(str(value or ''))
+    parser.close()
+    return ' '.join(''.join(parser.parts).split())
 
 
 def row(identity, title, url, abstract='', *, authors=(), published='', identifiers=None, details='', max_chars=2500):

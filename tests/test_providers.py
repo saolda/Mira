@@ -23,6 +23,40 @@ class ProviderTests(unittest.TestCase):
             return BytesIO(value if isinstance(value,bytes) else json.dumps(value).encode())
         return cls(opener=open_,**kwargs)
 
+    def test_scientific_comparisons_entities_and_markup_preserved(self):
+        cases = [
+            ('P < 0.05 and tumour volume > 10 cm³', 'P < 0.05 and tumour volume > 10 cm³'),
+            ('P &lt; 0.05 and confidence interval &gt; 1.0', 'P < 0.05 and confidence interval > 1.0'),
+            ('<p>Volume doubling time was <b>43 days</b>, P &lt; 0.001.</p>',
+             'Volume doubling time was 43 days, P < 0.001.'),
+            ('<div class="x > y"><p>α <b>1.2e−3 <i>± 0.4</i></b></p><p>β ≥ 2 &amp; γ ≤ 4.</p></div>',
+             'α 1.2e−3 ± 0.4 β ≥ 2 & γ ≤ 4.'),
+            ('<p>First</p><p>second<br>third</p>', 'First second third'),
+            ('<jats:p>Nested <jats:italic>scientific</jats:italic> text.</jats:p>', 'Nested scientific text.'),
+            ('P<0.05; n>10; 1.2e-5 mol/L; 95% CI (1.1, 2.2).', 'P<0.05; n>10; 1.2e-5 mol/L; 95% CI (1.1, 2.2).'),
+            ('A <b>malformed <i>nested abstract', 'A malformed nested abstract'),
+            ('Ordinary abstract text. No changes; n = 23.', 'Ordinary abstract text. No changes; n = 23.'),
+            ('&lt;b&gt;literal encoded markup&lt;/b&gt;', '<b>literal encoded markup</b>'),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source): self.assertEqual(providers.plain(source), expected)
+
+    def test_scientific_cleaning_bounds_and_metadata(self):
+        text = '<p>P < 0.05 and tumour volume > 10 cm³; ' + 'α ' * 30 + '</p>'
+        expected = providers.plain(text)
+        row = providers.row('source:1', '<i>Study</i>', 'https://example.org/1', text,
+            authors=['Author α'], published='2026', identifiers={'doi':'10.1234/a'}, max_chars=50)
+        self.assertEqual(row['content'], expected[:50])
+        self.assertTrue(row['truncated'])
+        self.assertEqual(row['id'], 'source:1')
+        self.assertEqual(row['url'], 'https://example.org/1')
+        self.assertEqual(row['identifiers'], {'doi':'10.1234/a'})
+        self.assertEqual(row['authors'], ['Author α'])
+        self.assertEqual(row['published'], '2026')
+        short = providers.row('s', 'Title', 'https://example.org', 'P < 0.05 and n > 10')
+        self.assertFalse(short['truncated'])
+        self.assertEqual(short['content'], 'P < 0.05 and n > 10')
+
     def test_wikipedia_extract_metadata_and_no_hidden_fallback(self):
         data={'query':{'pages':[{'pageid':123,'title':'Artificial intelligence','fullurl':'https://en.wikipedia.org/wiki/Artificial_intelligence','extract':'A useful introductory description.'}]}}
         adapter=self.adapter(WikipediaSearch,[data,{'batchcomplete':True}])
