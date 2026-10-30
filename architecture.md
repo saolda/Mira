@@ -84,55 +84,139 @@ memories are never deleted as a consequence of a research-status transition.
 
 ## Per-node research progression
 
-A **research strategy** is a named, ordered list of external research database IDs,
-chosen to suit a question domain (for example, general, humanities, engineering,
-biomedical or education). This term denotes a database sequence, **not** an LLM
-research method or a new decision-making layer. Strategies are configured centrally;
-the available providers initially include arXiv, with Wikipedia, PubMed, Crossref,
-Europe PMC, ERIC and OpenAlex identified in the historical `../autonomous_ai`
-implementation as candidates to integrate and validate. No unimplemented provider
-is implied to be available today.
+### Research strategies and query profiles
 
-Exactly **one strategy is selected per experiment**, before the first R1 action.
-The operator may specify a named strategy at initialization. **If no strategy is
-specified, R0 runs by default** as a one-time LLM selection using the root question
-and the predefined named strategies with their descriptions and ordered database
-lists. R0 must use a
-separate editable plain-text template (`prompt_templates/R0.txt`) consistent with
-the other templates, return a structured strategy ID and brief rationale, and be
-validated by Python. R0 is not a recurring research cycle, does not invent
-strategies, and is skipped only when the operator selects a strategy explicitly.
-**Research must not begin until a valid strategy has been selected and persisted.**
-The selected strategy and its ordered databases are persisted and inherited by
-all R5 children; R1–R5 do not change the strategy. Explicit database lists remain
-supported for compatibility. Selection failures must be reported, not silently
-replaced with a different strategy.
+A **research strategy** is an ordered sequence of provider IDs, each with an
+explicitly named query profile. Supported providers are Wikipedia, arXiv,
+PubMed, Crossref, Europe PMC, ERIC and OpenAlex. Profiles are centrally
+configured, named independently of providers and reusable: one provider may
+have several compatible profiles, and one profile may serve several providers.
+Every provider entry in a new strategy has a profile; explicit provider lists
+use the compatible `default` profile unless another profile is selected.
+An existing persisted experiment without profile metadata retains the exact
+query semantics under which its search round began.
 
-Each node independently stores a **next database index**, not a last-used database.
-The pointer survives scheduling switches. One set of R1 keywords is searched
-against the complete strategy sequence before R4 evaluates that round. R2 calls
-no model. Action selection for a living node is:
+Exactly **one strategy is selected per experiment**, before its first R1.
+The operator can select a named strategy explicitly; otherwise R0 uses its
+editable `prompt_templates/R0.txt` to select from the predefined strategy
+IDs, descriptions and ordered provider lists, returning a structured ID and
+reason for Python validation. R0 runs once, outside the recurring research
+cycles, and cannot invent strategies. Research begins only after its strategy
+is validated and persisted. The strategy, provider order, profile IDs and
+profile configurations/versions are snapshotted at initialization and
+inherited by R5 descendants; R1–R5 cannot change them.
+
+Each query profile defines a deterministic compiler and compatible providers,
+field/quoting/escaping/Boolean combination rules, `max_terms`, a
+`min_interval_seconds` request spacing, `retry_initial_seconds`,
+`retry_max_seconds`, and `max_attempts` per provider-query. Profile values
+are configurable; the starting term limits and timings are hypotheses to be
+evaluated rather than empirically established optima. The `default` profile
+preserves compatible basic search behaviour.
+
+### Research rounds and action selection
+
+Every living node maintains its own R1 concept list, **next database index**
+(starting at zero), pending R3 evidence and deferred-provider searches. A
+single R1 concept list is used for one complete pass through the selected
+strategy's ordered databases. The index denotes the **next unvisited
+database**, not the last database used. It survives node scheduling switches.
 
 | Action | Predicate | Result | Model calls |
 | --- | --- | --- | --- |
-| R1 | No keywords and no pending results | Generate targeted terms, apply deterministic control filter, persist terms | 1 |
-| R2 | Keywords, no pending results, database pointer within strategy | Search current database; record outcome and advance the node's next-database pointer, including on empty, failed or rate-limited responses; save nonduplicate results for R3 | 0 |
-| R3 | Pending results | Extract one unprocessed source; create at most one memory; clear pending reference after all sources | 1 |
-| R4 | Keywords, no pending results, all databases tried | Evaluate direct research in question context | 1 |
-| R5 | Selected exhausted node, no committed split receipt | Develop children, persist IDs and receipt; mark split even if empty | 1 |
+| R1 | No current concepts, pending evidence or deferred round | Generate and persist ordered concepts; set database index to 0 and clear round outcomes | 1 |
+| R2 | Concepts exist, no pending R3 source, and an eligible provider remains in the ordered pass or deferred queue | Compile and submit that provider's query; record outcome, source evidence and deferred work as appropriate | 0 |
+| R3 | At least one pending, unprocessed source | Extract **one** source; atomically advance its processed-source cursor and store any accepted memory/glossary terms | 1 |
+| R4 | Concepts exist, no pending R3 source, database index equals provider count **and no unresolved deferred searches** | Evaluate completed round in question context; decide `kill`, `answered` or `retry` | 1 |
+| R5 | Selected exhausted node with no committed split receipt | Develop children; persist IDs and split receipt, including an empty split | 1 |
 
-An empty search skips R3. A non-responsive, failed or rate-limited database is
-recorded distinctly and **skipped for the current round**, allowing the next
-configured database to be searched; a failed retrieval is not evidence that the
-source has no relevant material. The pointer advances once per attempted provider.
-Rate limits are non-error outcomes: retain cooldown/Retry-After information and
-continue normal scheduling, including when every provider in a round is rate-limited.
-Respect provider rate limits and avoid repeated immediate calls to unavailable
-providers; keep failures inspectable. If every provider is unavailable and at least
-one retrieval actually failed, report a
-clear degraded/blocked outcome rather than silently spinning or claiming that
-research was answered. Per-node keywords, pointer, pending results and history
-survive scheduling switches.
+For each database in the initial pass, R2 either submits its query or
+recognises that it cannot yet be submitted. After recording that outcome,
+R2 advances the node's **next database index by exactly one**, including
+for `empty`, `failed`, HTTP 429 and deferred/cooldown cases. Successful
+nonduplicate results become pending R3 evidence, which is fully processed
+before the node's next R2 action. An empty response produces no R3 action.
+
+A provider not yet eligible to submit, or returning a retryable HTTP 429,
+places its original provider-query into the node's deferred queue with
+the provider index, attempt count and retry timestamp. This is **not a
+terminal search outcome**; it does not advance the database index a second
+time when retried. Once the initial index reaches the provider count, R2
+revisits eligible deferred entries in original provider order, subject to
+the provider availability policy. A deferred entry is removed only after
+an actual terminal result or exhaustion of its allowed submission attempts.
+Other nodes may execute between any two actions.
+
+R4 is ineligible while deferred entries remain, even when the database
+index has reached the end of the strategy. On `retry`, R4 appends the
+round's concepts to `previous_search_terms`, clears the current concepts
+and round outcomes, and resets the index to zero. On `kill` or `answered`,
+the node's research status changes accordingly. An unsuccessful retrieval
+does not itself prove the research question answered or irrelevant.
+
+### R2: query compilation and evidence
+
+R1 supplies **2–6 ordered scientific concepts**, prioritised for the
+selected question. A concept is one technical term or established multiword
+phrase of at most five words, not provider-specific syntax. Python applies
+its literal control-term filter; the accepted list must remain nonempty.
+
+For a provider, R2 retains the first `max_terms` accepted concepts in
+priority order and discards the rest **for that provider only**. A multiword
+concept is not split to meet this limit. The selected query profile compiles
+those concepts to a provider-compatible query and API parameters using its
+declared field, quoting, escaping and combination rules. R2 makes no LLM
+call and issues at most one search submission per action, including any
+protocol-required follow-up requests for selected source records.
+
+The provider adapter performs transport and parses the response; query
+construction and request pacing are profile-driven rather than hidden in
+individual provider adapters. Persist and log the R1 concepts, retained and
+discarded concepts, profile ID/version and configuration, compiled query,
+actual request parameters (without credentials), submission status, result
+identifiers, deduplication and retrieval outcomes. There are no hidden
+fallback queries. A term is marked actually used in the glossary register
+only when it appears in a **submitted** provider query, not merely in an R1
+proposal or deferred request.
+
+### Provider availability and retry scheduling
+
+Availability is tracked per provider, independently of research nodes,
+with persisted earliest permitted request time and consecutive rate-limit
+failure count. Requests sharing an API host also obey the host's pacing
+limit, even when their providers or query profiles differ.
+
+A provider request must not begin before the later of its profile's
+minimum-interval time, shared host pacing time and current cooldown expiry.
+HTTP 429 is a retryable outcome, not an empty result. Valid numeric or
+HTTP-date `Retry-After` values establish the earliest retry time; these
+must not be shortened by local limits. Without a valid `Retry-After`,
+retry delays grow exponentially from `retry_initial_seconds`, capped at
+`retry_max_seconds`. Retry counters count actual network submissions, not
+checks of an unexpired cooldown. A successful or empty response resets
+consecutive rate-limit failures; other non-retryable failures are recorded
+as `failed`.
+
+Once a deferred request reaches `max_attempts` without a terminal
+retrieval, its final outcome is `unavailable` and its deferred entry is
+removed. `unavailable`, `failed` and `empty` are distinct; none
+establishes a scientific conclusion about absent publications. A round
+finishes only when every provider has a terminal `ok`, `empty`,
+`failed` or `unavailable` outcome and all pending R3 sources are processed.
+
+While one provider waits, other eligible providers, nodes, synthesis and
+branching actions can proceed according to the existing scheduler.
+If no productive action is eligible and the sole impediment is pending
+provider availability, the controller returns `waiting_for_provider`
+and the earliest retry timestamp, without publishing a research cycle,
+calling an LLM or busy-looping. The supervisor may sleep until that time,
+then resume the pending R2 query without invoking R1 again. Interrupted
+submissions with uncertain outcomes require explicit recovery handling:
+they are not silently retried or assumed empty.
+
+Per-node concepts, database index, source cursor, deferred entries and
+round outcomes, together with provider cooldown and pacing state, survive
+scheduling switches, restarts and journal recovery.
 
 ### Research source deduplication and retention
 
@@ -153,7 +237,7 @@ and retention policy must not break pending R3 processing, crash recovery or
 existing experiments. This is a design target for implementation, not a claim
 that current retention already behaves this way.
 
-### R1: targeted terms
+### R1: targeted search concepts
 
 R1 receives the selected question, distinct root/ancestor context, previously used
 terms, relevant memory excerpts and prohibited control terms. Prior terms are soft
@@ -182,13 +266,13 @@ submitted rate-limited requests do. Ambiguous abbreviations alone identify no
 concept. Recent outcomes inform soft reuse guidance, without adding query bans
 or extra LLM calls.
 
-The prompt asks for one or two literal topic phrases. The arXiv controller joins
-their distinct words as `all:"word1" AND all:"word2"`. Multiword components
-are tokenized rather than requiring an exact contiguous sentence fragment.
-Bare space-separated words otherwise produce broad OR-style arXiv retrieval.
-The exact constructed query appears in evidence, events and history. The adapter
-sends that query unchanged; other adapters retain their existing space joining.
-No hidden fallback query or negative control-term operator is introduced.
+R1 returns JSON `{"keywords":["highest-priority concept","next concept"]}`
+with 2–6 concepts ordered by importance. Each entry contains one scientific
+concept or established multiword phrase of at most five words, without Boolean
+operators, field tags, provider names or query syntax. Python validates these
+constraints and applies the existing literal control-term filter, preserving
+the accepted order. R2 compiles provider-specific queries from that order;
+the complete original and accepted lists remain available for auditing.
 
 ### R3: ordered extraction and provenance
 
@@ -380,14 +464,21 @@ R5 and synthesis never age/reset another node's research progress.
 
 Controller order is:
 
-1. Reassess capacity and refresh queues.
+1. Reassess capacity and refresh queues, including eligible deferred provider
+   searches and per-node `waiting_for_provider` times.
 2. If an S2 selection is pending, run S2. Otherwise, when synthesis is due
    and a permitted candidate combination exists, run S1.
 3. Otherwise, if exhausted nodes exist and either no living nodes remain or
    `research_cycles_since_branching >= branching_interval`, run R5 on the ripest.
-4. Otherwise run the active living node's next R1–R4 action.
+4. Otherwise run an eligible living node's next R1–R4 action. Nodes waiting
+   exclusively on provider cooldown do not block other ready living nodes.
 5. With no living or exhausted nodes, invoke S1 on unevaluated eligible
    combinations, then finish when no pending S2 or permitted opportunity remains.
+   Living nodes awaiting deferred provider queries remain unfinished.
+
+When all otherwise eligible work is blocked solely by provider retry times,
+return `waiting_for_provider` and the earliest retry timestamp without
+advancing research-cycle counters.
 
 `branching_interval` defaults to five **direct research actions** between attempts
 while living nodes exist. Successful R5 resets this counter. Consequently R5 can
