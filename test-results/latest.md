@@ -1,26 +1,25 @@
 # Latest development test results
 
-Recorded: 2026-10-30T05:12:44.102019+00:00
+Recorded: 2026-10-30T06:03:36.545562+00:00
 
-Tested implementation commit: `df75a8792e59ed68e8b74cea3e74bb610761d0d0`.
+Tested implementation commit: `1bfb62f2912dee591a7b8b1ecc13fb03f323a386` (only validation reports differed during the final test run).
 
-Tests: **339**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **343**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-Stage 1 passed 315 tests. Final Stage 2 verification covers eight named profiles, legacy partial-round compatibility, durable retries, shared-host pacing, waiting, journal recovery and credential-free request logs.
+All 343 tests passed before experiments (56.493 s) and afterward (56.203 s). OpenAlex is omitted from all six predefined strategies; explicit usage and frozen snapshots remain supported. All 5,851 prior research files, eight prior logs and protected documents/prompts were preserved; 39 initialized corpora passed integrity checks. Full findings: [OpenAlex suspension validation](openalex-suspension-validation.md).
 
 ## Regressions and limitations
 
-All automated checks passed. Live validation stopped normally on a persisted OpenAlex HTTP 429 cooldown; Europe PMC returned no records and the clinical question remains unresolved. Details: query-profile-validation.md.
+- Baseline completed two rounds (23 direct actions), then stopped before a third R4 dispatch because its request plus reserve required 17,006 of 16,384 tokens.
+- Alternative retrieved two Europe PMC abstracts instead of zero, then stopped after five direct actions: S1 first exhausted its output limit, and one retry returned an invalid single-memory selection. Both new runs retained unsupported model inferences about infection versus malignancy; the clinical question remains unresolved.
+- Controlled PubMed two/three/four-concept queries matched 6/5/0 publications; Europe PMC quoted equivalents matched 9/3/0. Committed query-profile defaults remain unchanged. Unequal workloads prevent an overall efficiency claim.
 
 ## Execution logs
 
-- Initialization: `/home/eric/Dev/Mira/memory/run-logs/2026-10-30_051320_query-profile-medical-20261030_118cbe5737c3.jsonl`.
-- Live validation: `/home/eric/Dev/Mira/memory/run-logs/2026-10-30_051321_query-profile-medical-20261030_99354632fb7e.jsonl`.
-- Detailed report: `test-results/query-profile-validation.md`.
-
-Stage 1: 315 tests passed in 54.682 seconds (`87ed8ae99747ab896ba5db64ac5477273ab6d9b5`). Final Stage 2: 339 tests passed in 57.152 seconds. The tested source bytes became commit `df75a8792e59ed68e8b74cea3e74bb610761d0d0`; subsequent changes are validation reports only.
+- `memory/benchmarks/openalex-suspension-20261030/tests-after-experiments.log`
+- Full experiments and execution-log paths are listed in the detailed report; local corpora and raw interactions remain outside GitHub.
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.
