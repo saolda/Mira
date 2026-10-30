@@ -1,25 +1,27 @@
 # Latest development test results
 
-Recorded: 2026-10-30T06:03:36.545562+00:00
+Recorded: 2026-10-30T08:14:25.958305+00:00
 
-Tested implementation commit: `1bfb62f2912dee591a7b8b1ecc13fb03f323a386` (only validation reports differed during the final test run).
+Tested implementation and regression-test commits: `4cb524f` and `1545c85` (only validation reports differed during the final test run).
 
-Tests: **343**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **350**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-All 343 tests passed before experiments (56.493 s) and afterward (56.203 s). OpenAlex is omitted from all six predefined strategies; explicit usage and frozen snapshots remain supported. All 5,851 prior research files, eight prior logs and protected documents/prompts were preserved; 39 initialized corpora passed integrity checks. Full findings: [OpenAlex suspension validation](openalex-suspension-validation.md).
+The saved blocked R4 request fell from **17,006 to 8,834 tokens**, including the unchanged 4,096-token reserve. All 12 search entries and the complete scientific context were retained. Full suites passed **350 tests** before and after live validation.
+
+The fresh alternative-profile run completed **three rounds / 30 direct actions**. Its three R4 requests fit at **8,095 / 9,210 / 9,603** tokens. It stopped at the original deadline guard: 806.255 seconds wall time, including 255.385 seconds active execution and an inspection pause. Detailed findings and exact review proposals: [R4 context validation](r4-context-validation.md).
 
 ## Regressions and limitations
 
-- Baseline completed two rounds (23 direct actions), then stopped before a third R4 dispatch because its request plus reserve required 17,006 of 16,384 tokens.
-- Alternative retrieved two Europe PMC abstracts instead of zero, then stopped after five direct actions: S1 first exhausted its output limit, and one retry returned an invalid single-memory selection. Both new runs retained unsupported model inferences about infection versus malignancy; the clinical question remains unresolved.
-- Controlled PubMed two/three/four-concept queries matched 6/5/0 publications; Europe PMC quoted equivalents matched 9/3/0. Committed query-profile defaults remain unchanged. Unequal workloads prevent an overall efficiency claim.
+- S1 remained valid in the fresh run; one S2 integration rejection was handled by normal controller continuation. Scientific direction, population and unsupported-inference errors remain.
+- The prior S1 catalogue contained both eligible memories, and a two-memory S2 request fit. The failures involved output deliberation/truncation and an invalid singleton selection; no S1 prompt, scheduling or validation rule changed.
+- All 6,240 prior research files, 13 prior logs and protected prompts/documents remain unchanged; 40 initialized corpora passed integrity checks. The medical question remains unresolved.
 
 ## Execution logs
 
-- `memory/benchmarks/openalex-suspension-20261030/tests-after-experiments.log`
-- Full experiments and execution-log paths are listed in the detailed report; local corpora and raw interactions remain outside GitHub.
+- `memory/benchmarks/r4-context-20261030/tests-after.log`
+- Full experiment, continuation and independent execution-log paths are listed in the detailed report. Raw corpora, temporary profiles and interaction logs remain outside GitHub.
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.
