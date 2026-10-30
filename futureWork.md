@@ -155,11 +155,13 @@ traceability. The medical benchmark and configuration tuning remain ongoing.
 - OpenAlex's observed 429 / ~19.8-hour Retry-After is an availability issue,
   not a negative search result: do not busy-wait during short benchmarks.
 
-## Pending design review: R1 discovers AND selects concepts
+## R1 redesign specified; pending Codex implementation
 
-**Not approved for implementation; requires a reviewed architecture amendment
-and exact reviewed R1 prompt revision first.** R1's original 2–6 keywords
-contract remains operative until then.
+The authoritative design is now specified in `architecture.md` at
+`a3bd513`. The exact R1 and narrowly updated R4 prompt text is supplied
+by ChatGPT in the scoped Codex implementation task. Existing code still
+uses the original 2–6 `keywords` contract until that work is implemented
+and validated. Codex must not independently revise the architecture/prompts.
 
 - **One R1 call with two scientific responsibilities:** (A) discover **0–6
   genuinely NEW** useful scientific concepts, possibly none; (B) select an
@@ -187,17 +189,20 @@ contract remains operative until then.
   previously **submitted** provider-query combinations, respecting per-profile
   `max_terms`, not just comparing the full R1 lists. Distinguish an
   unsubmitted deferred query, an empty successful query and a failed attempt.
-  The exact duplicate-submission policy is still to be designed.
+  The approved rule requires at least one provider query not previously
+  submitted to a terminal `ok`/`empty` outcome, compared using actual
+  compiled provider queries and request parameters; other provider repeats
+  do not invalidate the round.
 - If R1 identifies **no viable search**, it should explicitly decline rather
   than invent terms or repeat a known unproductive query. Route this event
-  to R4 for assessment, with a reviewed transition that avoids endless
-  R1→R4→R1 cycles. R5 may eventually receive an exhausted node, **but current
-  architecture sends nodes to R5 only via capacity exhaustion**; do not
-  silently alter that contract. Review status/schema/flow first.
-- Define output schema, projection budgets, unused-candidate persistence,
-  no-viable-search outcome, R4/R5 integration, exact LLM prompt wording and
-  deterministic regression tests **with user and ChatGPT approval** before
-  Codex implementation. Prompt wording is not delegated to Codex.
+  to R4 for assessment without pretending a provider pass occurred.
+  R4 may choose `exhausted` (then R5), `kill` or `answered`, but not
+  `retry` on this path. The cause is durably recorded; capacity-based
+  exhaustion remains a separate path.
+- Implement the approved output schema, projection budgets, persistent
+  unused-candidate register, no-viable-search transition, R4/R5 integration
+  and deterministic regressions exactly as specified in the architecture
+  and user-supplied prompt text. Prompt wording is not delegated to Codex.
 - Evaluate scientific value, diversity, query uniqueness, useful R3 evidence
   and model/token cost, not just newly coined vocabulary.
 
