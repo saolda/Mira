@@ -143,11 +143,11 @@ database**, not the last database used. It survives node scheduling switches.
 
 | Action | Predicate | Result | Model calls |
 | --- | --- | --- | --- |
-| R1 | No current concepts, pending evidence or deferred round | Generate and persist ordered concepts; set database index to 0 and clear round outcomes | 1 |
+| R1 | No current concepts, pending evidence, deferred round or recorded no-viable-search disposition | Discover and retain 0–6 new concepts; select 1–6 ordered search concepts, or record `no_viable_search` | 1 |
 | R2 | Concepts exist, no pending R3 source, and an eligible provider remains in the ordered pass or deferred queue | Compile and submit that provider's query; record outcome, source evidence and deferred work as appropriate | 0 |
 | R3 | At least one pending, unprocessed source | Extract **one** source; atomically advance its processed-source cursor and store any accepted memory/glossary terms | 1 |
-| R4 | Concepts exist, no pending R3 source, database index equals provider count **and no unresolved deferred searches** | Evaluate completed round in question context; decide `kill`, `answered` or `retry` | 1 |
-| R5 | Selected exhausted node with no committed split receipt | Develop children; persist IDs and split receipt, including an empty split | 1 |
+| R4 | A normal completed provider round **or** an R1 `no_viable_search` disposition, with no pending R3/deferred work | Evaluate the question; for a normal round decide `kill`, `answered` or `retry`; for no viable search decide `kill`, `answered` or `exhausted` | 1 |
+| R5 | Selected exhausted node (capacity or R4 no-viable-search exhaustion) with no committed split receipt | Develop children; persist IDs and split receipt, including an empty split | 1 |
 
 For each database in the initial pass, R2 either submits its query or
 recognises that it cannot yet be submitted. After recording that outcome,
@@ -167,18 +167,32 @@ an actual terminal result or exhaustion of its allowed submission attempts.
 Other nodes may execute between any two actions.
 
 R4 is ineligible while deferred entries remain, even when the database
-index has reached the end of the strategy. On `retry`, R4 appends the
-round's concepts to `previous_search_terms`, clears the current concepts
-and round outcomes, and resets the index to zero. On `kill` or `answered`,
-the node's research status changes accordingly. An unsuccessful retrieval
-does not itself prove the research question answered or irrelevant.
+index has reached the end of the strategy. On a normal round's `retry`,
+R4 appends the selected concepts to `previous_search_terms`, clears current
+concepts and round outcomes, and resets the index to zero. On `kill` or
+`answered`, the node's research status changes accordingly. A valid R1
+`no_viable_search` instead records a distinct durable no-search disposition
+(with no fabricated R2 results, no database-index advancement and no R3).
+The next direct research action is R4 using the accumulated existing
+research/search history and the no-viable-search reason. In this special case
+R4 cannot return `retry`, which would repeat R1 on unchanged information.
+It may return `exhausted` (relevant but no productive direct search is
+available), `kill` or `answered`. `exhausted` enters the existing R5
+ripeness queue without declaring that scientific evidence is sufficient or
+claiming the research-capacity threshold was reached. Exhaustion cause is
+persisted; R5 must accept either capacity or this explicit R4 disposition.
+An unsuccessful retrieval does not itself prove the question answered,
+irrelevant or exhausted.
 
 ### R2: query compilation and evidence
 
-R1 supplies **2–6 ordered scientific concepts**, prioritised for the
-selected question. A concept is one technical term or established multiword
-phrase of at most five words, not provider-specific syntax. Python applies
-its literal control-term filter; the accepted list must remain nonempty.
+R1 supplies a **selected list of 1–6 ordered scientific search concepts**
+when its disposition is `search`. An R1 `no_viable_search` supplies no
+selected concepts and never dispatches R2. R1 separately proposes 0–6 new
+concepts, which need not be selected in the current round. Each concept is
+one scientific term or established multiword phrase of at most five words,
+without provider syntax. Python validates and filters both arrays, preserving
+accepted order; a `search` selection must remain nonempty.
 
 For a provider, R2 retains the first `max_terms` accepted concepts in
 priority order and discards the rest **for that provider only**. A multiword
@@ -278,15 +292,15 @@ The complete request still passes the existing model-tokenizer budget check.
 Glossary prose receives the existing untrusted-text filtering; definitions guide
 terminology and are never independently verified scientific evidence.
 
-The `question` input is the primary research objective. `question_context`
-contains root/ancestor questions to resolve scope and ambiguity, not to replace
-the selected question. `memory_context` includes bounded relevant findings,
-source qualifications, evidence status and unresolved questions; R1 uses these
-to identify terminology and evidence gaps without assuming that extracted
-claims have been independently verified. `research_brief` supplies optional
-background and complete research objectives; background may be excerpted.
-`previous_search_terms` contains previously proposed terms, not search
-success or failure.
+The `question` input is the assigned scientific question. R1 neither
+creates nor chooses child/subresearch questions: that is exclusively R5's
+responsibility. `question_context` contains root/ancestor questions only to
+resolve scope. `memory_context` supplies bounded relevant findings,
+qualifications and gaps as terminology guidance, not independently established
+truth. `research_brief` supplies optional background and complete research
+objectives; background may be excerpted. `previous_search_terms` is a
+bounded, labelled projection of previously proposed/selected terms, not a
+claim that those terms succeeded or failed when searched.
 
 R1 also receives a dedicated `search_outcomes` input: up to 12 most recent
 committed provider-query outcomes for the selected node, in chronological order.
@@ -309,13 +323,71 @@ requests do. Ambiguous abbreviations alone identify no concept. Previous
 terms and outcomes inform soft reuse guidance without new query bans or
 extra LLM calls.
 
-R1 returns JSON `{"keywords":["highest-priority concept","next concept"]}`
-with 2–6 concepts ordered by importance. Each entry contains one scientific
-concept or established multiword phrase of at most five words, without Boolean
-operators, field tags, provider names or query syntax. Python validates these
-constraints and applies the existing literal control-term filter, preserving
-the accepted order. R2 compiles provider-specific queries from that order;
-the complete original and accepted lists remain available for auditing.
+R1 has exactly **two scientific responsibilities in one LLM call**:
+(1) propose **0–6 genuinely new, useful concepts** for the assigned question
+without inventing poor terms to fill a quota; and (2) **select 1–6 ordered
+search concepts** from new or established terminology to advance that same
+question. Selection requires scientific judgement by R1, not a deterministic
+Python-assembled fallback. An unused discovery remains a candidate for later
+rounds. R1 does not nominate a new subquestion or research objective.
+
+The complete R1 JSON contract has exactly these fields:
+`{"disposition":"search","new_concepts":[],"search_concepts":["term"],"reason":"Brief reason."}`.
+`disposition` is `search` or `no_viable_search`; the latter requires
+`search_concepts:[]` and a reason and is valid when no worthwhile untried
+search can be selected. A `search` disposition requires 1–6 concepts and
+a brief reason. Both concept arrays obey the existing at-most-five-words,
+no-Boolean/provider-syntax and literal control-term validation. Python
+conservatively normalizes/deduplicates terms, preserves complete raw and
+accepted lists, and validates the selected concepts before publishing.
+
+Python persists R1 discoveries in a durable **per-node concept-candidate
+register**, separately from the source-grounded glossary. Record normalized
+and original spelling, R1 origin, node, first discovery round/event, original
+priority, unverified scientific status, selection count/last selected round
+and actual submitted-provider usage count. Preserve unselected discoveries;
+selection alone is not evidence of provider usage. Update actual usage only
+when a profile retains the concept in a **submitted** R2 query; a term cut by
+`max_terms`, a cooldown skip or a merely deferred query remains unused.
+Existing selected and previously proposed terms remain available as distinct
+historical terminology; do not upgrade a speculative R1 term to sourced
+glossary status. Candidate state and audits survive restarts, journal recovery
+and node scheduling. Legacy nodes/events without a register remain readable.
+
+R1 receives separately labelled bounded projections: up to **10 unused R1
+candidates** and up to **10 previous selected/proposed terms** by default,
+with deterministic question/memory relevance, recency, stable ties and rotation
+so omitted candidates are not permanently starved. These are configurable
+projection limits, not caps on stored candidates. Each projection identifies
+its full/visible/omitted counts, usage and unverified status. Keep the existing
+independently bounded glossary and 12-search outcome projections; add a small
+list of the active provider/profile IDs and `max_terms` to explain how the
+ordered selection will be compiled. All underlying records remain durable,
+including those omitted from R1, and the fully rendered request still passes
+the tokenizer budget. Python handles the bounded input, not R1's scientific
+term selection.
+
+For a `search` disposition Python compiles the candidate ordered selection
+under **every active query profile without submitting**, then compares the
+provider ID, actual query text and relevant public request parameters against
+the node's **complete** persisted history of actually submitted terminal
+`ok`/`empty` searches. At least one provider must have a previously
+unsubmitted effective query under this criterion; another provider's repeated
+query does not invalidate the whole round. Failed, unavailable, rate-limited
+and unsubmitted/deferred searches do not establish ineffectiveness and do not
+count as completed-query duplicates. No hidden fallback, automatic query
+replacement or additional LLM call is permitted. An invalid repeat-only
+selection is rejected with its raw response retained, not misreported as
+`no_viable_search`. R2 otherwise retains its existing one-query-per-provider
+order, profile pruning, deduplication, retry and audit semantics.
+
+On a valid `no_viable_search`, persist any new discoveries and its reason,
+do not fabricate provider activity, and route immediately to R4. R4 can
+choose `exhausted` for a relevant question with no useful direct search,
+leading eventually to R5, or `kill`/`answered` when justified by existing
+research. No `retry` is permitted in this special case. This is separate
+from capacity exhaustion and never means that lack of search results proves
+a scientific conclusion.
 
 ### R3: ordered extraction and provenance
 
@@ -409,22 +481,31 @@ rebuilds it. `glossary-export --experiment NAME` atomically regenerates the deri
 case-insensitive alphabetical `research/glossary.md`, including evidence and links.
 R3 never rewrites that whole export; it may be stale until explicitly regenerated.
 
-### R4: exactly three decisions
+### R4: round evaluation and no-viable-search exhaustion
 
-R4 receives the question, distinct ancestor context, all its direct research and
-compact search history. It returns exactly `{"decision":"retry","reason":"..."}`.
+R4 receives the assigned question, ancestor context, all direct research,
+compact **actual** provider-search history and a `search_availability`
+projection indicating `completed_round` or `no_viable_search`, including
+R1's reason for the latter. R4 returns exactly
+`{"decision":"retry","reason":"Brief explanation."}` with one of these
+context-dependent decisions:
 
-- `kill`: the direction is off-track and does not meaningfully contribute to its
-  parent or root. Unsuccessful retrieval alone is not grounds for killing it.
-- `answered`: a sufficiently complete contextual answer is established; further
-  direct investigation is unnecessary. This says nothing about descendant work.
-- `retry`: it remains relevant and warrants more research. Python appends current
-  terms to `previous_search_terms`, clears keywords, resets the database pointer
-  and leaves it living. Its next direct action is R1.
+- `kill`: off-track relative to the selected, parent or root question.
+- `answered`: enough scientific evidence exists to answer the selected
+  question adequately. Retrieval failure alone never suffices.
+- `retry`: **completed provider round only**; further direct searches are
+  worthwhile. Reset terms/index for another R1 as before.
+- `exhausted`: **no-viable-search only**; question remains relevant but
+  R1 identified no worthwhile untried direct search. Persist the distinct
+  `no_viable_search` exhaustion cause and hand off to R5's existing queue.
+  This does not claim that the research-capacity threshold has been reached.
 
-R4 cannot generate keywords or children, declare exhaustion or create a separate
-unresolved/blocked research disposition. Malformed or old five-way responses are
-rejected with their raw output retained.
+The validated decision set is `kill|answered|retry` for a completed round
+and `kill|answered|exhausted` for no viable search. R4 never creates terms
+or child questions; R5 alone may develop child questions. A no-viable-search
+result never fabricates a completed provider pass or invokes R2. Persist R4's
+cause/decision atomically with the state transition, and retain the existing
+complete research input and source provenance. Malformed outputs are rejected.
 
 ## Deterministic research capacity
 
@@ -467,7 +548,11 @@ bytes from today's templates.
 
 ## Ripeness queue
 
-Only exhausted nodes enter `ripeness_order`. The score starts as:
+Only exhausted nodes enter `ripeness_order`, whether exhausted by the
+existing deterministic capacity threshold or by R4's explicit
+`no_viable_search` exhaustion decision. Capacity-based R5 checks apply to
+the former; for the latter record and validate the R4 decision/event as the
+exhaustion cause instead of requiring a threshold crossing. The score starts as:
 
 `ripeness = F + 2*H + 2*Q - D`
 
