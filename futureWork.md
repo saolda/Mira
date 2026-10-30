@@ -82,22 +82,26 @@ A separate 29 October list identified: (1) prevent R4 context overflow;
 (2) improve R1 research breadth; and (3) improve source-quality handling.
 R1 breadth aligns with Priority 2 above; source quality belongs to Priority 3.
 
-### In progress with Codex now — do not duplicate or modify
+### R4 correction completed; scientific follow-up pending review
 
-- Compact **R4 search-history projection** without dropping any scientific
-  research, source provenance or actual provider-query outcomes. The no-OpenAlex
-  benchmark blocked at **17,006 tokens** against **16,384** available, even
-  though the full R5 capacity estimate had not reached its threshold.
-- Investigate **S1 invalid responses**: one truncated at the 4,096-token
-  completion limit; the next selected only one memory despite the >=2
-  requirement. Determine scheduling and recovery implications without
-  unapproved changes to S1 semantics, prompt wording or selection rules.
-- Validate research continuation using a temporary PubMed `max_terms=2`
-  and Europe PMC plain-text `max_terms=3` profile configuration, keeping
-  committed defaults unchanged; commit a separate validation report.
-- **Status: IN PROGRESS.** Do not mark resolved until Codex's new commits,
-  tests and actual report have been reviewed. This file update does not
-  change any active experiment or Codex's working tree.
+- **COMPLETED in `4cb524f` (tests `1545c85`, report `72a7f87`):** compact
+  R4 history while preserving all scientific research and all 12 search
+  outcomes. Same-state request + reserve fell from **17,006 to 8,834**
+  tokens, within the 16,384 context. The full suite reports **350 passing**
+  tests; the continuation experiment completed three R4 rounds. Longer future
+  contexts may still need bounded-history design review.
+- **INVESTIGATED; mitigation PENDING:** earlier S1 failed once by truncating
+  at 4,096 tokens, then by selecting one memory despite the >=2 requirement.
+  The new run did not reproduce S1 rejection, but did record an S2 rejection;
+  scientific faithfulness and recoverable invalid-selection behaviour remain
+  open for user-controlled design.
+- **COMPLETED in the new report:** fresh continuation with temporary PubMed
+  `max_terms=2` and Europe PMC plain-text `max_terms=3`, preserving defaults.
+  Three rounds / 30 direct actions completed; no evidence-grounded answer to
+  the medical comparison yet. Analyse source quality before changing defaults.
+- **Status:** R4 implementation and tests committed and reported; user and
+  ChatGPT have not yet reviewed the complete scientific validation. This
+  planning update does not change any active experiment or prompt.
 
 ### Additional follow-up after that work
 
