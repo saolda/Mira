@@ -251,20 +251,44 @@ matches the question, its ancestors and relevant findings/gaps; novelty breaks
 relevance ties, and sourced neighbours can extend discovery. At most 96 FTS hits
 and eight neighbours per leading hit are considered, rather than scanning term
 records. The default maximum is 12 entries (configurable up to 15), within a
-3,200-token conservative UTF-8 byte upper bound including recent search outcomes.
-Both settings are persisted by `research-init --glossary-token-budget` and
+3,200-token conservative UTF-8 byte upper bound. The independent
+provider-search history has its own bounded input and does not consume this
+budget. Both glossary settings are persisted by `research-init --glossary-token-budget` and
 `--glossary-limit`. Sparse catalogues or smaller budgets supply fewer entries.
 The complete request still passes the existing model-tokenizer budget check.
 Glossary prose receives the existing untrusted-text filtering; definitions guide
 terminology and are never independently verified scientific evidence.
 
-Previous search terms retain their existing meaning. R1 records suggested glossary
-IDs in its event, without marking them used. Only terms/aliases matched in an
-actually submitted provider query enter the node's `used_glossary_term_ids` register
-and the corresponding R2 event/evidence history. Cooldown skips do not count;
-submitted rate-limited requests do. Ambiguous abbreviations alone identify no
-concept. Recent outcomes inform soft reuse guidance, without adding query bans
-or extra LLM calls.
+The `question` input is the primary research objective. `question_context`
+contains root/ancestor questions to resolve scope and ambiguity, not to replace
+the selected question. `memory_context` includes bounded relevant findings,
+source qualifications, evidence status and unresolved questions; R1 uses these
+to identify terminology and evidence gaps without assuming that extracted
+claims have been independently verified. `research_brief` supplies optional
+background and complete research objectives; background may be excerpted.
+`previous_search_terms` contains previously proposed terms, not search
+success or failure.
+
+R1 also receives a dedicated `search_outcomes` input: up to 12 most recent
+committed provider-query outcomes for the selected node, in chronological order.
+Each entry contains provider ID, profile ID when known, compiled query,
+whether the query was actually submitted, outcome status, returned record count
+and unique record count. Status distinguishes `ok`, `empty`, `failed`,
+`rate_limited`, `deferred` and `unavailable`. An `ok` outcome confirms
+retrieval, not relevance; `empty` means no provider matches for that query,
+not absence of scientific evidence. Failed, deferred or rate-limited searches
+give no evidence of query ineffectiveness. Search outcomes are built from
+persisted retrieval records independently of the glossary and its byte budget.
+Their absence means the retrieval history is unknown, not unsuccessful.
+Only actual submitted queries count as glossary-term usage.
+
+R1 records suggested glossary IDs in its event, without marking them used.
+Only terms/aliases matched in an actually submitted provider query enter the
+node's `used_glossary_term_ids` register and the corresponding R2
+event/evidence history. Cooldown skips do not count; submitted rate-limited
+requests do. Ambiguous abbreviations alone identify no concept. Previous
+terms and outcomes inform soft reuse guidance without new query bans or
+extra LLM calls.
 
 R1 returns JSON `{"keywords":["highest-priority concept","next concept"]}`
 with 2–6 concepts ordered by importance. Each entry contains one scientific
