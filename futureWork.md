@@ -155,31 +155,51 @@ traceability. The medical benchmark and configuration tuning remain ongoing.
 - OpenAlex's observed 429 / ~19.8-hour Retry-After is an availability issue,
   not a negative search result: do not busy-wait during short benchmarks.
 
-## Pending design review: R1 discovers only new concepts
+## Pending design review: R1 discovers AND selects concepts
 
 **Not approved for implementation; requires a reviewed architecture amendment
-and exact reviewed R1 prompt revision first.**
+and exact reviewed R1 prompt revision first.** R1's original 2–6 keywords
+contract remains operative until then.
 
-- Proposed R1 result: `{"keywords":[...]}` with **0–6 genuinely NEW**
-  relevant scientific concepts, ordered by prospective value. Zero is valid;
-  do not invent low-quality or pseudo-novel concepts merely to fill a quota.
-- Interpret `new` relative to previously proposed/search-used concepts and
-  relevant glossary aliases, not merely spelling differences. Synonyms may
-  still have retrieval value, but lexical substitution is not automatically a
-  new scientific direction. Specify how to distinguish these cases.
-- Deterministic code should combine new concepts with useful established
-  context/anchor concepts when needed for search precision; no extra LLM call.
-  Select anchors and fallbacks using explicit, auditable rules. Avoid rebuilding
-  the original five- or six-concept conjunctive query by indiscriminately
-  appending old terms. Profile `max_terms` remains independently configurable.
-- Design the zero-new-concept path, first-round empty response, no usable
-  fallback, nonduplicate provider queries, and R4 eligibility so Mira cannot
-  loop indefinitely on unchanged searches or claim nonexistent evidence.
-- Update `architecture.md`, `prompt_templates/R1.txt`, output validation,
-  persisted concept/provenance state, and tests **only after user review**.
-  Prompt wording is not delegated to Codex.
-- Compare semantic novelty, recall, retained concept utility, query uniqueness,
-  relevant extracted evidence and total model/token cost in repeatable tests.
+- **One R1 call with two scientific responsibilities:** (A) discover **0–6
+  genuinely NEW** useful scientific concepts, possibly none; (B) select an
+  ordered **usable, non-repeated search-concept list** for the question R1 was
+  assigned, drawing on discovered and existing concepts. Do not manufacture
+  low-quality novelty to fill the discovery list. Selection is an **LLM
+  scientific judgement**, not a deterministic Python fallback/assembly task.
+- **R5 alone develops child/subresearch questions.** R1 must not create,
+  reformulate or select new subquestions. R4 assesses research-round progress.
+  No new R1 subquestion/objective field has been approved.
+- New concepts that R1 does not select must survive in a **durable per-node
+  unused-candidate register**, separate from source-supported glossary facts.
+  Annotate origin=R1, node/question, discovery round, priority, validation,
+  selection/actual-query usage, and `unverified` scientific status. An
+  LLM-suggested term is not independently sourced evidence. Make duplicate
+  merging conservative and preserve history across restarts/journals.
+- **Python curates bounded inputs**, not the scientific search choice. It
+  might retrieve, for example, 10 relevant unused candidates from 100 saved
+  unused concepts while independently summarising 30 previously used ones.
+  Use deterministic relevance, usage/recency and fair exposure; flag omitted
+  counts, avoid starvation, and preserve all records for later rounds. This
+  general principle is recorded in `architecture.md` at commit `b2f85f7`.
+  Do not silently truncate essential questions/objectives or source evidence.
+- Validate actual provider-compiled query usefulness/novelty against
+  previously **submitted** provider-query combinations, respecting per-profile
+  `max_terms`, not just comparing the full R1 lists. Distinguish an
+  unsubmitted deferred query, an empty successful query and a failed attempt.
+  The exact duplicate-submission policy is still to be designed.
+- If R1 identifies **no viable search**, it should explicitly decline rather
+  than invent terms or repeat a known unproductive query. Route this event
+  to R4 for assessment, with a reviewed transition that avoids endless
+  R1→R4→R1 cycles. R5 may eventually receive an exhausted node, **but current
+  architecture sends nodes to R5 only via capacity exhaustion**; do not
+  silently alter that contract. Review status/schema/flow first.
+- Define output schema, projection budgets, unused-candidate persistence,
+  no-viable-search outcome, R4/R5 integration, exact LLM prompt wording and
+  deterministic regression tests **with user and ChatGPT approval** before
+  Codex implementation. Prompt wording is not delegated to Codex.
+- Evaluate scientific value, diversity, query uniqueness, useful R3 evidence
+  and model/token cost, not just newly coined vocabulary.
 
 ## Subsequent investigation
 
