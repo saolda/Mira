@@ -19,6 +19,25 @@ priorities, memory construction, transitions, persistence and scheduling. Extrac
 claims and model reasoning remain unverified; structural validity does not prove
 scientific correctness.
 
+Python also owns the construction of bounded, task-specific **LLM input projections**.
+It need not supply every stored item to every model call: indexed retrieval,
+deterministic relevance ranking, recency, usage state, diversity and fair rotation
+may select a manageable subset from much larger persistent collections. For
+example, a node might retain 100 unused candidate search concepts and 30
+previously used concepts while R1 receives only the 10 most relevant unused
+candidates, plus a separate, appropriately bounded view of prior usage and
+search outcomes. These figures illustrate the principle, not fixed limits.
+Selection policies and omission counts must be inspectable, deterministic and
+tested; an absent item in a projection does not mean that it was never known or
+searched. Information excluded from a prompt remains in durable state for later
+retrieval, with its provenance and status intact. Do not silently truncate
+essential questions, complete research objectives or scientific evidence where
+an action's contract requires them in full. The final rendered request must
+still pass the actual model-tokenizer/context-budget check. Context curation is
+a Python-harness responsibility; scientific interpretation and search choices
+remain with the assigned LLM action, and child-question creation remains R5's
+responsibility.
+
 ## Research question documents
 
 `research-init` accepts either the existing positional question or
