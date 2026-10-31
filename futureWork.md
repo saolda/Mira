@@ -1,307 +1,184 @@
 # Future work
 
-This file tracks planned or pending changes. It is not an implemented specification.
-The authoritative behavioural specification is `architecture.md`; the actual
-LLM instructions are the versioned files in `prompt_templates/`.
-Changes to either require user review and approval before being committed.
-Codex implements approved specifications and reports proposed amendments
-instead of editing `architecture.md` or independently rewriting LLM prompts.
+This file tracks **open work**, not implementation instructions. The
+authoritative behaviour is documented in `architecture.md` and the
+exact LLM prompts in `prompt_templates/`. Changes to either require
+explicit user review and approval. Codex must not independently rewrite
+these protected files.
 
 Updated: 2026-10-31.
 
-## Current proposal under discussion (31 October): R1/R2 shared search round
+## Implemented baseline (reference only)
 
-**PROPOSED ONLY. NOT APPROVED OR IMPLEMENTED.** Do not implement the
-older R1/R4 scheme in `architecture.md` commit `a3bd513` or its earlier
-Codex prompt without a reviewed amendment. Preserve the existing production
-scheduler and prompt templates until explicit user approval.
+- **R1:** One discovery/selection LLM call per provider round; 0–6
+  genuinely new concepts; up to the active strategy's maximum
+  `max_terms` selected concepts; unused-candidate persistence and
+  effective-query duplicate prevention. Commits `4c18972`, `89cc7e9`.
+- **R2/R3:** One logical provider search per R2 action, the same R1 plan
+  across providers, and one source extraction per R3 action. This
+  granularity is **settled**; batch-all-providers R2 is no longer planned.
+- **R4:** `answered|kill|unresolved` scientific assessment using
+  direct and synthesis evidence and supporting lineage. No root `kill`.
+  `unresolved + search_blocked` deterministically exhausts the node
+  for R5, even below capacity. Commit `fe684fd`.
+- **Memory/logs:** One active `memory/` corpus, explicit safe reset
+  for a new experiment, compact new synthesis Markdown, project
+  `log/`, and legacy format/corpus readers are implemented. The
+  code supports legacy cleanup; the actual state of historical local
+  directories has not been independently verified.
+- Provider profiles, deterministic compilation, retries/pacing,
+  deduplication, previous R4 context-overflow correction and scientific
+  HTML parsing improvements are implemented. Predefined strategies
+  currently omit OpenAlex; explicit selection remains possible.
 
-### R1: one LLM selection for the entire provider round
+The latest test report records **381 passing tests** but no live
+scientific-quality validation of the new R1/R4 behaviour. Historical
+implementation plans, old R1/R4 schemas, and completed task instructions
+are intentionally omitted; consult Git history and `test-results/`.
 
-- Keep **one R1 call per research round**, not one R1 per provider.
-  R1 has exactly two scientific tasks: discover **0–6 genuinely new useful
-  concepts** (possibly zero); select a single ordered search-concept list
-  using new and/or known concepts, without repeating completed searches.
-  R1 does **not** generate child questions (R5 does that).
-- The R1 input has a single integer `term_limit`, defined as
-  `max(profile.max_terms for provider in the current snapshotted strategy)`.
-  It is **not** the max across all installed providers, and R1 does not need
-  provider names, individual profiles, or future-cycle settings. For the
-  current medical strategy, PubMed 3, Europe PMC 3, Crossref 4 and
-  Wikipedia 3 yield `term_limit=4`.
-- R1 selects **0 through term_limit** meaningful ordered concepts.
-  Empty selection means it cannot identify a worthwhile distinct search;
-  Python handles blocked/exhaustion progression. Previously proposed
-  terms may be reused in a *new* combination; a completed repeated query
-  is not a productive new search. Python checks compiled provider/query
-  history, not just raw concept-list identity.
-- R1 should receive only question/scope, relevant bounded scientific
-  context, useful known/unused terminology, concise relevant completed
-  search history, `term_limit` and control terms. State each input's
-  intended use in the short prompt; avoid irrelevant provider metadata.
-- Persist new discoveries not used immediately, separately and explicitly
-  marked unverified; bounded deterministic Python projections leave all
-  stored candidates intact. Propose prompt/schema and transition details
-  for review rather than changing files yet.
+## 1. Validate the integrated R1–R5 pipeline
 
-### R2: keep the shared concepts, examine action granularity
+The revised R4 architecture was documented in `1b7a7fc`; it now
+describes the implemented decisions, input evidence, blocked transition
+and two distinct R5 exhaustion causes.
 
-- **The same ordered R1 concept list is reused for every provider in the
-  round.** Each provider's *existing snapshotted query profile* applies
-  its own `max_terms` prefix and query compiler; actual query strings can
-  differ. There is no R1 call between individual provider searches.
-- **CURRENT IMPLEMENTATION:** one R2 controller action performs one logical
-  provider search and records its independent durable outcome. Each unique
-  returned source is processed by one R3 action before the next R2 provider.
-  R2 may involve multiple HTTP requests within its one logical search.
-  The provider index, pending R3 cursor, deferred requests, deduplication,
-  pacing, per-node scheduling and crash recovery persist across cycles.
-- **OPEN DESIGN QUESTION:** is one batched R2 action for all providers actually
-  simpler/better? Compare against the existing atomic per-provider actions.
-  A batch must not weaken independent request receipts, rate-limit handling,
-  deferred retries, recovery, journal integrity or prompt action cadence.
-  **Current recommendation: retain per-provider R2 actions** unless a
-  concrete measured advantage justifies a reviewed change.
-- A completed provider query should not be needlessly resubmitted in the same
-  node. Exact duplicate policy, how to skip some repeats while still visiting
-  other providers, and the zero-usable-search transition remain to be
-  specified before implementation.
+Run a fresh controlled end-to-end experiment on the combined R1/R4
+implementation. Verify the shared R1 search plan across providers,
+one-provider R2 and one-source R3 actions, duplicate suppression,
+synthesis support provenance, justified R4 scientific decisions,
+`search_blocked -> unresolved -> exhausted -> R5`, journal recovery
+and accurate source/result accounting. Record calls, tokens, time and
+failure modes. Fixture-passing JSON and valid citation anchors do
+**not** establish the scientific correctness of conclusions.
 
-### R4: separate scientific assessment from search scheduling
+Check the active `memory/` and `log/` layout, and inventory any
+legacy experiment directories still present. Use the supported
+lock-/recovery-checked cleanup route rather than assuming old experiments
+have all been removed.
 
-- Proposed short R4 outcomes: `answered`, `kill`, `unresolved`.
-  Python (not R4) tracks whether further direct searches are available
-  and marks an unresolved, search-blocked node exhausted for possible R5.
-- Proposed `kill` wording for a **non-root** selected question:
-  "The selected question is irrelevant to its parent **and** root research
-  objective." Define the root-only case separately; do not silently
-  reinterpret this AND as OR.
-- R4 should assess sufficient scientifically supported direct **and relevant
-  synthesis** memories, not assume an S2 summary is verified; the current
-  R4 request omits synthesis memories. The exact bounded evidence projection
-  and memory lineage requirements need reviewed specification.
-- This supersedes the earlier unimplemented R4 `exhausted` decision and
-  R1 `disposition=search|no_viable_search` schema in `a3bd513`.
-  No architecture or prompt edits are authorized by this planning note.
+## 2. Research-stagnation rule (PROPOSED, NOT IMPLEMENTED)
 
-## Roadmaps recovered from 29 October: Priority 1–3
+### Problem and distinction from ordinary search exhaustion
 
-These labels refer to previously proposed priorities, not three new approvals.
-**Priority 1 was implemented; Priorities 2 and 3 remain substantive unfinished
-scientific-research work.** Preserve these distinct goals when planning later tasks.
+A node can keep running if R1 repeatedly produces *different*
+effective provider queries, each round completes and R4 correctly
+returns `unresolved`, but the searches discover little or no useful
+new science. With few R3 research memories, the capacity threshold
+may never be reached. The existing `search_blocked` flag means **R1
+cannot select a viable distinct query**; it does **not** mean that
+many distinct searches have failed to advance the investigation.
+A stalled node could therefore consume arbitrarily many rounds.
 
-### Priority 1 — provider-specific query generation — IMPLEMENTED, tuning OPEN
+### Observation-only instrumentation first
 
-- Named reusable query profiles, provider-aware deterministic compilation,
-  configurable `max_terms`, strategy snapshots, provider/host pacing, deferred
-  retries, crash recovery and provenance were implemented in
-  `df75a8792e59ed68e8b74cea3e74bb610761d0d0`.
-- Real benchmarks showed useful PubMed abstracts, but Europe PMC's exact-phrase
-  profile is sometimes over-restrictive. Controlled probes found PubMed matches
-  of 6/5/0 and Europe PMC 9/3/0 for 2/3/4 concepts in one fixed bundle.
-  A plain-text Europe PMC profile retrieved an infectious-mimic abstract in a
-  later alternative experiment. **Profile optimisation is NOT completed.**
-- OpenAlex was temporarily removed from all *predefined* strategies in
-  `1bfb62f2912dee591a7b8b1ecc13fb03f323a386`; explicit OpenAlex use,
-  saved strategy snapshots, and pending searches remain supported.
-- Distinguish one query profile **per provider per research round** (implemented)
-  from a **multi-query research plan for multiple evidence gaps** (not yet
-  designed or implemented).
+Track per node, for each **completed** research round, without new
+model calls:
 
-### Priority 2 — broaden and diversify scientific research — PENDING DESIGN
+- Actual submitted effective provider queries; their `ok`, `empty`,
+  failed, unavailable and deferred outcomes; distinct returned
+  source identifiers and actual duplicate-skip references.
+- Accepted R3 source-derived memories and anchored knowledge units,
+  provenance and qualifications, separately from raw source counts.
+- Known unresolved evidence gaps and whether new supplied research
+  explicitly addresses one, where this is supported by existing
+  structured records rather than guessed from lexical overlap.
+- A reproducible `consecutive_unproductive_rounds` counter,
+  a `stagnation_warning` indicator, round/event identifiers and
+  cumulative time, LLM calls and tokens.
 
-- Choose *substantively distinct evidence objectives*, derived from the
-  selected question, unresolved memory gaps and previous retrievals. Examples
-  for the medical benchmark: malignant doubling-time distributions, rapid
-  cancer subtypes, infectious/inflammatory growth rates, CT measurement
-  reliability, spiculation risk, and direct comparative diagnostic evidence.
-- Avoid treating lexical permutations and near-synonyms as distinct discoveries;
-  permit useful terminology reuse without repeating unproductive provider queries.
-- Investigate multi-query/gap-specific search planning: how many focused
-  directions per round, how they interact with the per-node database cursor,
-  how deduplication and completed/deferred work are tracked, and how to keep
-  R2 deterministic without uncontrolled extra LLM calls.
-- The proposed R1 **0–6 NEW-concepts** contract below is an important component,
-  **not the whole Priority 2 design**. Novel terms alone do not guarantee
-  coverage of distinct scientific questions. User and ChatGPT must approve
-  exact `architecture.md` and R1 prompt revisions first.
-- Evaluate progress by new scientific evidence and gap coverage, not query
-  novelty or raw record counts alone.
+**Scientific progress is not synonymous with activity.** A new URL,
+query formulation, glossary term, source record or paraphrased
+proposition is not by itself evidence of increased scientific
+understanding. But the opposite shortcut is also unsafe: Python
+cannot reliably determine scientific novelty or quality merely
+from the number of R3 findings. Keep raw counts and any
+scientific-value classification distinguishable and auditable.
 
-### Priority 3 — evidence-grounded synthesis and source quality — PENDING DESIGN
+Count only completed rounds eligible for assessment. An interrupted
+call, outstanding R3 source, deferred provider retry, rate limit
+or unknown/failed submission is **not** a completed, scientifically
+unproductive round. Do not interpret temporary provider
+unavailability as stagnation.
 
-- R3/S1/S2 must preserve the population, exposure, comparator, outcome,
-  timescale, measurement units, uncertainties and limits actually reported
-  by each cited study. Do not infer infection-vs-malignancy odds from findings
-  restricted to patients with confirmed cancer.
-- Explicitly distinguish (a) source-reported observations, (b) independently
-  supported cross-source conclusions, (c) model-derived hypotheses and
-  (d) unresolved or conflicting evidence. Validate attribution and cited
-  memory anchors, not just output JSON structure.
-- Evaluate incomplete, conflicting, metadata-only and low-quality evidence;
-  avoid summary claims stronger than their supporting study populations.
-- Benchmark failures to address: grouped lobulation+spiculation misreported
-  as spiculation alone; `≤400 days` misread as slow-only; ALI odds in known
-  NSCLC promoted to an infection-vs-cancer preference; unsupported S1/S2
-  etiologic claims despite missing direct comparison.
-- Strengthen source quality/retrieval depth: source-reported quantitative
-  results, abstract versus full-text limits, provenance, and noninvented
-  citations; preserve existing source deduplication.
-- Scientific-text HTML sanitisation was **fixed** in
-  `87ed8ae99747ab896ba5db64ac5477273ab6d9b5`, but that correct parser
-  is only one completed subtask, **not completion of Priority 3**.
+### Proposed stopping policy, subject to data and approval
 
-## Other previously stated operational priorities
+Initially **observe and report** stagnation only; do not stop, block,
+exhaust or generate substitute search concepts. Define and test the
+counter's increment/reset semantics, including what constitutes
+verified *useful* new evidence, before setting a threshold.
 
-A separate 29 October list identified: (1) prevent R4 context overflow;
-(2) improve R1 research breadth; and (3) improve source-quality handling.
-R1 breadth aligns with Priority 2 above; source quality belongs to Priority 3.
+As a **hypothetical** starting point, review whether **three
+consecutive eligible rounds** lacking any additional relevant,
+source-grounded finding predicts genuinely unproductive research.
+**Three is not an approved threshold.** Compare longer windows
+and false-positive cases: useful research can yield several empty
+rounds before discovering a rare or decisive source. Evaluate
+changes in evidence gaps, not just added memory count.
 
-### R4 correction completed; scientific follow-up pending review
+If a termination rule is later approved, it must use a separate,
+auditable cause such as `research_stagnant`, **not**
+`search_blocked`. R4 still assesses scientific
+`answered|kill|unresolved`. Only a valid `unresolved` assessment
+plus the deterministic, approved stagnation predicate could
+transition `status=exhausted` for R5, with persisted threshold,
+round measurements, cause and R4 event receipt. Do not declare
+a question answered or irrelevant because little evidence was
+found; do not add LLM calls simply to measure stagnation.
 
-- **COMPLETED in `4cb524f` (tests `1545c85`, report `72a7f87`):** compact
-  R4 history while preserving all scientific research and all 12 search
-  outcomes. Same-state request + reserve fell from **17,006 to 8,834**
-  tokens, within the 16,384 context. The full suite reports **350 passing**
-  tests; the continuation experiment completed three R4 rounds. Longer future
-  contexts may still need bounded-history design review.
-- **INVESTIGATED; mitigation PENDING:** earlier S1 failed once by truncating
-  at 4,096 tokens, then by selecting one memory despite the >=2 requirement.
-  The new run did not reproduce S1 rejection, but did record an S2 rejection;
-  scientific faithfulness and recoverable invalid-selection behaviour remain
-  open for user-controlled design.
-- **COMPLETED in the new report:** fresh continuation with temporary PubMed
-  `max_terms=2` and Europe PMC plain-text `max_terms=3`, preserving defaults.
-  Three rounds / 30 direct actions completed; no evidence-grounded answer to
-  the medical comparison yet. Analyse source quality before changing defaults.
-- **Status:** R4 implementation and tests committed and reported; user and
-  ChatGPT have not yet reviewed the complete scientific validation. This
-  planning update does not change any active experiment or prompt.
+Review how stagnation-based exhaustion interacts with R5's
+below-capacity guard and monotone node statuses. Reopening a
+formerly exhausted node after new sources or a better strategy
+would require a **separate approved transition policy**, not
+an undocumented state reset.
 
-### Additional follow-up after that work
+## 3. Research breadth and provider-profile tuning
 
-- Assess whether an unchanged memory catalogue warrants another S1
-  `no_candidate` model call; distinguish this from rejected/invalid S1
-  responses that currently can obstruct pending R3 extraction.
-- Review whether provider retry queues should hold R4/research-round completion
-  for many hours, or whether other research directions could proceed in
-  parallel. Any change must preserve query identity, durable cursors, provider
-  rate limits and honest accounting; this is an **unapproved architecture
-  proposal**, not an implementation instruction.
-- Benchmark alternative provider profiles with equal-work/equal-evidence
-  comparisons. An observed result-count change is not proof of better science.
+- Test whether R1 searches distinct **scientific evidence gaps**
+  rather than cycling near-synonyms. Relevant medical benchmark
+  gaps include tumour/infection growth distributions, CT
+  measurement reliability and direct comparative evidence.
+- A multi-query evidence-gap research plan remains **unapproved**.
+  Maintain one R1 selection per round and one provider per R2
+  action while investigating benefits and state/cost implications.
+- Compare alternative `max_terms` and provider query profiles
+  under equal-work conditions, including Europe PMC exact-phrase
+  restrictions. Measure **relevant evidence**, not hit counts.
+  OpenAlex rate limiting is an availability issue, not proof that
+  the search formulation is wrong.
+- Evaluate abstract versus full-text coverage, quantitative
+  extraction, source quality and provenance, particularly
+  when metadata-only results cannot support an answer.
 
+## 4. Scientific fidelity of extraction and synthesis
 
-## Completed provider infrastructure: implementation history
+- R3/S1/S2 should accurately preserve each study's population,
+  exposure/comparator, outcomes, timescales, units, uncertainty
+  and limitations. Keep source observations, inferred claims,
+  hypotheses and cross-source synthesis scientifically distinct.
+- Earlier medical failures included grouped lobulation and
+  spiculation being misattributed, `<=400 days` misinterpreted,
+  noncomparative known-cancer findings promoted to
+  infection-versus-cancer odds, and unsupported etiologic
+  preferences or treatment conclusions. Use adversarial
+  evidence-grounded fixtures and fresh controlled experiments.
+- Investigate invalid/truncated S1 selections and repeated
+  attempts against an unchanged catalogue that delay pending
+  R3 work. Preserve the existing multi-input synthesis rules.
+- Evaluate whether R4 reliably spots unsupported syntheses.
+  Citation anchors and complete provenance are necessary,
+  but do not ensure that a conclusion follows scientifically.
 
-The following work was completed on 30 October 2026 and is retained for
-traceability. The medical benchmark and configuration tuning remain ongoing.
+## 5. Scheduling, availability and resource limits
 
-### 1. Scientific-text sanitisation — COMPLETE (`87ed8ae`)
+- Review very long provider cooldown/deferred requests that
+  hold a research round open; preserve exact query identity,
+  honest statuses, rate limits and crash-safe retries.
+- Monitor R4/R5 evidence-context growth. Never silently remove
+  scientifically required material to fit a prompt; retain
+  explicit budget failures and inspectability.
+- Measure LLM calls, tokens, elapsed time, new scientific
+  evidence, repeated searches and research-node completion
+  paths after the integrated live validation.
 
-- `src/mira/providers.py:plain()` uses `re.sub(r'<[^>]+>', ...)`. This may
-  erase scientific comparison text between a literal `<` and a later `>`
-  (e.g. `P < 0.05; group size > 10`).
-- Replace with bounded HTML-aware text extraction that preserves literal
-  comparisons, numeric inequalities, Unicode and encoded `&lt;`/`&gt;`,
-  while correctly stripping genuine HTML tags and preserving useful spacing.
-- Regression tests must check realistic medical abstracts, inequality signs,
-  nested HTML, entities, bare comparison symbols, and unchanged result metadata.
-- Preserve source text/provenance and existing source-deduplication semantics.
-  Confirm cause with tests; benchmark observations alone do not prove this
-  regex caused all omitted numbers.
-- Run tests and commit this correction before starting query-profile work.
-
-### 2. Query-profile architecture — COMPLETE (`df75a87`)
-
-- Implement the named, reusable profiles, mandatory strategy-to-profile
-  mappings, `default` compatibility, provider-specific query compilation,
-  configurable `max_terms`, profile/host pacing, backoff, deferred searches,
-  durable R2 provider-index progression and `waiting_for_provider` contracts
-  already stated in `architecture.md`.
-- Preserve existing R1 wording and 2–6-concept output contract during this
-  implementation. Do not independently introduce the proposed 0–6 change.
-- Test compiler syntax and provider compatibility; run deterministic scheduling,
-  retry, recovery, deduplication and budget tests. Compare multiple configured
-  term limits (e.g. 2, 3 and 4) without assuming that two is optimal.
-- Re-run a bounded medical retrieval benchmark, recording actual submitted
-  queries, retrieved *relevant* evidence, source fidelity, model calls, tokens,
-  retries, and differences from the 2026-10-30 R1 benchmark.
-- OpenAlex's observed 429 / ~19.8-hour Retry-After is an availability issue,
-  not a negative search result: do not busy-wait during short benchmarks.
-
-## Earlier R1/R4 specification (historical, superseded for planning)
-
-The following is a **historical snapshot of the earlier unimplemented
-design** at `architecture.md` commit `a3bd513`. It is now superseded for
-planning by the 31 October proposal above. **Do not hand this earlier
-section or its Codex prompt to an implementer as the current approved
-specification.** Existing code still uses the original 2–6 `keywords`
-contract. No new R1/R2/R4 prompt or state-machine implementation is
-approved; review and amend `architecture.md` and prompts explicitly
-before implementation.
-
-- **One R1 call with two scientific responsibilities:** (A) discover **0–6
-  genuinely NEW** useful scientific concepts, possibly none; (B) select an
-  ordered **usable, non-repeated search-concept list** for the question R1 was
-  assigned, drawing on discovered and existing concepts. Do not manufacture
-  low-quality novelty to fill the discovery list. Selection is an **LLM
-  scientific judgement**, not a deterministic Python fallback/assembly task.
-- **R5 alone develops child/subresearch questions.** R1 must not create,
-  reformulate or select new subquestions. R4 assesses research-round progress.
-  No new R1 subquestion/objective field has been approved.
-- New concepts that R1 does not select must survive in a **durable per-node
-  unused-candidate register**, separate from source-supported glossary facts.
-  Annotate origin=R1, node/question, discovery round, priority, validation,
-  selection/actual-query usage, and `unverified` scientific status. An
-  LLM-suggested term is not independently sourced evidence. Make duplicate
-  merging conservative and preserve history across restarts/journals.
-- **Python curates bounded inputs**, not the scientific search choice. It
-  might retrieve, for example, 10 relevant unused candidates from 100 saved
-  unused concepts while independently summarising 30 previously used ones.
-  Use deterministic relevance, usage/recency and fair exposure; flag omitted
-  counts, avoid starvation, and preserve all records for later rounds. This
-  general principle is recorded in `architecture.md` at commit `b2f85f7`.
-  Do not silently truncate essential questions/objectives or source evidence.
-- Validate actual provider-compiled query usefulness/novelty against
-  previously **submitted** provider-query combinations, respecting per-profile
-  `max_terms`, not just comparing the full R1 lists. Distinguish an
-  unsubmitted deferred query, an empty successful query and a failed attempt.
-  The approved rule requires at least one provider query not previously
-  submitted to a terminal `ok`/`empty` outcome, compared using actual
-  compiled provider queries and request parameters; other provider repeats
-  do not invalidate the round.
-- If R1 identifies **no viable search**, it should explicitly decline rather
-  than invent terms or repeat a known unproductive query. Route this event
-  to R4 for assessment without pretending a provider pass occurred.
-  R4 may choose `exhausted` (then R5), `kill` or `answered`, but not
-  `retry` on this path. The cause is durably recorded; capacity-based
-  exhaustion remains a separate path.
-- Implement the approved output schema, projection budgets, persistent
-  unused-candidate register, no-viable-search transition, R4/R5 integration
-  and deterministic regressions exactly as specified in the architecture
-  and user-supplied prompt text. Prompt wording is not delegated to Codex.
-- Evaluate scientific value, diversity, query uniqueness, useful R3 evidence
-  and model/token cost, not just newly coined vocabulary.
-
-## Subsequent investigation
-
-- R1 research-direction diversification: distinguish underlying evidence
-  questions (malignant and infectious growth distributions, CT repeatability,
-  morphological risk), not just synonym changes; preserve prompt ownership.
-- S1 `no_candidate` scheduling: assess whether an unchanged eligible memory
-  catalogue warrants repeated model calls while research is active.
-- R3 evidence fidelity: preserve grouped-vs-individual feature attribution,
-  measured numeric values and uncertainty; improve tests using source excerpts.
-- Retrieval depth: metadata-only Crossref hits and abstracts often omit
-  quantitative results; separately assess permissible full-text access and
-  source-specific limits, without inventing unavailable evidence.
-
-## Baseline
-
-`test-results/r1-medical-benchmark.md` (2026-10-30, implementation
-`5aa31cb`): 40 direct research actions, 23 LLM calls, seven unique retrieved
-records, two research memories, zero syntheses, no PubMed results and no
-quantitative infection-versus-malignancy comparison. Separate PubMed probes
-showed 0 matches for five concepts and 6 for a two-concept prefix, without
-establishing an optimal universal `max_terms`.
+Keep detailed benchmarks and test logs in `test-results/` and
+project `log/`, not duplicated in this roadmap.
