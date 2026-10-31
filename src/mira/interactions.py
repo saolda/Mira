@@ -149,7 +149,9 @@ class Interactions:
                     self.log.configure(wire.get("model"), settings)
         if phase == "validation":
             data = {**data, "proposed_response": self.proposals.get(identity),
-                    "normalized_response": self.normalized.get(identity, self.proposals.get(identity)) if data.get("accepted") else None}
+                    "normalized_response": self.normalized.get(identity, self.proposals.get(identity))
+                    if data.get("accepted") else self.normalized.get(identity)
+                    if data.get('rejected_components') is not None else None}
         # Immutable phase files remain the recovery authority. The JSONL contains
         # their complete redacted contents, not references to removable files.
         cleaned = scrub(data, self.secrets)

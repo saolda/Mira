@@ -252,6 +252,13 @@ def validate(state, memories, files):
     for identity, n in nodes.items():
         from .r1 import validate_state as validate_r1
         validate_r1(n)
+        if n.get('r1_validation_blocked'):
+            receipt = n['r1_validation_blocked']
+            require(receipt['event_ref'] in files, 'missing R1 validation-block receipt')
+            rejected = loads(files[receipt['event_ref']])
+            require(rejected.get('action') == 'R1' and rejected.get('status') == 'rejected' and
+                rejected.get('node_id') == identity and rejected.get('interaction_id') == receipt['interaction_id']
+                and rejected.get('rejected_components'), 'invalid R1 validation-block receipt')
         from .r4 import validate_state as validate_r4
         validate_r4(n, files)
         require(re.fullmatch(r"q[1-9][0-9]*", identity) and n["id"] == identity and
@@ -377,6 +384,7 @@ def metrics(state):
         if n["status"] == "living":
             living[depths[i]] += 1
     return {"active_node": state["active_node_id"], "research_cycles": state["research_cycles"],
+            "validation_blocked_nodes": [i for i, n in state['nodes'].items() if n.get('r1_validation_blocked')],
             "pending_r4_assessment": [i for i, n in state['nodes'].items() if n['status'] == 'living' and n.get('search_blocked')],
             "synthesis_cycles": state["synthesis_cycles"], "max_depth": max(depths.values()),
             "living_by_depth": dict(sorted(living.items())), "nodes": state["nodes"],

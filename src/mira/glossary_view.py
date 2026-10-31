@@ -11,6 +11,30 @@ from .store import durable_write, sync_dir
 
 
 ASSETS = Path(__file__).with_name('glossary_assets')
+NLM_NOTICE = ('Courtesy of the U.S. National Library of Medicine. Retrieved terminology may not reflect '
+              'the most current NLM data. NLM does not endorse Mira.')
+
+
+def lookup_status(record):
+    last = record.get('terminology', [])
+    if not last: return 'Lookup not yet attempted.'
+    row = last[-1]
+    labels = {'matched': 'Authoritative match', 'not_found': 'No authoritative match',
+        'ambiguous': 'Ambiguous match; no definition attached', 'unavailable': 'Lookup unavailable',
+        'error': 'Lookup error', 'not_attempted': 'Lookup not yet attempted'}
+    return labels[row['status']] + ': ' + row['reason']
+
+
+def authority_label(definition):
+    a = definition['authority']
+    return ('NLM MeSH · ' + a['concept_id'] + ' · ' + definition['type'].replace('_', ' ') +
+            ' · preferred name: ' + a['preferred_name'])
+
+
+def citation_url(value):
+    # Used only for validated terminology citations, never arbitrary source prose.
+    import re
+    return value if re.fullmatch(r'https://id\.nlm\.nih\.gov/mesh/M[0-9]+', value) else ''
 
 
 def markdown(records):
@@ -18,11 +42,19 @@ def markdown(records):
     # field is prose, including legacy source/evidence/node reference strings.
     from .glossary import r3_prose as prose
     lines = ['# Research glossary', '', 'Source-derived terminology; definitions are not independently verified.', '']
+    if any(r.get('terminology') for r in records): lines += [NLM_NOTICE, '']
     for record in records:
         lines += ['## ' + prose(record['term']) + ' (' + record['id'] + ')', '', 'Status: ' + record['status'], '']
         if record['aliases']: lines += ['Aliases: ' + ', '.join(map(prose, record['aliases'])), '']
+        if record.get('terminology') or not record['definitions']:
+            lines += [prose(lookup_status(record)), '']
         for definition in record['definitions']:
             lines += ['- ' + prose(definition['text']) + ' — ' + prose(definition['qualification'])]
+            if 'authority' in definition:
+                a = definition['authority']; url = citation_url(a['url'])
+                lines += ['  ' + prose(authority_label(definition)) +
+                    (' · [Source](' + url + ')' if url else '') + ' · retrieved: ' + prose(a['retrieved_at']),
+                    '  Scope: ' + prose(definition['scope'])]
         for evidence in record['evidence']:
             lines += ['', '> ' + prose(evidence['passage']).replace('\n', '\n> '), '',
                 'Source: ' + prose(evidence['source_id']) + '; evidence: ' + prose(evidence['evidence_ref']) + '; node: ' + prose(evidence['node_id'])]
@@ -56,6 +88,7 @@ def html(records):
         '<noscript><p>Enable JavaScript for term search, or use your browser’s Ctrl+F.</p></noscript>',
         '</div></section>', '<main aria-label="Glossary entries">']
     if not records: parts += ['<p>No glossary entries have been recorded.</p>']
+    if any(r.get('terminology') for r in records): parts += ['<p>' + escape(NLM_NOTICE) + '</p>']
     for record in records:
         identity = record['id']  # IDs and relationship targets were canonically validated.
         def support_link(evidence):
@@ -67,6 +100,8 @@ def html(records):
             '<p class="status">Status: ' + escape(record['status']) + '</p>']
         if record['aliases']:
             parts += ['<p class="aliases prose"><strong>Aliases:</strong> ' + escape(', '.join(record['aliases'])) + '</p>']
+        if record.get('terminology') or not record['definitions']:
+            parts += ['<p class="qualification prose">' + escape(lookup_status(record)) + '</p>']
         parts += ['<h3>Definitions</h3>']
         if record['definitions']:
             parts += ['<ol class="definitions">']
@@ -74,7 +109,13 @@ def html(records):
                 parts += ['<li><p class="prose">' + escape(definition['text']) + '</p>']
                 if definition['qualification']:
                     parts += ['<p class="qualification prose"><strong>Qualification:</strong> ' + escape(definition['qualification']) + '</p>']
-                parts += ['<p class="reference">' + support_link(definition['evidence']) + '</p></li>']
+                if 'authority' in definition:
+                    a = definition['authority']; url = citation_url(a['url'])
+                    parts += ['<p class="reference prose">' + escape(authority_label(definition)) +
+                        (' · <a href="' + escape(url, quote=True) + '" rel="noreferrer">Source</a>' if url else '') +
+                        '<br>Retrieved: ' + escape(a['retrieved_at']) + '<br>Scope: ' + escape(definition['scope']) + '</p></li>']
+                else:
+                    parts += ['<p class="reference">' + support_link(definition['evidence']) + '</p></li>']
             parts += ['</ol>']
         else: parts += ['<p>No source definition recorded.</p>']
         parts += ['<h3>Supporting evidence</h3>']

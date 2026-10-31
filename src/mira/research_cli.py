@@ -43,6 +43,9 @@ def register(sub):
         command.add_argument("--plain-output", action="store_true", help="omit JSON response-format hint")
     run.add_argument("--control-term", action="append", default=[], help="literal term forbidden in the next R1 query; repeat for multiple terms")
     run.add_argument("--search-limit", type=int, default=2)
+    run.add_argument('--terminology-limit', type=int, default=2, help='maximum terminology terms looked up per R3 (0 disables lookups)')
+    run.add_argument('--terminology-timeout', type=float, default=8, help='total optional lookup seconds per R3')
+    run.add_argument('--terminology-request-timeout', type=float, default=3, help='maximum seconds per terminology HTTP request')
     run.add_argument("--max-cycles", type=int, default=20)
     run.add_argument("--acknowledge-interrupted", action="store_true")
     run.add_argument("--acknowledge-interrupted-searches", action="store_true", help="authorize another submission after inspecting uncertain retrieval_calls")
@@ -162,7 +165,13 @@ def _execute(args, catalog, managed, trace=None):
             adapters = make_adapters(limit=getattr(args,"search_limit",2))
     else:
         llm, adapters = ScriptedLLM([]), {}
-    research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []))
+    terminology = None
+    if args.command == 'research-run':
+        from .terminology import Enricher
+        terminology = Enricher(Path(args.root).absolute().parent / 'log' / 'terminology-cache',
+            max_terms=args.terminology_limit, action_timeout=args.terminology_timeout,
+            request_timeout=args.terminology_request_timeout)
+    research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []), terminology=terminology)
     if trace is not None:
         trace.secrets = tuple(dict.fromkeys([*trace.secrets, *research.trace.secrets]))
         trace.log.secrets = trace.secrets

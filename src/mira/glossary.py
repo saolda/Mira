@@ -59,6 +59,8 @@ def validate_transaction(old, proposed):
                         record["term"] == previous["term"], "glossary identity changed")
                 for key in ("definitions", "evidence", "aliases", "relationships", "node_ids"):
                     require(all(row in record[key] for row in previous[key]), "glossary evidence cannot be removed")
+                require(all(row in record.get('terminology', []) for row in previous.get('terminology', [])),
+                        'terminology lookup history cannot be removed')
             else:
                 new_ids.append(int(record["id"][1:]))
         require(sorted(new_ids) == list(range(before["next_id"], after["next_id"])), "glossary allocator would reuse or skip an ID")
@@ -73,7 +75,8 @@ def string(value, limit=1000):
 
 
 def validate_record(record):
-    require(isinstance(record, dict) and set(record) == {"id", "key", "term", "aliases", "definitions", "evidence", "relationships", "node_ids", "status"}, "invalid glossary record")
+    fields = {"id", "key", "term", "aliases", "definitions", "evidence", "relationships", "node_ids", "status"}
+    require(isinstance(record, dict) and fields <= set(record) <= fields | {'terminology'}, "invalid glossary record")
     require(isinstance(record["id"], str) and TERM_ID.fullmatch(record["id"]), "invalid glossary ID")
     string(record["term"], 160); string(record["key"], 1200)
     for key in ("aliases", "definitions", "evidence", "relationships", "node_ids"):
@@ -86,6 +89,15 @@ def validate_record(record):
             if key == "qualification": require(isinstance(value, str), "invalid evidence qualification")
             else: string(value)
     for row in record["definitions"]:
+        if isinstance(row, dict) and 'authority' in row:
+            from .terminology import validate_concept, normalize as authority_name
+            require(set(row) == {'text', 'qualification', 'type', 'scope', 'authority'}, 'invalid authority definition')
+            authority = validate_concept(row['authority'])
+            require(authority_name(record['term']) == authority_name(authority['matched_name']),
+                    'authority definition belongs to a different term')
+            require({k: row[k] for k in ('text', 'qualification', 'type', 'scope')} in authority['descriptions'],
+                    'authority description differs from retrieved text')
+            continue
         require(isinstance(row, dict) and set(row) == {"text", "qualification", "evidence"} and row["evidence"] in record["evidence"], "invalid definition evidence")
         string(row["text"]); require(isinstance(row["qualification"], str), "invalid definition qualification")
         require(row["text"] in row["evidence"]["passage"], "definition must be extractive")
@@ -96,6 +108,9 @@ def validate_record(record):
         require(row["evidence"] in record["evidence"], "relationship evidence missing")
     expected = "candidate" if not record["definitions"] else "source_defined" if len({normalize(d["text"]) for d in record["definitions"]}) == 1 else "multiple_definitions"
     require(record["status"] == expected, "incorrect definition status")
+    from .terminology import validate_result
+    require(isinstance(record.get('terminology', []), list), 'invalid terminology lookup history')
+    for lookup in record.get('terminology', []): validate_result(lookup, record['term'])
 
 
 def present(term, passage):
@@ -213,7 +228,7 @@ class Directory:
 
     def _update(self, db, record, sha):
         identity = record["id"]
-        for table in ("terms", "names", "links", "terms_fts"):
+        for table in ("terms", "names", "links", "terms_fts", "lookups"):
             db.execute("DELETE FROM " + table + " WHERE id=?", (identity,))
         definition = " | ".join(d["text"] for d in record["definitions"][:2])[:480]
         db.execute("INSERT INTO terms VALUES (?,?,?,?,?,?,?)", (identity, record["key"], record["term"], definition,
@@ -221,6 +236,11 @@ class Directory:
         db.executemany("INSERT OR IGNORE INTO names VALUES (?,?)", [(identity, normalize(n)) for n in [record["term"], *record["aliases"]]])
         db.executemany("INSERT OR IGNORE INTO links VALUES (?,?)", [(identity, r["target"]) for r in record["relationships"]])
         db.execute("INSERT INTO terms_fts VALUES (?,?,?,?)", (identity, record["term"], " ".join(record["aliases"]), definition))
+        if record.get('terminology'):
+            from datetime import datetime
+            last = record['terminology'][-1]
+            db.execute('INSERT INTO lookups VALUES (?,?,?)',
+                       (identity, last['status'], datetime.fromisoformat(last['retrieved_at']).timestamp()))
 
     def ensure(self, state, *, rebuild=False):
         meta = metadata(state)
@@ -230,6 +250,7 @@ class Directory:
                 fresh = dict(db.execute("SELECT key,value FROM metadata"))
         except sqlite3.DatabaseError:
             pass
+        if fresh and fresh.get('schema') != '2': rebuild = True
         if not rebuild and fresh and fresh.get("commitment") == meta["commitment"]:
             return
         # Journal hashes, rather than the cache or unverified directory contents,
@@ -272,10 +293,12 @@ class Directory:
                 CREATE INDEX names_lookup ON names(name);
                 CREATE TABLE links(id TEXT,target TEXT,PRIMARY KEY(id,target));
                 CREATE INDEX links_incoming ON links(target);
+                CREATE TABLE lookups(id TEXT PRIMARY KEY,status TEXT,checked REAL);
+                CREATE INDEX lookups_pending ON lookups(status,checked);
                 CREATE VIRTUAL TABLE terms_fts USING fts5(id UNINDEXED,term,aliases,definition);
             ''')
             for identity, sha in hashes.items(): self._update(db, self._read(identity, sha), sha)
-            db.executemany("INSERT INTO metadata VALUES (?,?)", [("commitment", metadata(state)["commitment"]), ("sequence", str(sequence))])
+            db.executemany("INSERT INTO metadata VALUES (?,?)", [("commitment", metadata(state)["commitment"]), ("sequence", str(sequence)), ('schema', '2')])
             require(db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "glossary index integrity failure")
 
     def exact(self, key):
@@ -296,7 +319,7 @@ class Directory:
                     known.append(term)
         return known
 
-    def proposals(self, state, values, evidence, node_id):
+    def proposals(self, state, values, evidence, node_id, *, enricher=None):
         self.ensure(state)
         accepted, rejected = [], []
         if not isinstance(values, list): return {}, {"accepted": 0, "rejected": ["terms must be an array"], "merged": 0}
@@ -309,6 +332,16 @@ class Directory:
         for value in accepted:
             key = key_for(value)
             record = by_key.get(key) or self.exact(key)
+            if record is None and '|' not in key and not re.fullmatch(r'[A-Z][A-Z0-9-]{1,11}', value['term']):
+                with closing(self._db()) as db:
+                    matches = list(db.execute('SELECT t.id,t.sha FROM names n JOIN terms t ON t.id=n.id WHERE n.name=? LIMIT 2', (normalize(value['term']),)))
+                if len(matches) == 1:
+                    candidate = records.get(matches[0]['id']) or self._read(matches[0]['id'], matches[0]['sha'])
+                    # A unique name in this corpus is not global concept proof.
+                    # Alias admission requires an explicit authority synonym link.
+                    if any(normalize(value['term']) in {normalize(n) for n in
+                           [d['authority']['preferred_name'], *d['authority']['aliases']]}
+                           for d in candidate['definitions'] if 'authority' in d): record = candidate
             if record is None:
                 identity = "g" + str(meta["next_id"]); meta["next_id"] += 1
                 record = {"id": identity, "key": key, "term": value["term"], "aliases": [], "definitions": [],
@@ -333,6 +366,58 @@ class Directory:
                 support = next(e for e in record["evidence"] if e["source_id"] == value["source_id"] and e["passage"] == value["passage"])
                 link = {"target": target["id"], "type": relation["type"], "evidence": support}
                 if link not in record["relationships"]: record["relationships"].append(link)
+        enrichment = None
+        if enricher is not None:
+            # Newly admitted records and touched undefined candidates first; a
+            # bounded indexed backlog lets later R3 actions enrich older candidates.
+            targets = [r for r in records.values() if not r['definitions'] or
+                       int(r['id'][1:]) >= metadata(state)['next_id']]
+            if len(targets) < enricher.max_terms:
+                with closing(self._db()) as db:
+                    backlog = list(db.execute("""SELECT t.id,t.sha FROM terms t LEFT JOIN lookups l ON l.id=t.id
+                        WHERE t.status='candidate' AND (l.status IS NULL OR l.status IN ('unavailable','error','not_attempted') OR l.checked<?)
+                        ORDER BY l.checked,CAST(substr(t.id,2) AS INTEGER) LIMIT ?""",
+                        (enricher.clock()-86400, enricher.max_terms + len(records))))
+                for row in backlog:
+                    if row['id'] not in records:
+                        record = self._read(row['id'], row['sha'])
+                        records[record['id']] = record; targets.append(record)
+                        if len(targets) >= enricher.max_terms: break
+            # The optional boundary cannot invalidate already validated science.
+            try:
+                outcomes, enrichment = enricher.enrich(targets)
+                require(isinstance(outcomes, dict) and isinstance(enrichment, dict), 'invalid enrichment result')
+            except Exception as exc:
+                from .terminology import timestamp, failure_reason
+                outcomes = {r['id']: {'provider': 'mesh', 'term': r['term'], 'status': 'error',
+                    'reason': failure_reason(exc), 'retrieved_at': timestamp(), 'concepts': []} for r in targets}
+                enrichment = {'api_calls': 0, 'outcomes': list(outcomes.values()), 'error': failure_reason(exc)}
+            for record in targets:
+                result = outcomes.get(record['id'])
+                if result is None: continue
+                try:
+                    from .terminology import validate_result
+                    validate_result(result, record['term'])
+                except (ValueError, TypeError, KeyError) as exc:
+                    enrichment.setdefault('rejected', []).append({'id': record['id'], 'error': str(exc)})
+                    from .terminology import timestamp, failure_reason
+                    record.setdefault('terminology', []).append({'provider': 'mesh', 'term': record['term'],
+                        'status': 'error', 'reason': failure_reason(exc), 'retrieved_at': timestamp(), 'concepts': []})
+                    continue
+                history = record.setdefault('terminology', [])
+                if result not in history: history.append(result)
+                if result['status'] == 'matched':
+                    authority = result['concepts'][0]
+                    for alias in [authority['preferred_name'], *authority['aliases']]:
+                        if len(alias) <= 160 and not any(normalize(alias) == normalize(old)
+                                for old in [record['term'], *record['aliases']]): record['aliases'].append(alias)
+                    for description in authority['descriptions']:
+                        definition = {**description, 'authority': authority}
+                        if not any(d.get('authority', {}).get('provider') == authority['provider'] and
+                            d.get('authority', {}).get('concept_id') == authority['concept_id'] and
+                            d.get('type') == description['type'] and d['text'] == description['text']
+                            for d in record['definitions']): record['definitions'].append(definition)
+                    record['status'] = 'candidate' if not record['definitions'] else 'source_defined' if len({normalize(d['text']) for d in record['definitions']}) == 1 else 'multiple_definitions'
         files = {}
         for record in records.values():
             validate_record(record)
@@ -342,7 +427,8 @@ class Directory:
         if files:
             meta["revision"] += 1; meta["commitment"] = commitment(meta["commitment"], files)
             state["glossary"] = meta
-        return files, {"accepted": len(accepted), "rejected": rejected, "merged": merged, "changed_ids": list(records)}
+        return files, {"accepted": len(accepted), "rejected": rejected, "merged": merged, "changed_ids": list(records),
+                       **({'enrichment': enrichment} if enrichment is not None else {})}
 
     def used(self, query, state):
         self.ensure(state)
@@ -377,7 +463,8 @@ class Directory:
         relevant = r1.tokens(question); findings = r1.tokens(memory)
         def score(row):
             names = r1.tokens(row["term"] + " " + row["aliases"])
-            return (4 * len(names & relevant) + len(names & findings) + .1 * (row["id"] not in used), -int(row["id"][1:]))
+            return (4 * len(names & relevant) + len(names & findings) +
+                    .2 * (row['status'] != 'candidate') + .1 * (row["id"] not in used), -int(row["id"][1:]))
         entries = []
         result = {"entries": entries, "untrusted_glossary_data": True,
                   "omitted_count": meta['next_id'] - 1, "selection_policy": "indexed relevance then per-node novelty"}
@@ -399,9 +486,19 @@ class Directory:
         for entry in entries:
             record = self._read(entry["id"], candidates[entry["id"]]["sha"])
             entry["term"] = r1.clean_text(record["term"], 160)[0]
-            entry["definition"] = r1.clean_text(" | ".join(d["text"] for d in record["definitions"][:2]), 240)[0] or None
+            definitions = sorted(record['definitions'], key=lambda d: 'authority' not in d)[:2]
+            definition, omitted = r1.clean_text(" | ".join(d["text"] for d in definitions), 240)
+            entry["definition"] = definition or None
             entry["aliases"] = [clean for alias in record["aliases"][:8] if (clean := r1.clean_text(alias, 100)[0])]
             entry["status"] = record["status"]
+            if any('authority' in d for d in record['definitions']):
+                entry['definition_sources'] = [{'provider': d['authority']['provider'],
+                    'concept_id': d['authority']['concept_id'], 'type': d['type'],
+                    'preferred_name': r1.clean_text(d['authority']['preferred_name'], 160)[0]}
+                    if 'authority' in d else {'source_id': d['evidence']['source_id'], 'type': 'research_source'}
+                    for d in definitions]
+                entry['terminology_only'] = True
+                entry['definition_omitted_or_truncated'] = omitted
             if record["relationships"]:
                 entry["relationships"] = [{"target": link["target"], "type": link["type"]} for link in record["relationships"][:3]]
         while entries and len(dumps(result).encode("utf-8")) > meta["token_budget"]:

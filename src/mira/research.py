@@ -35,12 +35,14 @@ def search_outcome(result):
 
 
 class Research:
-    def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None):
+    def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None, terminology=None):
         self.knowledge = Knowledge(store=LiveStore(root))
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
         self.clock, self.sleep = clock or time.time, sleep or time.sleep
         self.glossary = glossary.Directory(self.store)
+        from .terminology import Enricher
+        self.terminology = terminology if terminology is not None else Enricher(self.store.root.parent / 'log' / 'terminology-cache')
         self.control_terms = r1.controls(control_terms)
         self.trace = Interactions(self.store, tuple(getattr(llm, "secrets", ())) +
             tuple(secret for adapter in adapters.values() for secret in getattr(adapter, "secrets", ())))
@@ -256,8 +258,9 @@ class Research:
             output, markdown = None, []
         event["memory_ids"] = [output.id] if output is not None else []
         event["generated_memories"] = markdown
-        if error is None and value.get("terms"):
-            extras, event["glossary"] = self.glossary.proposals(state, value["terms"], evidence, identity)
+        if error is None and (value.get("terms") or self.terminology.enabled(state)):
+            extras, event["glossary"] = self.glossary.proposals(state, value.get("terms", []), evidence, identity,
+                enricher=self.terminology if self.terminology.enabled(state) else None)
         elif error is None and "terms" in value and not isinstance(value["terms"], list):
             event["glossary"] = {"accepted": 0, "rejected": ["terms must be an array"], "merged": 0}
         return extras
@@ -337,11 +340,19 @@ class Research:
                 value = self._model(event, action, context, state)
                 decisions.validate(action, value, context['term_limit'] if action == 'R1' else context if action == 'R4' else None)
             if action == "R1":
-                selected = r1.filter_terms(value['search_concepts'], self.control_terms)
+                value, rejected = r1.components(value, self.control_terms)
+                event['rejected_components'] = rejected
+                selected = value['search_concepts']
                 plans = [retrieval.compile_entry(state, p, selected) for p in databases] if selected else []
-                known = self.glossary.known(r1.filter_terms(value['new_concepts'], self.control_terms), state)
-                accepted = r1.accept(n, value, context, event, r1.completed(files, identity), plans, known)
+                known = self.glossary.known(value['new_concepts'], state)
+                invalid = not selected and any(r['field'] == 'search_concepts' for r in rejected)
+                accepted = r1.accept(n, value, context, event, r1.completed(files, identity), plans, known,
+                                     invalid_selection=invalid)
                 self.trace.normalized[event['interaction_id']] = accepted
+                if invalid:
+                    event.update(status='rejected', error='validation_blocked: all selected concepts invalid')
+                    state['revision'] += 1
+                    return extras, False
             elif action == "R3":
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
@@ -490,6 +501,11 @@ class Research:
                         pending = {i:[{**e, 'eligible_at':retrieval.eligible_at(state,e,self.adapters.get(e['provider']))}
                             for e in state['nodes'][i].get('deferred_searches', [])] for i in state['living_priority_order']}
                         times = [e['eligible_at'] for entries in pending.values() for e in entries]
+                        validation_blocked = [i for i in state['living_priority_order']
+                                              if state['nodes'][i].get('r1_validation_blocked')]
+                        if not times and validation_blocked:
+                            return {'status': 'validation_blocked', 'nodes': validation_blocked,
+                                    'reason': 'all_selected_concepts_invalid', 'pending_r4': blocked}
                         require(times, 'no eligible research action or provider retry time')
                         retry_at = min(times)
                         return {'status':'waiting_for_provider', 'retry_at':retry_at, 'pending':pending,
@@ -577,6 +593,7 @@ class Research:
             if interaction:
                 self.trace.write(interaction, "validation", {"timestamp": now(), "accepted": success and event.get("extraction_accepted", True),
                     "error": event.get("error"), "action": event["action"], "model": event.get("model"),
+                    **({'rejected_components': event['rejected_components']} if 'rejected_components' in event else {}),
                     **({"glossary_admission": event["glossary"]} if "glossary" in event else {})})
             event["action_committed"] = event["action"] if success else None
             extras["research/state.json"] = dumps(state)
@@ -598,6 +615,8 @@ class Research:
             events = []
             for _ in range(max_cycles):
                 event = self.step(); events.append(event)
+                if event.get('action') == 'R1' and event['status'] == 'rejected' and event.get('search_plan') is not None:
+                    continue  # Next step selects other eligible work or reports validation_blocked.
                 if event["status"] != "committed": break
             status = events[-1]["status"] if events[-1]["status"] != "committed" else "cycle_limit"
             log.reason = status

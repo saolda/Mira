@@ -75,6 +75,7 @@ def next_entry(state, node, adapters, timestamp):
 
 
 def ready(state, node, adapters, timestamp):
+    if node.get('r1_validation_blocked'): return False
     if node.get('search_blocked'): return True  # Its next direct action is R4.
     if node['pending_results'] or node['keywords'] is None: return True
     if node['next_database_index'] < len(strategy(state)['databases']): return True

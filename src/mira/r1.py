@@ -288,9 +288,28 @@ def context(state, memories, files, node_id, control_terms=(), glossary_context=
         'completed_queries': queries, 'term_limit': term_limit(state), 'control_terms': old['control_terms']}
 
 
-def accept(node, value, context, event, history, plans, known_terms=()):
+def components(value, control_terms):
+    """Reject individual concepts without rewriting the model's selections."""
+    accepted = {'reason': value['reason']}
+    rejected = []
+    for field in ('new_concepts', 'search_concepts'):
+        accepted[field] = []
+        seen = set()
+        for index, term in enumerate(value[field]):
+            try:
+                validate_concepts([term])
+                validate_terms([*accepted[field], term], control_terms)
+                require(concept_key(term) not in seen, 'duplicate concept')
+            except ValueError as exc:
+                rejected.append({'field': field, 'index': index, 'text': term, 'error': str(exc)})
+                continue
+            seen.add(concept_key(term)); accepted[field].append(term)
+    return accepted, rejected
+
+
+def accept(node, value, context, event, history, plans, known_terms=(), *, invalid_selection=False):
     """Update candidates and plan in the same journal operation as the R1 event."""
-    accepted = {key: filter_terms(value[key], context['control_terms']) for key in ('new_concepts', 'search_concepts')}
+    accepted = {key: list(value[key]) for key in ('new_concepts', 'search_concepts')}
     accepted['reason'] = value['reason']
     round_id = node.get('search_round', 0) + 1
     records = node.setdefault('concept_candidates', [])
@@ -303,9 +322,8 @@ def accept(node, value, context, event, history, plans, known_terms=()):
         known.update(concept_key(t) for t in [row.get('term', row.get('canonical', '')), *row.get('aliases', [])])
     discoveries = []
     for original in value['new_concepts']:
-        filtered = filter_terms([original], context['control_terms'])
-        if not filtered or concept_key(filtered[0]) in known: continue
-        term = filtered[0]; known.add(concept_key(term)); discoveries.append(term)
+        if concept_key(original) in known: continue
+        term = original; known.add(concept_key(term)); discoveries.append(term)
         records.append({'term': term, 'original': original, 'normalized': concept_key(term),
             'node_id': node['id'], 'discovery_round': round_id, 'discovery_event': event['event_id'],
             'interaction_id': event['interaction_id'], 'order': len(records) + 1, 'status': 'unverified',
@@ -319,13 +337,16 @@ def accept(node, value, context, event, history, plans, known_terms=()):
         if row['normalized'] in selected: row['selected_rounds'].append(round_id)
     repeats = [dict(provider=p['provider'], query=p['query'], original_reference=match['reference'])
         for p in plans if (match := repeated(p, history))]
-    blocked = not accepted['search_concepts'] or len(repeats) == len(plans)
+    blocked = not invalid_selection and (not accepted['search_concepts'] or len(repeats) == len(plans))
     node.update(keywords=accepted['search_concepts'] or None, search_round=round_id,
         next_database_index=0, round_outcomes=[], provider_outcomes={}, deferred_searches=[],
         legacy_completed_provider_indices=[], search_blocked=blocked,
         search_blocked_reason=('empty_selection' if not accepted['search_concepts'] else 'completed_queries_only') if blocked else None)
     event.update(search_plan=accepted, repeated_queries=repeats, search_blocked=blocked,
         search_blocked_reason=node['search_blocked_reason'], r1_projection=context)
+    if invalid_selection:
+        node['r1_validation_blocked'] = {'event_ref': 'events/' + event['event_id'] + '.json',
+            'interaction_id': event['interaction_id'], 'reason': 'all_selected_concepts_invalid'}
     return accepted
 
 
@@ -353,6 +374,11 @@ def validate_state(node):
         require(all(isinstance(row.get(k), list) for k in ('considered_rounds', 'selected_rounds', 'submitted_queries')),
             'invalid candidate usage')
     require(type(node.get('search_blocked', False)) is bool, 'invalid search block')
+    if node.get('r1_validation_blocked'):
+        receipt = node['r1_validation_blocked']
+        require(isinstance(receipt, dict) and set(receipt) == {'event_ref', 'interaction_id', 'reason'}
+            and receipt['reason'] == 'all_selected_concepts_invalid' and not node.get('search_blocked')
+            and node['keywords'] is None, 'invalid R1 validation block')
     if node.get('search_blocked'):
         require(node.get('search_blocked_reason') in {'empty_selection', 'completed_queries_only'}
             and not node['pending_results'] and not node.get('deferred_searches')
