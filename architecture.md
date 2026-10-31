@@ -58,7 +58,7 @@ header, `## Summary`, `## Knowledge`, and terminal `## Relationships`.
 
 **Research example** (illustrative values, not scientific evidence):
 
-````markdown
+~~~markdown
 # Research: Selected question
 
 ```json
@@ -82,7 +82,7 @@ Qualification: Limits, study population, uncertainty and context.
 ```json
 {"relationships":[]}
 ```
-````
+~~~
 
 A research memory represents **one source**. Its source ID/URL and immutable
 retrieval reference establish provenance. `#f` anchors denote findings
@@ -93,7 +93,7 @@ relationships are retained. The summary does not imply independent verification.
 
 **Synthesis example** (illustrative values):
 
-````markdown
+~~~markdown
 # Synthesis: Combined evidence
 
 ```json
@@ -119,7 +119,7 @@ Provenance: Interpretation restricted to the supplied sources.
 ```json
 {"relationships":[{"from":"f1","type":"SYNTHESIZES","to":"r1#f1","status":"unverified"},{"from":"f1","type":"SYNTHESIZES","to":"r2#f1","status":"unverified"}]}
 ```
-````
+~~~
 
 A synthesis memory is **not itself an independent source**. It has a
 `summary`, integrated anchored findings, stable `SYNTHESIZES` relationships
