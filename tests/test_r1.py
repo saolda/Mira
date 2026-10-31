@@ -133,15 +133,19 @@ class R1Tests(unittest.TestCase):
     def test_invalid_structures_and_query_syntax_are_rejected(self):
         invalid = [None, [], {}, {"keywords": ["one", "two"], "extra": 1}]
         invalid.extend({"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": value} for value in (None, "term", ["x"] * 7,
-            ["one", ""], ["one", "  "], ["one", 2], ["one", None], ["one", True],
-            ["one", "one two three four five six"]))
-        invalid.extend({"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal resistance", syntax]} for syntax in (
+            ["one", 2], ["one", None], ["one", True]))
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError): validate("R1", value)
+        for syntax in ("", "  ", "one two three four five six",
             "heat AND transfer", "heat OR transfer", "NOT heat", "heat NEAR/3 transfer",
             "heat adj3 transfer", 'all:"heat"', "heat[MeSH Terms]", "TI=heat", '"heat transfer"',
             "heat*", "heat?", "heat || transfer", "heat && transfer", "+heat", "-heat", "heat~2",
-            "heat\ntransfer", "heat\x00transfer", "arxiv", "PubMed search", "Europe PMC", "europe_pmc"))
-        for value in invalid:
-            with self.subTest(value=value), self.assertRaises(ValueError): validate("R1", value)
+            "heat\ntransfer", "heat\x00transfer", "arxiv", "PubMed search", "Europe PMC", "europe_pmc"):
+            value = {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal resistance", syntax]}
+            validate('R1', value)
+            accepted, rejected = r1.components(value, r1.CONTROL_TERMS)
+            self.assertEqual(accepted['search_concepts'], ['thermal resistance'])
+            self.assertEqual(rejected[0]['text'], syntax)
 
     def test_control_terms_default_explicit_and_validation(self):
         self.assertEqual(self.context()["control_terms"], r1.CONTROL_TERMS)
@@ -219,16 +223,17 @@ class R1Tests(unittest.TestCase):
             research = Research(directory, llm, {}, control_terms=["solar"])
             research.initialize("Thermal question?", ["fixture"])
             event = research.step()
-            self.assertEqual(event["status"], "committed")
-            self.assertTrue(event['search_blocked'])
-            self.assertEqual(research.step()['action'], 'R4')
-            self.assertTrue(read_records(directory)[0]["validation"]["accepted"])
+            self.assertEqual(event["status"], "rejected")
+            self.assertFalse(event['search_blocked'])
+            self.assertEqual(research.step()['status'], 'validation_blocked')
+            self.assertFalse(read_records(directory)[0]["validation"]["accepted"])
+            self.assertEqual(len(llm.requests), 1)
 
     def test_raw_proposed_and_accepted_output_survive_interaction_and_execution_logs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "experiment"
             original = {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["SUMMARY thermal resistance", "metadata", "heat transfer"]}
-            accepted = {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal resistance", "heat transfer"]}
+            accepted = {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat transfer"]}
             research = Research(root, ScriptedLLM([original]), {})
             research.initialize("How does thermal resistance affect heat?", ["fixture"])
             with research.execution(Path(directory) / "logs") as log:
@@ -243,18 +248,19 @@ class R1Tests(unittest.TestCase):
             self.assertEqual(phases["interaction_validation"]["data"]["proposed_response"], original)
             self.assertEqual(phases["interaction_validation"]["data"]["normalized_response"], accepted)
 
-    def test_invalid_proposal_logged_without_changing_research_progress(self):
+    def test_invalid_component_logged_and_valid_selection_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             original = {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat AND transfer", "thermal resistance"]}
             research = Research(directory, ScriptedLLM([original]), {})
             state = research.initialize("How does insulation work?", ["fixture"])
             event = research.step()
-            self.assertEqual(event["status"], "rejected")
+            self.assertEqual(event["status"], "committed")
             after = loads(Path(directory, "research/state.json").read_text())
-            self.assertEqual(after, state)
+            self.assertEqual(after['nodes']['q1']['keywords'], ['thermal resistance'])
             record = read_records(directory)[0]
             self.assertEqual(record["validation"]["proposed_response"], original)
-            self.assertIsNone(record["validation"]["normalized_response"])
+            self.assertEqual(record['validation']['normalized_response']['search_concepts'], ['thermal resistance'])
+            self.assertEqual(record['validation']['rejected_components'][0]['text'], 'heat AND transfer')
             self.assertIn("heat AND transfer", record["response"]["raw"])
 
     def test_history_uses_persisted_results_after_restart_without_revalidating_legacy_keywords(self):

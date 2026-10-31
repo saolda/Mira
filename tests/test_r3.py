@@ -510,17 +510,17 @@ class R1HeadingControlTests(unittest.TestCase):
         self.assertEqual(r1.filter_terms(["metadata", "TITLE"],r1.controls([])), [])
         self.assertEqual(r1.filter_terms(["heat", "transfer"],r1.controls([])),["heat","transfer"])
 
-    def test_pipeline_records_filter_and_uses_clean_query(self):
+    def test_pipeline_rejects_control_components_without_rewriting(self):
         with tempfile.TemporaryDirectory() as root:
             llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":["SUMMARY dropout", "evidence", "metadata uncertainty"]}])
             search=FixtureSearch([{"status":"empty","results":[]}])
             runner=Research(root,llm,{"fixture":search})
             runner.initialize("What is dropout uncertainty?",["fixture"])
             event=runner.step()
-            self.assertEqual(event['search_plan']['search_concepts'], ['dropout','uncertainty'])
-            self.assertEqual(event['status'],'committed')
-            runner.step()
-            self.assertEqual(search.queries,['dropout uncertainty'])
+            self.assertEqual(event['search_plan']['search_concepts'], [])
+            self.assertEqual(event['status'],'rejected')
+            self.assertEqual(runner.step()['status'], 'validation_blocked')
+            self.assertEqual(search.queries,[])
             self.assertIn('SUMMARY dropout',read_records(root)[0]['response']['raw'])
 
     def test_previous_terms_do_not_become_controls(self):

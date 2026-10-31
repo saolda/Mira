@@ -39,8 +39,8 @@ class PlanningTests(unittest.TestCase):
                 'status': 'empty', 'query_submitted': True, 'results': [], **row}) for i, row in enumerate(rows)}
             r.store.publish(docs, eqs, ledger, token, files=files)
 
-    def test_empty_and_all_control_selections_block_without_more_calls(self):
-        for selected in ([], ['metadata']):
+    def test_deliberately_empty_selection_blocks_without_more_calls(self):
+        for selected in ([],):
             with self.subTest(selected=selected), tempfile.TemporaryDirectory() as tmp:
                 self.root = Path(tmp) / 'memory'
                 r = self.make([plan(selected, ['heat capacity'])])
