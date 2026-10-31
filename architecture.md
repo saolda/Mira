@@ -58,7 +58,7 @@ header, `## Summary`, `## Knowledge`, and terminal `## Relationships`.
 
 **Research example** (illustrative values, not scientific evidence):
 
-```markdown
+````markdown
 # Research: Selected question
 
 ```json
@@ -82,7 +82,7 @@ Qualification: Limits, study population, uncertainty and context.
 ```json
 {"relationships":[]}
 ```
-```
+````
 
 A research memory represents **one source**. Its source ID/URL and immutable
 retrieval reference establish provenance. `#f` anchors denote findings
@@ -93,7 +93,7 @@ relationships are retained. The summary does not imply independent verification.
 
 **Synthesis example** (illustrative values):
 
-```markdown
+````markdown
 # Synthesis: Combined evidence
 
 ```json
@@ -119,7 +119,7 @@ Provenance: Interpretation restricted to the supplied sources.
 ```json
 {"relationships":[{"from":"f1","type":"SYNTHESIZES","to":"r1#f1","status":"unverified"},{"from":"f1","type":"SYNTHESIZES","to":"r2#f1","status":"unverified"}]}
 ```
-```
+````
 
 A synthesis memory is **not itself an independent source**. It has a
 `summary`, integrated anchored findings, stable `SYNTHESIZES` relationships
@@ -587,11 +587,12 @@ bytes from today's templates.
 
 ## Ripeness queue
 
-Only exhausted nodes enter `ripeness_order`, whether exhausted by the
-existing deterministic capacity threshold or by R4's explicit
-`no_viable_search` exhaustion decision. Capacity-based R5 checks apply to
-the former; for the latter record and validate the R4 decision/event as the
-exhaustion cause instead of requiring a threshold crossing. The score starts as:
+Only nodes with `status=exhausted` enter `ripeness_order`.
+The **implemented** path is deterministic research-capacity exhaustion.
+A future R4 design may also make a persistently search-blocked, scientifically
+unresolved node exhausted, but that transition is **not part of the current
+R1/storage implementation** and must be reviewed separately before R5
+accepts it below the capacity threshold. The score starts as:
 
 `ripeness = F + 2*H + 2*Q - D`
 
