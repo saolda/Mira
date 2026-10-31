@@ -41,6 +41,7 @@ def failure_reason(exc):
 def text(value, limit=16000):
     require(isinstance(value, str) and value.strip() and len(value) <= limit and
             not any(ord(c) < 32 and c not in '\n\r\t' for c in value), 'invalid terminology text')
+    require(not any(0xD800 <= ord(c) <= 0xDFFF for c in value), 'invalid Unicode in terminology text')
 
 
 def validate_concept(value):
