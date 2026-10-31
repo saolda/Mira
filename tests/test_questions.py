@@ -109,7 +109,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0); self.assertFalse(self.root.exists())
 
     def test_api_alternatives_and_legacy_restart(self):
-        r = Research(self.root, ScriptedLLM([{"keywords": ["heat", "transfer"]}]), {})
+        r = Research(self.root, ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}]), {})
         for args, kwargs in (((), {}), (("Q?",), {"question_file": self.input})):
             with self.assertRaisesRegex(ValueError, "provide a question"):
                 r.initialize(*args, databases=["fixture"], **kwargs)
@@ -117,7 +117,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotIn("question_document", state)
         self.assertEqual(Research(self.root, r.llm, {}).step()["status"], "committed")
         self.assertFalse((self.root / questions.PATH).exists())
-        self.assertIsNone(read_records(self.root)[0]["request"]["context"]["research_brief"])
+        self.assertIsNone(read_records(self.root)[0]["request"]["context"]["question_scope"]["research_brief"])
 
     def test_r0_receives_context_and_complete_objectives(self):
         llm = ScriptedLLM([{"strategy": "medical", "reason": "Explicit fixture domain."}])
@@ -130,7 +130,7 @@ class QuestionTests(unittest.TestCase):
         self.assertIn("Controlled fixture", record["serialized_request"])
 
     def test_research_prompts_and_restart_do_not_reread_input(self):
-        r = self.make([{"keywords": ["heat", "transfer"]}, {"summary": "Fixture evidence.", "results": [draft()]}, decision()])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Fixture evidence.", "results": [draft()]}, decision()])
         self.input.write_text("External file changed after initialization.")
         self.assertEqual(r.step()["action"], "R1")
         self.assertEqual(r.step()["action"], "R2")
@@ -142,7 +142,7 @@ class QuestionTests(unittest.TestCase):
         for record in read_records(self.root):
             supplied = record["request"]["context"]
             self.assertEqual(supplied["question"], questions.parse(MARKDOWN)["question"])
-            brief = supplied["research_brief"]
+            brief = (supplied["question_scope"] if record["request"]["action"] == "R1" else supplied)["research_brief"]
             self.assertEqual(brief["context"], questions.parse(MARKDOWN)["context"])
             self.assertEqual(brief["objectives"], questions.parse(MARKDOWN)["objectives"])
             self.assertNotIn("question", brief)
@@ -242,7 +242,7 @@ class QuestionTests(unittest.TestCase):
                 self.assertEqual(read_records(self.root), [])
                 parsed = questions.parse(raw)
                 self.assertEqual(supplied["question"], parsed["question"])
-                self.assertEqual(supplied["research_brief"]["objectives"], parsed["objectives"])
+                self.assertEqual(supplied["question_scope"]["research_brief"]["objectives"], parsed["objectives"])
                 self.assertEqual(self.state()["question_document"], parsed)
 
     def test_s2_budget_never_drops_essential_objectives(self):

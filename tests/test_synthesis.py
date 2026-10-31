@@ -197,7 +197,7 @@ class SynthesisTests(unittest.TestCase):
         self.assertEqual(len(r.llm.requests),1)
 
     def test_active_no_candidate_is_reassessed_at_cadence(self):
-        responses = [{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, {'keywords':['methods', 'measurement']}, selection()]
+        responses = [{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}, selection()]
         r = self.make(responses, own=2, living=('q3',))
         self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
         self.assertEqual(r.step()['reason'],'no_candidate')

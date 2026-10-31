@@ -105,7 +105,7 @@ class R4ContextTests(unittest.TestCase):
         self.assertEqual(compact['research_results'],science)
 
     def test_actual_r4_retains_entire_scientific_context_and_original_retrieval_bytes(self):
-        model=ScriptedLLM([{'keywords':['heat','transfer']},
+        model=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat','transfer']},
             {'summary':'Scientific fixture summary.','results':[draft()]},decision('retry')])
         r=Research(self.root,model,{'fixture':FixtureSearch([evidence()])})
         r.initialize('Q?',['fixture'],context_budget=30000)
@@ -132,7 +132,7 @@ class R4ContextTests(unittest.TestCase):
         self.assertEqual(context,original)
 
     def test_r4_projection_and_outcome_survive_journal_repair_and_restart(self):
-        r=Research(self.root,ScriptedLLM([{'keywords':['heat','transfer']}]),
+        r=Research(self.root,ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat','transfer']}]),
                    {'fixture':FixtureSearch([{'status':'empty','results':[]}])})
         r.initialize('Q?',['fixture'],context_budget=30000);r.step();r.step()
         before=file_hashes(self.root/'research/results')

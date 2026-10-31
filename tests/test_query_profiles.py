@@ -114,7 +114,7 @@ class RoundTests(unittest.TestCase):
         self.registry=self.base/'profiles.json';self.registry.write_text(dumps(data))
 
     def make(self, responses=(), outcomes=None, databases=None, **kwargs):
-        self.llm=ScriptedLLM([{'keywords':['heat transfer','thermal insulation']},*responses])
+        self.llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat transfer','thermal insulation']},*responses])
         self.adapters=outcomes or {'a':FixtureSearch([{'status':'empty','results':[]}])}
         self.r=Research(self.root,self.llm,self.adapters,clock=self.clock,sleep=self.clock.sleep)
         self.r.initialize('How does heat transfer work?',databases or list(self.adapters),profile_registry=self.registry,context_budget=30000,**kwargs)
@@ -162,8 +162,8 @@ class RoundTests(unittest.TestCase):
         self.assertEqual(self.r.step()['action'],'R4')
 
     def test_named_strategy_r2_records_original_retained_discarded_and_profile(self):
-        concepts=['volume doubling time','spiculated nodule','lung neoplasms','pulmonary infection','interval growth']
-        model=ScriptedLLM([{'keywords':concepts}]);adapter=FixtureSearch([{'status':'empty','results':[]}])
+        concepts=['volume doubling time','spiculated nodule','lung neoplasms','pulmonary infection']
+        model=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":concepts}]);adapter=FixtureSearch([{'status':'empty','results':[]}])
         self.r=Research(self.root,model,{'pubmed':adapter},clock=self.clock,sleep=self.clock.sleep)
         self.r.initialize('Medical question?',strategy='medical',profile_registry=self.registry,context_budget=30000)
         self.r.step();event=self.r.step()
@@ -179,7 +179,7 @@ class RoundTests(unittest.TestCase):
         self.assertEqual(len(model.requests),1)
 
     def test_fresh_node_can_generate_concepts_while_other_node_waits(self):
-        self.make(responses=[{'keywords':['conductivity','insulation']}],outcomes={
+        self.make(responses=[{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['conductivity','insulation']}],outcomes={
             'a':FixtureSearch([{'status':'rate_limited','results':[]}])})
         self.r.step()
         def add(s):

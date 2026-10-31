@@ -25,7 +25,7 @@ class PromptTests(unittest.TestCase):
 
     def call(self, name):
         root = self.catalog.create(name)
-        llm = ScriptedLLM([{"keywords": ["test", "measurement"]}])
+        llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["test", "measurement"]}])
         r = Research(root, llm, {}); r.initialize("Recorded context?", ["fixture"])
         self.assertEqual(r.step()["status"], "committed")
         file = next((root / "interactions").glob("*/request.json"))
@@ -97,7 +97,7 @@ class PromptTests(unittest.TestCase):
         source = "Prefix 温度\r\n" + " / ".join("{{" + key + "}}" for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
         (self.templates / "R1.txt").write_bytes(source.encode())
         context = dict.fromkeys(SLOTS["R1"], None)
-        context.update(question="", question_context=[], previous_search_terms=[], control_terms=[], memory_context={"note": "first\nsecond {{question}}"})
+        context.update(question="", question_scope=[], completed_queries=[], control_terms=[], research_context={"note": "first\nsecond {{question}}"})
         messages, metadata = PromptTemplates().render("R1", context)
         expected = "Prefix 温度\r\n" + " / ".join(dumps(context[key]).rstrip("\n") for key in SLOTS["R1"]) + "\r\nSuffix\r\n"
         self.assertEqual(messages[0]["content"], expected)
@@ -114,10 +114,11 @@ class PromptTests(unittest.TestCase):
         before = file_hashes(root)
         system = self.templates / "R1.txt"
         system.write_bytes(system.read_bytes() + b"\r\nAn explicit new local instruction.\r\n")
+        self.catalog = Experiments(self.directory / "other-memory")
         _, next_wire, _, new = self.call("after")
         self.assertNotEqual(next_wire, wire)
         self.assertTrue(loads(next_wire)["messages"][0]["content"].endswith("\r\n"))
-        data = Inspector(self.catalog.home).decision("before", file.parent.name)
+        data = Inspector(root).decision("before", file.parent.name)
         self.assertEqual(data["serialized_request"], wire)
         self.assertEqual(data["prompt_template"], original["prompt_template"])
         self.assertTrue(data["template_verification"]["matches_recorded_request"])
@@ -162,7 +163,7 @@ class PromptTests(unittest.TestCase):
         root, _, file, record = self.call("old-json-snapshot")
         old_user = {"context": {"question": "Historical question", "children": []},
                     "task": "Original task", "instructions": ["Original instruction"],
-                    "output_contract": {"keywords": ["terms"]}}
+                    "output_contract": {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["terms"]}}
         messages = [{"role": "system", "content": "Original instruction\r\n"},
                     {"role": "user", "content": dumps(old_user)}]
         wire = dumps({"model": "historical", "messages": messages})

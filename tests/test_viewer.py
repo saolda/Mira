@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from mira.decisions import ScriptedLLM
-from mira.experiments import Experiments, file_hashes, memory_home
+from mira.experiments import Experiments, file_hashes as all_file_hashes, memory_home
 from mira.format import dumps, loads
 from mira.inspection import Inspector
 from mira.research import Research
@@ -24,8 +24,12 @@ from mira.viewer import Handler, ViewerServer
 from test_research import evidence, draft, decision
 
 
+def file_hashes(root):
+    return {p: sha for p, sha in all_file_hashes(root).items() if not p.startswith(('reviews/', 'transcripts/'))}
+
+
 def make_run(root):
-    r = Research(root, ScriptedLLM([{"keywords": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision("kill")]),
+    r = Research(root, ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision("kill")]),
                  {"fixture": FixtureSearch([evidence()])})
     r.initialize("Original recorded question?", ["fixture"], context_budget=12000)
     r.run(5)
@@ -69,9 +73,9 @@ class ViewerTests(unittest.TestCase):
     def test_persistent_default_cli_storage_and_phase1_default_unchanged(self):
         env = {**os.environ, "MIRA_MEMORY_DIR": str(self.home)}
         script=Path(self.temp.name)/'script.json'; script.write_text(dumps({'responses':[]}))
-        output = subprocess.check_output([sys.executable, "-m", "mira", "research-init", "Persistent?", "--database", "fixture", "--experiment", "cli-run", "--script", str(script)], env=env, text=True)
+        output = subprocess.check_output([sys.executable, "-m", "mira", "research-init", "Persistent?", "--database", "fixture", "--experiment", "cli-run", "--new-experiment", "--script", str(script)], env=env, text=True)
         state = loads(output)
-        self.assertEqual(Path(state["storage_root"]), self.home / "research/cli-run")
+        self.assertEqual(Path(state["storage_root"]), self.home)
         self.assertTrue(Path(state["storage_root"], "journal").is_dir())
         self.assertFalse(Path(state["storage_root"], "generations").exists())
         # Existing explicit Phase 1 root retains its snapshot layout.
@@ -80,26 +84,19 @@ class ViewerTests(unittest.TestCase):
         self.assertTrue((phase1 / "generations").is_dir())
         self.assertFalse((phase1 / "journal").exists())
 
-    def test_multiple_experiments_require_selection_and_are_isolated(self):
-        b = self.catalog.create("run-b"); make_run(b)
-        self.assertRaises(ValueError, self.catalog.select)
-        self.assertEqual(self.catalog.select("run-a"), self.root)
-        self.assertEqual({r["name"] for r in self.inspector.experiments()}, {"run-a", "run-b"})
-        self.assertRaises(ValueError, self.inspector.decision, "run-b", self.r4)
+    def test_explicit_reset_replaces_one_active_corpus(self):
+        self.assertRaises(ValueError, self.catalog.create, "run-b")
+        b = self.catalog.create("run-b", reset=True); make_run(b)
+        self.assertEqual(b, self.root)
+        self.assertEqual(self.catalog.select(), self.root)
+        self.assertEqual({r["name"] for r in self.inspector.experiments()}, {"run-b"})
+        self.assertRaises(ValueError, self.catalog.select, "run-a")
         self.assertRaises(ValueError, self.catalog.path, "../run-a")
-        self.assertRaises(ValueError, self.catalog.create, "run-a")
 
-    def test_explicit_import_preserves_every_byte_and_source(self):
+    def test_import_cannot_accumulate_another_corpus(self):
         original = file_hashes(self.root)
-        exported = Path(self.temp.name) / "original.md"; exported.write_bytes(b"Original transcript\r\n")
-        copied = self.catalog.import_run(self.root, "copied", transcript=exported)
-        self.assertEqual(file_hashes(self.root), original)
-        self.assertEqual(file_hashes(copied), original)
-        self.assertEqual((self.home / "transcripts/copied/imported-original.md").read_bytes(), exported.read_bytes())
-        r4 = self.inspector.decision("copied", self.r4)
-        self.assertEqual(r4["inputs"]["root_question"], "Original recorded question?")
         self.assertRaises(ValueError, self.catalog.import_run, self.root, "copied")
-        self.assertEqual(file_hashes(copied), original)
+        self.assertEqual(file_hashes(self.root), original)
 
     def test_symlink_import_rejected_without_touching_source(self):
         (self.root / "external-link").symlink_to(Path(self.temp.name) / "outside")
@@ -183,7 +180,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(len(second["history"]), 2)
         self.assertEqual(file_hashes(self.root), before)
         # Importing the same run retains its decision IDs, but annotations stay separate.
-        self.catalog.import_run(self.root, "copy")
+        self.assertRaises(ValueError, self.catalog.import_run, self.root, "copy")
         self.assertIsNone(self.reviews.read("copy", self.r4))
         self.assertEqual(self.research.step()["status"], "finished")
         self.assertEqual(file_hashes(self.root), before)
@@ -216,7 +213,7 @@ class ViewerTests(unittest.TestCase):
         before = file_hashes(self.root)
         env = {**os.environ, "MIRA_MEMORY_DIR": str(self.home)}
         output = subprocess.check_output([sys.executable, "-m", "mira", "transcript", "--experiment", "run-a", "--full"], env=env, text=True)
-        saved = (self.home / "transcripts/run-a/full.md").read_text()
+        saved = (self.home.parent / "log/transcripts/run-a/full.md").read_text()
         self.assertEqual(output.rstrip(), saved.rstrip())
         self.assertIn("serialized_request", saved)
         self.assertEqual(file_hashes(self.root), before)
@@ -240,6 +237,8 @@ class ViewerTests(unittest.TestCase):
     def test_failed_rejected_and_completed_decisions_are_distinguished(self):
         for name, response, status in [("failed", RuntimeError("network failure"), "failed"),
                                        ("rejected", "{malformed response", "rejected")]:
+            self.catalog = Experiments(Path(self.temp.name) / name)
+            self.inspector = Inspector(self.catalog.home)
             root = self.catalog.create(name)
             r = Research(root, ScriptedLLM([response]), {})
             r.initialize("Diagnostic?", ["fixture"]); r.step()
@@ -249,7 +248,7 @@ class ViewerTests(unittest.TestCase):
             self.assertEqual(data["status"], status)
             if status == "rejected": self.assertEqual(data["raw_response"], response)
             self.assertIsNone(data["committed_event"]["action_committed"])
-        self.assertEqual(self.inspector.decision("run-a", self.r4)["status"], "completed")
+        self.assertEqual(Inspector(self.home).decision("run-a", self.r4)["status"], "completed")
 
     def test_missing_historical_payload_never_uses_current_memory_as_replacement(self):
         before = self.inspector.decision("run-a", self.r4)

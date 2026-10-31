@@ -115,7 +115,7 @@ class MedicalTests(unittest.TestCase):
               'openalex':[{'results':[]}], 'crossref':[{'status':'ok','message':{'items':[]}}],
               'wikipedia':[{'batchcomplete':True}]}
         adapters,calls=wire_adapters(data)
-        llm=ScriptedLLM([{'keywords':['spiculated pulmonary mass', 'volume doubling time']}])
+        llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['spiculated pulmonary mass', 'volume doubling time']}])
         r=Research(self.root,llm,adapters); r.initialize(QUESTION,strategy='medical',context_budget=24000)
         with patch('mira.transport.time.sleep'): events=[r.step() for _ in range(5)]
         self.assertEqual([e['action'] for e in events],['R1']+['R2']*4)
@@ -140,7 +140,7 @@ class MedicalTests(unittest.TestCase):
                 result={'type':'claim','text':'The fixture authors report a diagnostic comparison.',
                         'qualification':'Fixture only; no clinical inference or independent validation.',
                         'source_ids':['pmid:1234'],'related_to':None}
-                llm=ScriptedLLM([{'keywords':['pulmonary mass', 'volume doubling time']},{'summary':'Attributed fixture comparison with limitations.','results':[result]}])
+                llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['pulmonary mass', 'volume doubling time']},{'summary':'Attributed fixture comparison with limitations.','results':[result]}])
                 r=Research(root,llm,adapters);r.initialize(QUESTION,strategy='medical',context_budget=24000)
                 with patch('mira.transport.time.sleep'):
                     self.assertEqual(r.step()['action'],'R1'); e=r.step(); self.assertEqual(e['provider'],'pubmed')

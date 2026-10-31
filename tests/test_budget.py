@@ -101,7 +101,7 @@ class BudgetTests(unittest.TestCase):
 
     def test_small_token_count_preserves_living_research_despite_large_wire(self):
         with tempfile.TemporaryDirectory() as directory:
-            model=CountedModel([{'keywords':['heat', 'transfer']}], prompt_tokens=2500)
+            model=CountedModel([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}], prompt_tokens=2500)
             r=Research(directory,model,{})
             r.initialize('Question?', ['fixture'])
             self.assertEqual(r.inspect()['context_budget'],16384)
@@ -125,7 +125,7 @@ class BudgetTests(unittest.TestCase):
     def test_inspection_uses_recorded_tokens_without_recounting_historical_calls(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Experiments(directory).create('tokens')
-            model=CountedModel([{'keywords':['heat', 'transfer']}],prompt_tokens=321)
+            model=CountedModel([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],prompt_tokens=321)
             r=Research(root,model,{}); r.initialize('Question?',['fixture']); r.step()
             model.prompt_tokens=9000
             record=read_records(root)[0]

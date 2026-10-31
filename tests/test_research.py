@@ -51,7 +51,7 @@ class ResearchTests(unittest.TestCase):
         return loads((self.root / "research/state.json").read_text())
 
     def test_deterministic_r1_r2_r3_r4_restart_and_transcript(self):
-        r = self.make([{"keywords": ["barrier", "heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()], [evidence()])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["barrier", "heat"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()], [evidence()])
         self.assertEqual(r.step()["action"], "R1")
         self.assertEqual(r.step()["action"], "R2")
         pending = self.state()["nodes"]["q1"]["pending_results"]
@@ -77,7 +77,7 @@ class ResearchTests(unittest.TestCase):
         self.assertIn("serialized_request", transcript(self.root, full=True))
 
     def test_failed_and_empty_searches_both_advance_and_record_distinct_outcomes(self):
-        self.llm = ScriptedLLM([{"keywords": ["heat", "transfer"]}, decision()])
+        self.llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, decision()])
         r = Research(self.root, self.llm, {"offline":FixtureSearch([{"status":"failed","results":[],"error":"network"}]),
              "empty":FixtureSearch([{"status":"empty","results":[]}])})
         r.initialize("Question?", ["offline","empty"])
@@ -91,7 +91,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(self.llm.requests), 2)
 
     def test_prompts_supply_search_history_evidence_and_provider_by_named_slots(self):
-        self.llm = ScriptedLLM([{"keywords": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()])
+        self.llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision()])
         r = Research(self.root, self.llm, {"offline":FixtureSearch([{"status":"failed","results":[],"error":"offline"}]),
             "fixture":FixtureSearch([{**evidence(), "raw_api_response":"Raw provider feed is retained outside prompts."}])})
         r.initialize("How does the fictional barrier affect heat?", ["offline","fixture"], context_budget=12000)
@@ -102,10 +102,10 @@ class ResearchTests(unittest.TestCase):
         prompts = {record["request"]["action"]: {"context": record["request"]["context"]}
                    for record in read_records(self.root)}
         r1 = prompts["R1"]["context"]
-        self.assertEqual(set(r1), {"question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "research_brief", "search_outcomes"})
+        self.assertEqual(set(r1), {"question", "question_scope", "control_terms", "research_context", "term_context", "completed_queries", "term_limit"})
         self.assertEqual(r1["question"], self.state()["nodes"]["q1"]["question"])
-        self.assertEqual(r1["question_context"], [])
-        self.assertEqual(r1["previous_search_terms"], [])
+        self.assertEqual(r1["question_scope"]["ancestor_questions"], [])
+        self.assertEqual(r1["term_context"]["prior_terms"]["entries"], [])
         from mira.r1 import CONTROL_TERMS
         self.assertEqual(r1["control_terms"], CONTROL_TERMS)
         r3 = prompts["R3"]["context"]
@@ -127,7 +127,7 @@ class ResearchTests(unittest.TestCase):
     def test_all_dispositions_retry_to_r1_and_sustained_priority(self):
         for kind in ("kill", "answered", "retry"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
-                llm = ScriptedLLM([{"keywords": ["heat", "transfer"]}, decision(kind), {"keywords": ["thermal transfer", "insulation"]}])
+                llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, decision(kind), {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal transfer", "insulation"]}])
                 r = Research(directory, llm, {"fixture": FixtureSearch([{"status": "empty", "results": []}])})
                 r.initialize("Question?", ["fixture"])
                 for _ in range(3): self.assertEqual(r.step()["status"], "committed")
@@ -141,7 +141,7 @@ class ResearchTests(unittest.TestCase):
                     self.assertEqual(root["previous_search_terms"], ["heat", "transfer"])
                     self.assertEqual(root["status"], "living")
                     self.assertEqual(r.step()["action"], "R1")
-                    self.assertEqual(read_records(directory)[-1]["request"]["context"]["previous_search_terms"], ["heat", "transfer"])
+                    self.assertEqual([r["term"] for r in read_records(directory)[-1]["request"]["context"]["term_context"]["prior_terms"]["entries"]], ["heat", "transfer"])
                 else:
                     self.assertEqual(root["status"], "killed" if kind == "kill" else "answered")
 
@@ -158,7 +158,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(tree.metrics(state)["max_depth"], 1)
 
     def test_invalid_raw_response_logged_and_pending_source_advanced(self):
-        r = self.make([{"keywords": ["heat", "transfer"]}, "{not JSON"], [evidence()])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, "{not JSON"], [evidence()])
         r.step(); r.step(); before = self.state()
         event = r.step(); self.assertEqual(event["status"], "committed")
         self.assertEqual(event["skipped_source_ids"], ["fixture-1"])
@@ -173,7 +173,7 @@ class ResearchTests(unittest.TestCase):
 
     def test_unsupported_evidence_no_second_llm_pass(self):
         bad = draft(); bad["source_ids"] = ["invented"]
-        r = self.make([{"keywords": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [bad]}], [evidence()])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [bad]}], [evidence()])
         r.step(); r.step(); event = r.step()
         self.assertEqual(event["status"], "committed")
         self.assertEqual(event["skipped_source_ids"], ["fixture-1"])
@@ -183,7 +183,7 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r.knowledge.validate()["documents"], 0)
 
     def test_interrupted_call_needs_explicit_acknowledgment(self):
-        r = self.make([{"keywords": ["heat", "transfer"]}])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}])
         p = multiprocessing.get_context("fork").Process(target=interrupted_model, args=(str(self.root),)); p.start(); p.join(10)
         self.assertEqual(p.exitcode, 71)
         self.assertRaisesRegex(ValidationError, "interrupted/unknown", r.step)
@@ -192,10 +192,10 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r.step()["action"], "R1")
 
     def test_context_block_and_no_finding_interpretation(self):
-        r = self.make([{"keywords": ["heat", "transfer"]}], context_budget=100, output_reserve=50)
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}], context_budget=100, output_reserve=50)
         self.assertEqual(r.step()["status"], "rejected"); self.assertFalse(self.llm.requests)
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"keywords": ["heat", "transfer"]}, {"summary": "", "results": []}])
+            llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "", "results": []}])
             r = Research(directory, llm, {"fixture": FixtureSearch([evidence()])}); r.initialize("Q?", ["fixture"], context_budget=12000)
             for _ in range(3): self.assertEqual(r.step()["status"], "committed")
             self.assertEqual(r.knowledge.validate()["documents"], 0)

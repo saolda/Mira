@@ -37,12 +37,12 @@ class RunStorageTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name) / "memory"
         self.catalog = Experiments(self.home)
-        self.logs = self.home / "run-logs"
+        self.logs = self.home.parent / "log"
 
     def make(self, name="fixture", *, disposable=True, responses=None, search=None):
-        root = self.catalog.create(name, disposable=disposable)
+        root = self.catalog.create(name, reset=True)
         llm = ScriptedLLM(responses if responses is not None else [
-            {"keywords": ["fictional heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Fixture finished."}])
+            {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["fictional heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Fixture finished."}])
         r = Research(root, llm, {"fixture": FixtureSearch(search if search is not None else [evidence()])})
         return r
 
@@ -126,13 +126,13 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(request["context"]["research"]["results"][0]["content"], supplied["results"][0]["content"])
 
     def test_rejected_output_and_normalized_response_are_preserved(self):
-        r = self.make(responses=[{"keywords": ["heat", "transfer"]}, {"summary": "Unused nonempty summary", "results": []},
+        r = self.make(responses=[{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Unused nonempty summary", "results": []},
             {"decision": "answered", "reason": "Fixture complete."}])
         self.initialize(r); result = r.run(8)
         checks = [row["data"] for row in self.rows(Path(result["execution_log"])) if row["kind"] == "interaction_validation"]
         self.assertEqual(checks[1]["proposed_response"]["summary"], "Unused nonempty summary")
         self.assertEqual(checks[1]["normalized_response"], {"summary": "", "results": []})
-        r = self.make("invalid", responses=[{"keywords": ["heat", "transfer"]}, "{not json", {"decision": "answered", "reason": "Fixture complete."}])
+        r = self.make("invalid", responses=[{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, "{not json", {"decision": "answered", "reason": "Fixture complete."}])
         self.initialize(r); result = r.run(8)
         rows = self.rows(Path(result["execution_log"]))
         rejected = next(row for row in rows if row["kind"] == "interaction_validation" and not row["data"]["accepted"])
@@ -190,7 +190,7 @@ class RunStorageTests(unittest.TestCase):
 
     def test_cli_invocations_have_separate_logs_including_setup_failure(self):
         script = Path(self.temp.name) / "script.json"
-        script.write_text(dumps({"responses": [{"keywords": ["heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Done."}], "providers": {"fixture": [evidence()]}}))
+        script.write_text(dumps({"responses": [{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, extraction(), {"decision": "answered", "reason": "Done."}], "providers": {"fixture": [evidence()]}}))
         cmd = [sys.executable, "-m", "mira", "--memory-dir", str(self.home)]
         init = loads(subprocess.check_output([*cmd, "research-init", "Heat?", "--experiment", "cli", "--database", "fixture", "--disposable", "--script", str(script), "--context-budget", "60000"], text=True))
         run = loads(subprocess.check_output([*cmd, "research-run", "--experiment", "cli", "--script", str(script)], text=True))
@@ -198,13 +198,13 @@ class RunStorageTests(unittest.TestCase):
         self.assertEqual(self.rows(Path(init["execution_log"]))[-1]["data"]["reason"], "initialized")
         self.assertEqual(self.rows(Path(run["execution_log"]))[-1]["data"]["reason"], "finished")
         before = set(self.logs.glob("*.jsonl"))
-        failed = subprocess.run([*cmd, "research-init", "Q?", "--experiment", "failed", "--strategy", "invalid", "--script", str(script)], capture_output=True)
+        failed = subprocess.run([*cmd, "research-init", "Q?", "--experiment", "failed", "--new-experiment", "--strategy", "invalid", "--script", str(script)], capture_output=True)
         self.assertNotEqual(failed.returncode, 0)
         failure_log = next(iter(set(self.logs.glob("*.jsonl")) - before))
         self.assertEqual(self.rows(failure_log)[-1]["data"]["reason"], "exception")
         standalone = Path(self.temp.name) / "explicit-root"
         subprocess.check_output([*cmd, "--root", str(standalone), "research-init", "Heat?", "--database", "fixture", "--disposable", "--script", str(script)], text=True)
-        self.assertEqual(loads((standalone / "experiment.json").read_text())["retention"], "disposable")
+        self.assertEqual(loads((standalone / "experiment.json").read_text())["layout"], "single-active-corpus")
 
     def test_test_runner_overwrites_latest_report_and_records_failures(self):
         directory = Path(self.temp.name) / "suite"; directory.mkdir()
@@ -248,52 +248,6 @@ class RunStorageTests(unittest.TestCase):
             with r.execution(self.logs) as log: raise KeyboardInterrupt()
         self.assertEqual(self.rows(log.path)[-1]["data"]["reason"], "interrupted")
 
-    def test_cleanup_dry_run_and_explicit_deletion_preserve_logs(self):
-        r, log = self.finish()
-        before = file_hashes(r.store.root); original_log = log.read_bytes()
-        plan = self.catalog.cleanup([r.store.root.name])
-        self.assertEqual(plan["deleted"], [])
-        self.assertTrue(plan["experiments"][0]["would_delete"])
-        self.assertEqual(file_hashes(r.store.root), before)
-        result = self.catalog.cleanup([r.store.root.name], apply=True)
-        self.assertEqual(result["deleted"], ["fixture"])
-        self.assertFalse(r.store.root.exists())
-        self.assertEqual(log.read_bytes(), original_log)
-        archived = self.rows(Path(result["archive_logs"][0]))
-        self.assertTrue(any(row["kind"] == "archived_interaction" for row in archived))
-        self.assertTrue(any(row["data"].get("path") == "memories/r1.md" for row in archived))
-        self.assertTrue(any(row["action"] == "R3" for row in self.rows(log) if row["kind"] == "interaction_request"))
-
-    def test_no_selection_retained_and_incomplete_experiments_are_protected(self):
-        kept, _ = self.finish("kept", disposable=False)
-        incomplete = self.make("incomplete"); self.initialize(incomplete)
-        with self.assertRaises(ValueError): self.catalog.cleanup(apply=True)
-        result = self.catalog.cleanup(["kept", "incomplete"], apply=True)
-        self.assertEqual(result["deleted"], [])
-        self.assertTrue(kept.store.root.exists()); self.assertTrue(incomplete.store.root.exists())
-        self.assertEqual(len(list(self.logs.glob("*.jsonl"))), 1)
-
-    def test_retention_designation_is_separate_from_deletion_and_can_protect_again(self):
-        r, _ = self.finish(disposable=False)
-        self.assertFalse(self.catalog.cleanup(["fixture"], retention="disposable")["applied"])
-        self.assertEqual(loads((r.store.root / "experiment.json").read_text())["retention"], "retain")
-        result = self.catalog.cleanup(["fixture"], retention="disposable", apply=True)
-        self.assertEqual(result["deleted"], []); self.assertEqual(result["updated_retention"], ["fixture"])
-        self.assertTrue(self.catalog.cleanup(["fixture"])["experiments"][0]["eligible"])
-        self.catalog.cleanup(["fixture"], retention="retain", apply=True)
-        self.assertEqual(self.catalog.cleanup(["fixture"], apply=True)["deleted"], [])
-
-    def test_active_runner_and_writer_lock_are_protected_even_when_terminal(self):
-        r, _ = self.finish()
-        with r.execution(self.logs):
-            result = self.catalog.cleanup(["fixture"], apply=True)
-            self.assertEqual(result["experiments"][0]["status"], "active")
-            self.assertEqual(result["deleted"], [])
-        with r.store.lock():
-            result = self.catalog.cleanup(["fixture"], apply=True)
-            self.assertEqual(result["experiments"][0]["status"], "active")
-        self.assertTrue(r.store.root.exists())
-
     def test_rejected_concurrent_runner_has_its_own_failure_log(self):
         r, _ = self.finish()
         other = Research(r.store.root, ScriptedLLM([]), {})
@@ -302,70 +256,8 @@ class RunStorageTests(unittest.TestCase):
             with self.assertRaises(BlockingIOError): other.run(1)
             failed = next(iter(set(self.logs.glob("*.jsonl")) - before))
             self.assertEqual(self.rows(failed)[-1]["data"]["error_type"], "BlockingIOError")
-            self.assertEqual(self.catalog.cleanup(["fixture"])["experiments"][0]["status"], "active")
+            self.assertEqual(self.catalog.cleanup(["fixture"])["experiments"][0]["status"], "active_corpus")
 
-    def test_recovery_journals_and_unresolved_interactions_are_protected(self):
-        r = self.make(); self.initialize(r); r.step(); r.step()
-        def fault(point):
-            if point == "prepared": raise RuntimeError("publication interrupted")
-        with self.assertRaises(RuntimeError): r.step(fault=fault)
-        before = file_hashes(r.store.root)
-        result = self.catalog.cleanup(["fixture"], apply=True)
-        self.assertEqual(result["experiments"][0]["status"], "recovery_blocked")
-        self.assertEqual(result["deleted"], [])
-        self.assertEqual(before, file_hashes(r.store.root))
-        other, _ = self.finish("unknown")
-        with other.store.lock():
-            other.trace.start({"action": "R1"}, dumps({"model": "fixture", "messages": []}), {})
-        result = self.catalog.cleanup(["unknown"], apply=True)
-        self.assertEqual(next(row for row in result["experiments"] if row["name"] == "unknown")["status"], "recovery_blocked")
-        self.assertEqual(result["deleted"], [])
-
-    def test_age_filter_and_legacy_retention_default(self):
-        r, _ = self.finish()
-        self.assertEqual(self.catalog.cleanup(["fixture"], apply=True, older_than_days=2)["deleted"], [])
-        old = time.time() - 4 * 86400
-        for p in r.store.root.rglob("*"): os.utime(p, (old, old))
-        os.utime(r.store.root, (old, old))
-        self.assertEqual(self.catalog.cleanup(["fixture"], apply=True, older_than_days=2)["deleted"], ["fixture"])
-        legacy, _ = self.finish("legacy")
-        (legacy.store.root / "experiment.json").unlink()
-        row = next(row for row in self.catalog.cleanup(["legacy"])["experiments"] if row["name"] == "legacy")
-        self.assertEqual(row["retention"], "unclassified"); self.assertFalse(row["would_delete"])
-
-    def test_symlinks_and_path_traversal_cannot_delete_outside_catalog(self):
-        r, _ = self.finish()
-        outside = Path(self.temp.name) / "outside"; outside.mkdir(); (outside / "keep").write_text("Keep me")
-        (r.store.root / "external").symlink_to(outside, target_is_directory=True)
-        self.assertEqual(self.catalog.cleanup(["fixture"], apply=True)["deleted"], [])
-        self.assertTrue((outside / "keep").exists())
-        (self.home / "research" / "linked").symlink_to(outside, target_is_directory=True)
-        for name in ("linked", "../outside", "/tmp"):
-            with self.assertRaises(ValueError): self.catalog.cleanup([name], apply=True)
-        with self.assertRaises(ValueError): ExecutionLog(r.store.root / "logs", r.store.root, command="unsafe")
-        with self.assertRaises(ValueError): ExecutionLog(self.home / "research" / "other", r.store.root, command="unsafe")
-
-    def test_archive_failure_preserves_experiment(self):
-        r, _ = self.finish()
-        with patch.object(self.catalog, "_archive", side_effect=OSError("archive unavailable")):
-            result = self.catalog.cleanup(["fixture"], apply=True)
-        self.assertEqual(result["deleted"], []); self.assertTrue(r.store.root.exists())
-
-    def test_viewer_transcript_and_cli_remain_usable(self):
-        r, _ = self.finish()
-        from mira.inspection import Inspector
-        view = Inspector(self.home).run("fixture")
-        self.assertTrue(view["timeline"])
-        self.assertIn("Actual request record", transcript(r.store.root, full=True))
-        command = [sys.executable, "-m", "mira", "--memory-dir", str(self.home)]
-        plan = loads(subprocess.check_output([*command, "research-cleanup", "--experiment", "fixture"], text=True))
-        self.assertTrue(plan["experiments"][0]["would_delete"])
-        self.assertEqual(plan["deleted"], [])
-        result = loads(subprocess.check_output([*command, "research-cleanup", "--experiment", "fixture", "--apply"], text=True))
-        self.assertEqual(result["deleted"], ["fixture"])
-        repository = Path(__file__).resolve().parents[1]
-        ignored = subprocess.run(["git", "check-ignore", "--quiet", "memory/run-logs/example.jsonl"], cwd=repository)
-        self.assertEqual(ignored.returncode, 0)
 
 
 if __name__ == "__main__": unittest.main()

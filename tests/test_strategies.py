@@ -67,7 +67,7 @@ class StrategyTests(unittest.TestCase):
         self.assertRaisesRegex(ValueError,'immutable',self.change,lambda s:s['strategies'][0]['databases'].reverse())
 
     def test_r0_one_call_audited_then_never_recurs_on_resume_or_children(self):
-        r=self.runner([{'strategy':'engineering','reason':'Technical question.'},{'keywords':['heat', 'transfer']}])
+        r=self.runner([{'strategy':'engineering','reason':'Technical question.'},{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}])
         s=r.initialize('Which heat-transfer techniques work?', context_budget=12000)
         self.assertEqual(len(self.llm.requests),1)
         self.assertEqual(s['research_cycles'],0)
@@ -81,7 +81,7 @@ class StrategyTests(unittest.TestCase):
             s['nodes']['q1']['status']='exhausted'
             s['research_cycles_since_branching']=5
         self.change(seed)
-        self.llm.responses=iter([{'questions':['New useful question?']},{'keywords':['heat', 'transfer']}])
+        self.llm.responses=iter([{'questions':['New useful question?']},{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}])
         self.assertEqual(r.step()['action'],'R5')
         resumed=Research(self.root,self.llm,{})
         self.assertEqual(resumed.step()['action'],'R1')
@@ -130,7 +130,7 @@ class StrategyTests(unittest.TestCase):
         path=Path(self.temp.name)/'old-strategies.json';path.write_text(dumps([old]))
         adapters={p:FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'99999'}]
             if p=='openalex' else [{'status':'empty','results':[]}]) for p in old['databases']}
-        r=self.runner([{'keywords':['volume doubling time','spiculated nodule']}],adapters)
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['volume doubling time','spiculated nodule']}],adapters)
         r.initialize('Medical question?',strategy='medical',registry=path,context_budget=30000)
         r.step()
         for _ in old['databases']:r.step()
@@ -144,7 +144,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_explicit_openalex_list_still_submits_with_default_profile(self):
         adapter=FixtureSearch([{'status':'empty','results':[]}])
-        r=self.runner([{'keywords':['volume doubling time','spiculated nodule']}],{'openalex':adapter})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['volume doubling time','spiculated nodule']}],{'openalex':adapter})
         s=r.initialize('Medical question?',['openalex'],context_budget=30000)
         self.assertEqual(s['strategies'][0]['databases'],['openalex'])
         self.assertEqual(s['strategies'][0]['profiles'],{'openalex':'default'})
@@ -170,7 +170,7 @@ class StrategyTests(unittest.TestCase):
         a=FixtureSearch([{'status':'failed','results':[],'error':'offline'}])
         b=FixtureSearch([{'status':'empty','results':[]}])
         c=FixtureSearch([evidence()])
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]},decision('retry'),{'keywords':['thermal', 'conductivity']}],{'a':a,'b':b,'c':c})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]},decision('retry'),{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['thermal', 'conductivity']}],{'a':a,'b':b,'c':c})
         r.initialize('Root?',['a','b','c'],context_budget=20000)
         events=[r.step() for _ in range(5)]
         self.assertEqual([e['action'] for e in events],['R1','R2','R2','R2','R3'])
@@ -183,7 +183,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(n['status'],'living')
 
     def test_all_unavailable_is_explicit_and_each_pointer_advances(self):
-        r=self.runner([{'keywords':['heat', 'transfer']}],{'a':FixtureSearch([{'status':'failed','results':[]}]),
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],{'a':FixtureSearch([{'status':'failed','results':[]}]),
                                                 'b':FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'120'}])})
         r.initialize('Q?',['a','b'], context_budget=12000)
         with tempfile.TemporaryDirectory() as logs: out=r.run(10, log_directory=logs)
@@ -195,7 +195,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_cooldown_persists_and_does_not_repeat_request_after_restart(self):
         a=FixtureSearch([{'status':'rate_limited','results':[],'retry_after':'3600'}]); b=FixtureSearch([{'status':'empty','results':[]}])
-        r=self.runner([{'keywords':['heat', 'transfer']}],{'a':a,'b':b})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],{'a':a,'b':b})
         r.initialize('Q?',['a','b'], context_budget=12000)
         for _ in range(3):r.step()
         until=self.state()['provider_availability']['a']['next_request_at']
@@ -208,7 +208,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_all_rate_limited_round_advances_pointers_and_waits_without_r4(self):
         limited={'status':'rate_limited','results':[],'http_status':429,'retry_after':'3600'}
-        r=self.runner([{'keywords':['heat', 'transfer']}],
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],
                       {'a':FixtureSearch([limited]),'b':FixtureSearch([limited])})
         r.initialize('Q?',['a','b'],context_budget=12000)
         with tempfile.TemporaryDirectory() as logs: outcome=r.run(4, log_directory=logs)
@@ -224,7 +224,7 @@ class StrategyTests(unittest.TestCase):
     def test_cross_provider_dedup_and_empty_extraction_marks_processed(self):
         first=evidence();first['results'][0].update(identifiers={'doi':'10.1234/PAPER'},authors=['Jane Smith'])
         second=deepcopy(first);second['results'][0].update(id='other-provider-id',url='https://doi.org/10.1234/paper')
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "", 'results':[]}],{'a':FixtureSearch([first]),'b':FixtureSearch([second])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "", 'results':[]}],{'a':FixtureSearch([first]),'b':FixtureSearch([second])})
         r.initialize('Q?',['a','b'], context_budget=12000)
         for _ in range(3):r.step()
         e=r.step();self.assertEqual(e['action'],'R2');self.assertEqual(e['duplicate_count'],1)
@@ -234,7 +234,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(r.knowledge.validate()['documents'],0)
 
     def test_two_nodes_pending_same_source_is_deduped_again_before_r3(self):
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence(),evidence()])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence(),evidence()])})
         r.initialize('Root?',['fixture'], context_budget=12000)
         r.step()
         def seed(s):
@@ -254,7 +254,7 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(r.knowledge.validate()['documents'],1)
 
     def test_temporary_content_pruning_protects_pending_and_preserves_audit(self):
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence()])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence()])})
         r.initialize('Root?',['fixture'], context_budget=12000);r.step();r.step()
         ref=self.state()['nodes']['q1']['pending_results'];saved=loads((self.root/ref).read_text())
         self.assertNotIn('content',saved['results'][0]);self.assertNotIn('raw_api_response',saved)
@@ -276,7 +276,7 @@ class StrategyTests(unittest.TestCase):
         self.assertFalse(any(source_text in p.read_text() for p in (self.root/'journal').rglob('*.txt')))
 
     def test_missing_or_tampered_pending_cache_rejects_without_a_model_call(self):
-        r=self.runner([{'keywords':['heat', 'transfer']}],{'fixture':FixtureSearch([evidence()])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],{'fixture':FixtureSearch([evidence()])})
         r.initialize('Q?',['fixture'], context_budget=12000);r.step();r.step()
         ref=self.state()['nodes']['q1']['pending_results'];saved=loads((self.root/ref).read_text())
         cached=self.root/saved['payload_ref'];cached.write_text('tampered')
@@ -297,7 +297,7 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(len(read_records(root)),1)
 
     def test_r3_source_index_and_memory_recover_together(self):
-        r=self.runner([{'keywords':['heat', 'transfer']}],{'fixture':FixtureSearch([evidence()])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']}],{'fixture':FixtureSearch([evidence()])})
         r.initialize('Q?',['fixture'], context_budget=12000);r.step();r.step()
         p=multiprocessing.get_context('fork').Process(target=crash_cycle,args=(str(self.root),'replaced:memories/r1.md'))
         p.start();p.join(10);self.assertEqual(p.exitcode,74)
@@ -324,7 +324,7 @@ class StrategyTests(unittest.TestCase):
     def test_cross_node_doi_to_pmid_aliases_are_retained_after_restart(self):
         paper=evidence();paper['results'][0]['identifiers']={'doi':'10.1234/a','pmid':'1234'}
         other=deepcopy(paper);other['results'][0].update(id='pmid:1234',url='https://pubmed.ncbi.nlm.nih.gov/1234/',identifiers={'pmid':'1234'})
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'a':FixtureSearch([paper])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'a':FixtureSearch([paper])})
         r.initialize('Q?',['a'], context_budget=12000);r.step();r.step();r.step()
         def seed(s):
             s['nodes']['q1']['status']='answered'
@@ -339,7 +339,7 @@ class StrategyTests(unittest.TestCase):
         self.assertRaises(ValueError,self.change,lambda s:s.update(source_index={}))
 
     def test_legacy_canonical_pending_evidence_remains_processable(self):
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence()])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'fixture':FixtureSearch([evidence()])})
         r.initialize('Q?',['fixture'], context_budget=12000)
         # Old layouts without retrieval_storage keep canonical results and the old raw feed.
         self.change(lambda s:s.pop('retrieval_storage'))
@@ -352,7 +352,7 @@ class StrategyTests(unittest.TestCase):
     def test_duplicate_aliases_in_one_batch_do_not_premark_the_source(self):
         first=evidence()['results'][0];first['identifiers']={'doi':'10.1234/a'}
         second={**deepcopy(first),'id':'alternate','identifiers':{'doi':'10.1234/a','pmid':'1234'}}
-        r=self.runner([{'keywords':['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'a':FixtureSearch([{'status':'ok','results':[first,second]}])})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]}],{'a':FixtureSearch([{'status':'ok','results':[first,second]}])})
         r.initialize('Q?',['a'], context_budget=12000);r.step();search=r.step()
         self.assertEqual(search['duplicate_count'],1)
         self.assertEqual(self.state()['source_index'],{})

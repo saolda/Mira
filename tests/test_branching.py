@@ -57,7 +57,7 @@ class BranchingTests(unittest.TestCase):
     def exhaust(self, state, *_): state['nodes']['q1']['status'] = 'exhausted'
 
     def test_threshold_uses_exact_r5_wire_and_crossing_memory_is_kept(self):
-        r = self.make([{'keywords': ['heat', 'transfer']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
+        r = self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ['heat', 'transfer']}, {"summary": "Scoped summary of all extracted results and their limitations.", 'results': [draft()]}])
         empty_total = self.state()['nodes']['q1']['research_capacity']['estimated_tokens']
         self.change(lambda s, *_: s.update(research_capacity_tokens=empty_total + 1))
         for expected in ('R1', 'R2', 'R3'):
@@ -166,7 +166,7 @@ class BranchingTests(unittest.TestCase):
         self.assertEqual(self.state()['nodes']['q2']['next_database_index'], 1)
 
     def test_no_exhausted_node_never_schedules_r5(self):
-        self.make([{'keywords': ['heat', 'transfer']}], branching_interval=1)
+        self.make([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ['heat', 'transfer']}], branching_interval=1)
         self.change(lambda s, *_: s.update(research_cycles_since_branching=100))
         self.assertEqual(self.r.step()['action'], 'R1')
         self.assertEqual(self.state()['branching_cycles'], 0)
@@ -262,7 +262,7 @@ class BranchingTests(unittest.TestCase):
                 self.assertEqual(s['nodes']['q1']['status'], 'split'); self.assertEqual(s['next_node'], 3)
                 self.assertEqual(s['branching_cycles'], 1)
                 self.assertFalse(r.llm.requests)
-                r.llm = ScriptedLLM([{'keywords': ['mechanism', 'measurement']}])
+                r.llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ['mechanism', 'measurement']}])
                 self.assertEqual(r.step()['action'], 'R1')
 
     def test_legacy_state_is_readable_and_upgrade_is_journaled(self):
@@ -310,7 +310,7 @@ class BranchingTests(unittest.TestCase):
         self.assertEqual(ArxivSearch.query(['id:physics/0306182v1']), 'id:physics/0306182v1')
         self.assertEqual(ArxivSearch.query(['"recurrent dropout"']), 'all:"recurrent" AND all:"dropout"')
         self.assertRaises(ValueError, ArxivSearch.query, ['!!!'])
-        self.llm = ScriptedLLM([{'keywords': ['recurrent dropout', 'neural networks']}])
+        self.llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ['recurrent dropout', 'neural networks']}])
         self.r = Research(self.root, self.llm, {})
         self.r.initialize('Question?', ['arxiv'], context_budget=20000)
         search = FixtureSearch([{'status': 'empty', 'results': []}])

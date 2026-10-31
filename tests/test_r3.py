@@ -83,7 +83,7 @@ class CompactResearchTests(unittest.TestCase):
         self.assertEqual(set(memory.units[0].fields), {"Kind", "Proposition"})
 
     def runner(self, root, responses, rows=None):
-        llm = ScriptedLLM([{"keywords": ["physics", "measurement"]}, *responses])
+        llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["physics", "measurement"]}, *responses])
         evidence = research()
         if rows is not None: evidence["results"] = rows
         runner = Research(root, llm, {"fixture": FixtureSearch([evidence, evidence])})
@@ -135,6 +135,7 @@ class CompactResearchTests(unittest.TestCase):
             with resumed.store.lock():
                 token, memories, equations, ledger = resumed.store.read()
                 state = loads(resumed.store._files()["research/state.json"])
+                state["nodes"]["q1"]["keywords"] = ["different thermal search"]
                 state["nodes"]["q1"]["next_database_index"] = 0
                 state["nodes"]["q1"]["provider_outcomes"] = {}
                 resumed.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
@@ -211,7 +212,7 @@ class CompactResearchTests(unittest.TestCase):
 
     def test_skipped_source_advances_to_next_database_without_retry(self):
         with tempfile.TemporaryDirectory() as root:
-            llm = ScriptedLLM([{"keywords": ["physics", "measurement"]}, "{not JSON"])
+            llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["physics", "measurement"]}, "{not JSON"])
             runner = Research(root, llm, {"first": FixtureSearch([research()]),
                                           "second": FixtureSearch([{"status": "empty", "results": []}])})
             runner.initialize("Physics?", ["first", "second"], context_budget=24000)
@@ -228,6 +229,7 @@ class CompactResearchTests(unittest.TestCase):
             with runner.store.lock():
                 token, docs, equations, ledger = runner.store.read()
                 state = loads(runner.store._files()["research/state.json"])
+                state["nodes"]["q1"]["keywords"] = ["different thermal search"]
                 state["nodes"]["q1"]["next_database_index"] = 0
                 state["nodes"]["q1"]["provider_outcomes"] = {}
                 runner.store.publish(docs, equations, ledger, token, files={"research/state.json": dumps(state)})
@@ -442,7 +444,7 @@ class R3Tests(unittest.TestCase):
     def test_live_pipeline_exact_prompt_and_atomic_equation_image_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             catalog=Experiments(directory);root=catalog.create("ordered-r3")
-            llm=ScriptedLLM([{"keywords":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(),equation(),image()]}])
+            llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[result(),equation(),image()]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("What does the physics research show?",["fixture"],context_budget=20000)
             for _ in range(3):self.assertEqual(r.step()["status"],"committed")
@@ -461,7 +463,7 @@ class R3Tests(unittest.TestCase):
     def test_skipped_equation_batch_rolls_back_equations_and_ids(self):
         with tempfile.TemporaryDirectory() as root:
             bad=equation(None);bad["latex"]="x=y\n## Relationships"
-            llm=ScriptedLLM([{"keywords":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
+            llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":["physics", "measurement"]},{"summary": "Scoped summary of all extracted results and their limitations.", "results":[bad]}])
             r=Research(root,llm,{"fixture":FixtureSearch([research()])})
             r.initialize("Physics?",["fixture"],context_budget=20000)
             r.step();r.step()
@@ -505,17 +507,17 @@ class R1HeadingControlTests(unittest.TestCase):
     def test_fixed_list_case_whole_word_and_useful_component_cleanup(self):
         self.assertEqual(r1.controls([]),r1.CONTROL_TERMS)
         self.assertEqual(r1.filter_terms(["SUMMARY heat Evidence transfer", "evidential findings", "metadata", "explanations"],r1.controls([])),["heat transfer","evidential","explanations"])
-        with self.assertRaises(ValueError):r1.filter_terms(["metadata", "TITLE"],r1.controls([]))
+        self.assertEqual(r1.filter_terms(["metadata", "TITLE"],r1.controls([])), [])
         self.assertEqual(r1.filter_terms(["heat", "transfer"],r1.controls([])),["heat","transfer"])
 
     def test_pipeline_records_filter_and_uses_clean_query(self):
         with tempfile.TemporaryDirectory() as root:
-            llm=ScriptedLLM([{"keywords":["SUMMARY dropout", "evidence", "metadata uncertainty"]}])
+            llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":["SUMMARY dropout", "evidence", "metadata uncertainty"]}])
             search=FixtureSearch([{"status":"empty","results":[]}])
             runner=Research(root,llm,{"fixture":search})
             runner.initialize("What is dropout uncertainty?",["fixture"])
             event=runner.step()
-            self.assertEqual(event['keyword_filter'],{'original':['SUMMARY dropout','evidence','metadata uncertainty'],'accepted':['dropout','uncertainty']})
+            self.assertEqual(event['search_plan']['search_concepts'], ['dropout','uncertainty'])
             self.assertEqual(event['status'],'committed')
             runner.step()
             self.assertEqual(search.queries,['dropout uncertainty'])
@@ -524,6 +526,6 @@ class R1HeadingControlTests(unittest.TestCase):
     def test_previous_terms_do_not_become_controls(self):
         state=tree.initial("Heat transfer?",["fixture"])
         files={"events/a.json":dumps({"node_id":"q1","question":"Heat transfer?","status":"committed","action_committed":"R1","tree":{"q1":{"keywords":["heat","heat"]}}})}
-        ctx=r1.context(state,[],files,"q1")
+        ctx=r1.retrieval_context(state,[],files,"q1")
         self.assertEqual(ctx['previous_search_terms'],['heat'])
         self.assertNotIn('heat',ctx['control_terms'])
