@@ -26,8 +26,8 @@ PYTHONPATH=src python3 -m mira viewer
 ```
 
 Open http://127.0.0.1:8767 and select an experiment and decision. New research
-runs default to ignored `memory/research/` directories; annotations and exports
-are separate.
+runs use ignored project `memory/` directly as one active corpus. Private inputs
+under `memory/questions/` and unrelated files survive explicit corpus resets.
 
 Initialize with a positional question or `research-init --question-file PATH`,
 never both. A question file starts with `# Research question` and a nonempty
@@ -60,8 +60,7 @@ The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.
 
 Each `research-init`, `research-run` and `research-demo` invocation writes a new,
-append-only JSONL file in ignored `memory/run-logs/` (under `--memory-dir` when
-configured). Filenames include UTC time, experiment name and a unique suffix.
+append-only JSONL file in ignored project `log/` (beside `--memory-dir` when configured). Filenames include UTC time, experiment name and a unique suffix.
 Resuming creates another file. Logs contain complete rendered prompts and inputs,
 template sources/hashes, raw responses, validation/normalization, searches and
 committed changes. Configured secrets are redacted; records are flushed and
@@ -69,36 +68,48 @@ fsynced incrementally. A missing `execution_end` indicates an abrupt interruptio
 Inspect a log with an editor or, for example:
 
 ```bash
-jq -r 'select(.kind == "interaction_request") | .data.request.messages[].content' memory/run-logs/FILE.jsonl
-jq 'select(.kind == "interaction_response" or .kind == "interaction_validation")' memory/run-logs/FILE.jsonl
+jq -r 'select(.kind == "interaction_request") | .data.request.messages[].content' log/FILE.jsonl
+jq 'select(.kind == "interaction_response" or .kind == "interaction_validation")' log/FILE.jsonl
 ```
 
 `Research.run()` also creates a log. Custom Python supervisors can group
 initialization and repeated `step()` calls with `with research.execution():`.
-Standalone `--root` runs default to a sibling `run-logs/` directory; provide
+Standalone `--root` runs default to a sibling `log/` directory; provide
 `--memory-dir` to choose the log home. Journals and interaction phase files remain
 the recovery authority, and the viewer/transcript commands continue to use them.
 
-List experiment names, dates, byte sizes, retention and completion/recovery status:
+R1 discovers 0–6 new concepts and selects one ordered plan for the whole provider
+round. Python uses each provider's own prefix, persists unused discoveries and
+skips searches already completed for the selected node. Empty or entirely
+repeated plans remain living and return `waiting_for_r4_upgrade`; R4's prompt
+and decisions are unchanged pending their separate review.
+
+Starting another experiment requires an explicit reset:
+
+```bash
+PYTHONPATH=src python3 -m mira research-init --question-file memory/questions/topic.md --strategy medical --experiment next --new-experiment
+```
+
+This replaces only verified generated corpus files: research/synthesis memories,
+equations, state, results, glossary, interactions, temporary retrievals, journals
+and derived indexes. Allocators restart. Ordinary `research-run` continues the
+current corpus. Reset refuses held runner/writer locks, incomplete recovery and
+unknown model/provider submissions. An interrupted reset has a durable receipt;
+repeat the explicit reset to finish it. Private question inputs, reviews, unrelated
+files and `log/` remain intact. No old scientific memories are archived.
+
+Legacy corpora remain readable with `--experiment NAME`. Inspect and explicitly
+remove verified idle legacy directories with:
 
 ```bash
 PYTHONPATH=src python3 -m mira research-cleanup
-PYTHONPATH=src python3 -m mira research-cleanup --experiment NAME
+PYTHONPATH=src python3 -m mira research-cleanup --experiment OLD --apply
 ```
 
-These commands delete nothing. New research is retained by default; use
-`research-init --disposable` for development runs. Demos are disposable.
-Legacy experiments are unclassified and protected. To deliberately designate an
-existing development run, then separately delete it once completed:
-
-```bash
-PYTHONPATH=src python3 -m mira research-cleanup --experiment NAME --disposable --apply
-PYTHONPATH=src python3 -m mira research-cleanup --experiment NAME --apply
-```
-
-Repeat `--experiment` for multiple IDs; add `--older-than-days 7` to restrict
-deletion by last modification. `--retain --apply` protects a selected run again.
-Cleanup refuses active, incomplete, recovery-blocked or retained experiments and
-symlinked paths. It archives inspectable records to `memory/run-logs/` before
-deleting a selected disposable run. Execution logs are never removed by cleanup;
-you may delete old log files manually.
+Cleanup protects active locks and recovery-blocked runs, moves their diagnostic
+files to `log/legacy/`, and never deletes the current active corpus. The earlier
+retain/disposable catalogue and per-experiment imports are superseded. For an
+explicit transition preserving an existing legacy corpus, Python callers can use
+`Experiments().activate_legacy(NAME)`; this relocates it directly into `memory/`
+with verified hashes and a resumable transition receipt. `move_run_logs()` moves
+old `memory/run-logs/` files into `log/` without changing their contents.

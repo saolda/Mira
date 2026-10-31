@@ -165,7 +165,7 @@ def structural_lines(text):
 
 
 def render(memory):
-    if "source" in memory.metadata:
+    if "source" in memory.metadata or memory.metadata.get("markdown_format") == 2:
         return render_compact(memory)
     header = {"version": 1, "id": memory.id, "revision": memory.revision,
               "summary": memory.summary, "metadata": memory.metadata, "next": memory.next_ids}
@@ -251,7 +251,9 @@ def render_compact(memory):
     """Single-source research format; keep allocators and journal lineage lossless."""
     header = {"version": 2, "id": memory.id, "revision": memory.revision,
               **memory.metadata, "next": memory.next_ids}
-    parts = ["# " + memory.title, "", "```json", dumps(header).rstrip(), "```", "",
+    header_text = (json.dumps(header, ensure_ascii=False, separators=(",", ":"))
+                   if memory.metadata.get('markdown_format') == 2 else dumps(header).rstrip())
+    parts = ["# " + memory.title, "", "```json", header_text, "```", "",
              "## Summary", "", memory.summary, "", "## Knowledge", ""]
     for unit in memory.units:
         main = {"finding": "Proposition", "question": "Question", "equation": "Description", "image": "Image"}[unit.kind]
@@ -278,7 +280,8 @@ def parse_compact(text, headings):
         return loads(tokens[0].content)
     header = fence(sections[0][3], sections[1][2])
     require(isinstance(header, dict) and header.get("version") == 2 and
-            {"id", "revision", "next", "source", "kind", "node_id"} <= header.keys(), "compact header")
+            {"id", "revision", "next", "kind", "node_id"} <= header.keys()
+            and (header['kind'] == 'synthesis' or 'source' in header), "compact header")
     metadata = {k: v for k, v in header.items() if k not in {"version", "id", "revision", "next"}}
     summary = "".join(lines[sections[1][3]:sections[2][2]]).strip()
     markers = [h for h in headings if h[0] == "h3"]
@@ -300,7 +303,7 @@ def parse_compact(text, headings):
         main = {"f": "Proposition", "q": "Question", "e": "Description", "i": "Image"}[anchor[0]]
         content_end = fields[0][0] if fields else len(body)
         values = {main: "".join(body[:content_end]).strip()}
-        if anchor[0] == "f": values["Kind"] = label.lower()
+        if anchor[0] == "f": values["Kind"] = 'synthesis' if metadata.get('kind') == 'synthesis' else label.lower()
         if anchor[0] == "q": values["State"] = "open"
         seen_fields = set()
         for j, (number, key, first) in enumerate(fields):

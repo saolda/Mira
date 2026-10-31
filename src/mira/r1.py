@@ -37,9 +37,8 @@ def filter_terms(components, control_terms):
         component = re.sub(r"\(\s*\)|\[\s*\]|\{\s*\}", "", component)
         component = normalized(component).strip(" ,;:-")
         if re.search(r"\w", component): result.append(component)
-    require(result, "R1 query contains only prohibited control terms")
     validate_terms(result, control_terms)
-    return result
+    return deduplicate(result)
 
 
 def validate_terms(components, control_terms):
@@ -57,10 +56,10 @@ QUERY_SYNTAX = re.compile(r'[\[\]{}:"*?|&\\=<>~`;]|(?:^|\s)[+-](?=\S)|[\x00-\x1f
 PROVIDERS = re.compile(r"\b(?:arxiv|pubmed|crossref|europe[ _-]*pmc|eric|openalex|wikipedia)\b", re.I)
 
 
-def validate_concepts(components):
+def validate_concepts(components, limit=6):
     """Validate the R1 proposal without revalidating legacy persisted keywords."""
-    require(isinstance(components, list) and 2 <= len(components) <= 6,
-            "R1 requires 2–6 concepts")
+    require(isinstance(components, list) and len(components) <= limit,
+            "R1 concept limit exceeded or invalid list")
     for concept in components:
         require(isinstance(concept, str) and concept.strip(), "R1 concepts must be nonempty strings")
         require(len(concept.split()) <= 5, "R1 concepts must contain at most five words")
@@ -161,7 +160,7 @@ def question_context(state, node_id):
     return additional
 
 
-def context(state, memories, files, node_id, control_terms=()):
+def retrieval_context(state, memories, files, node_id, control_terms=()):
     node = state["nodes"][node_id]
     question = node["question"]
     additional = question_context(state, node_id)
@@ -205,3 +204,156 @@ def recent_outcomes(files, node_id):
                  len(row.get("results", [])) + len(row.get("duplicates", []))),
              "unique_record_count": row.get("unique_record_count", len(row.get("results", [])))}
             for row in rows]
+
+
+def concept_key(value):
+    import unicodedata
+    return normalized(unicodedata.normalize('NFKC', value)).casefold()
+
+
+def deduplicate(values):
+    result, seen = [], set()
+    for value in values:
+        key = concept_key(value)
+        if key not in seen:
+            seen.add(key); result.append(value)
+    return result
+
+
+def term_limit(state):
+    from .retrieval import strategy
+    selected = strategy(state)
+    if 'query_profiles' in selected:
+        return max(p['max_terms'] for p in selected['query_profiles'].values())
+    return state.get('legacy_query_policy', {}).get('profile', {}).get('max_terms', 6)
+
+
+def completed(files, node_id):
+    rows = []
+    for path, raw in files.items():
+        if not path.startswith('research/results/'): continue
+        row = loads(raw)
+        if (row.get('node_id') == node_id and row.get('status') in {'ok', 'empty'}
+                and row.get('query_submitted') is not False):
+            rows.append({**row, 'reference': path})
+    return sorted(rows, key=lambda r: (r.get('timestamp', ''), r['reference']))
+
+
+def repeated(entry, history):
+    # Compare actual provider semantics, independent of profile labels or versions.
+    # Keep syntax/punctuation: different field tags and phrase boundaries matter.
+    def parameters(value):
+        return {k: concept_key(v) if isinstance(v, str) else v for k, v in value.items()}
+    return next((r for r in history if r.get('provider') == entry['provider']
+        and concept_key(r.get('query', '')) == concept_key(entry['query'])
+        and parameters(r.get('request_parameters', entry['request_parameters'])) == parameters(entry['request_parameters'])), None)
+
+
+def bounded_projection(rows, *, limit, budget):
+    selected = []
+    for row in rows:
+        if len(selected) == limit: break
+        if len(dumps([*selected, row]).encode('utf-8')) <= budget:
+            selected.append(row)
+    return {'entries': selected, 'omitted_count': len(rows) - len(selected)}
+
+
+def context(state, memories, files, node_id, control_terms=(), glossary_context=None):
+    old = retrieval_context(state, memories, files, node_id, control_terms)
+    node = state['nodes'][node_id]
+    relevant = tokens(' '.join([old['question'], *old['question_context'], dumps(old['memory_context'])]))
+    def rank(row):
+        return (-len(relevant & tokens(row['term'])), row.get('last_considered_round', 0), row['order'])
+    candidates = sorted((r for r in node.get('concept_candidates', []) if not r['submitted_queries']), key=rank)
+    unused = bounded_projection([{'term': clean_text(r['term'], 180)[0], 'order': r['order'],
+        'status': 'unverified', 'selection_count': len(r['selected_rounds'])} for r in candidates], limit=10, budget=2200)
+    prior = deduplicate(old['previous_search_terms'])
+    prior = sorted(enumerate(prior), key=lambda pair: (-len(relevant & tokens(pair[1])),
+        (pair[0] - node.get('search_round', 0) * 10) % max(1, len(prior))))
+    previous = bounded_projection([{'term': clean_text(t, 180)[0]} for _, t in prior], limit=10, budget=1600)
+    history = completed(files, node_id)
+    # Relevance, then recency; independent of the glossary budget. A projection is
+    # guidance only: duplicate checks always read the entire committed history.
+    history = [r for _, r in sorted(enumerate(history), key=lambda pair:
+        (-len(relevant & tokens(pair[1].get('query', ''))), -pair[0]))]
+    queries = bounded_projection([{k: r.get(k) for k in ('provider', 'profile_id', 'query', 'status', 'reference')}
+        for r in history], limit=12, budget=4000)
+    return {'question': old['question'],
+        'question_scope': {'ancestor_questions': old['question_context'], 'research_brief': old['research_brief']},
+        'research_context': old['memory_context'],
+        'term_context': {'unused_candidates': unused, 'prior_terms': previous,
+            'glossary': glossary_context or old['glossary_context'],
+            'selection_policy': 'relevance, least recently considered, discovery order; prior-term rotation',
+            'untrusted_term_data': True},
+        'completed_queries': queries, 'term_limit': term_limit(state), 'control_terms': old['control_terms']}
+
+
+def accept(node, value, context, event, history, plans, known_terms=()):
+    """Update candidates and plan in the same journal operation as the R1 event."""
+    accepted = {key: filter_terms(value[key], context['control_terms']) for key in ('new_concepts', 'search_concepts')}
+    accepted['reason'] = value['reason']
+    round_id = node.get('search_round', 0) + 1
+    records = node.setdefault('concept_candidates', [])
+    known = {concept_key(r['term']) for r in records}
+    known.update(concept_key(t) for t in known_terms)
+    known.update(concept_key(t) for t in node.get('previous_search_terms', []))
+    for projection in ('prior_terms',):
+        known.update(concept_key(r['term']) for r in context['term_context'][projection]['entries'])
+    for row in context['term_context']['glossary'].get('entries', []):
+        known.update(concept_key(t) for t in [row.get('term', row.get('canonical', '')), *row.get('aliases', [])])
+    discoveries = []
+    for original in value['new_concepts']:
+        filtered = filter_terms([original], context['control_terms'])
+        if not filtered or concept_key(filtered[0]) in known: continue
+        term = filtered[0]; known.add(concept_key(term)); discoveries.append(term)
+        records.append({'term': term, 'original': original, 'normalized': concept_key(term),
+            'node_id': node['id'], 'discovery_round': round_id, 'discovery_event': event['event_id'],
+            'interaction_id': event['interaction_id'], 'order': len(records) + 1, 'status': 'unverified',
+            'considered_rounds': [], 'selected_rounds': [], 'submitted_queries': [], 'last_considered_round': 0})
+    accepted['new_concepts'] = discoveries
+    considered = {r['order'] for r in context['term_context']['unused_candidates']['entries']}
+    selected = {concept_key(t) for t in accepted['search_concepts']}
+    for row in records:
+        if row['order'] in considered:
+            row['considered_rounds'].append(round_id); row['last_considered_round'] = round_id
+        if row['normalized'] in selected: row['selected_rounds'].append(round_id)
+    repeats = [dict(provider=p['provider'], query=p['query'], original_reference=match['reference'])
+        for p in plans if (match := repeated(p, history))]
+    blocked = not accepted['search_concepts'] or len(repeats) == len(plans)
+    node.update(keywords=accepted['search_concepts'] or None, search_round=round_id,
+        next_database_index=0, round_outcomes=[], provider_outcomes={}, deferred_searches=[],
+        legacy_completed_provider_indices=[], search_blocked=blocked,
+        search_blocked_reason=('empty_selection' if not accepted['search_concepts'] else 'completed_queries_only') if blocked else None)
+    event.update(search_plan=accepted, repeated_queries=repeats, search_blocked=blocked,
+        search_blocked_reason=node['search_blocked_reason'], r1_projection=context)
+    return accepted
+
+
+def mark_submitted(node, plan, reference):
+    used = {concept_key(t) for t in plan['retained_concepts']}
+    for row in node.get('concept_candidates', []):
+        if row['normalized'] in used:
+            row['submitted_queries'].append({'provider': plan['provider'], 'query': plan['query'],
+                'round': node['search_round'], 'evidence_ref': reference})
+
+
+def validate_state(node):
+    records = node.get('concept_candidates', [])
+    require(isinstance(records, list), 'invalid R1 candidates')
+    seen = set()
+    for index, row in enumerate(records, 1):
+        require(isinstance(row, dict) and row.get('order') == index and row.get('node_id') == node['id']
+            and row.get('status') == 'unverified' and isinstance(row.get('term'), str)
+            and row.get('normalized') == concept_key(row['term']) and row['normalized'] not in seen,
+            'invalid R1 candidate identity')
+        seen.add(row['normalized'])
+        require(isinstance(row.get('original'), str) and isinstance(row.get('discovery_event'), str)
+            and isinstance(row.get('interaction_id'), str) and type(row.get('discovery_round')) is int
+            and 0 < row['discovery_round'] <= node.get('search_round', 0), 'invalid candidate provenance')
+        require(all(isinstance(row.get(k), list) for k in ('considered_rounds', 'selected_rounds', 'submitted_queries')),
+            'invalid candidate usage')
+    require(type(node.get('search_blocked', False)) is bool, 'invalid search block')
+    if node.get('search_blocked'):
+        require(node.get('search_blocked_reason') in {'empty_selection', 'completed_queries_only'}
+            and not node['pending_results'] and not node.get('deferred_searches')
+            and node['next_database_index'] == 0, 'invalid blocked handoff')

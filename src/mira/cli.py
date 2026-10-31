@@ -11,7 +11,7 @@ from . import research_cli
 def main():
     parser = argparse.ArgumentParser(prog="mira")
     parser.add_argument("--root", help="explicit corpus root (Phase 1 default: knowledge)")
-    parser.add_argument("--memory-dir", help="persistent research catalog (default: project memory/)")
+    parser.add_argument("--memory-dir", help="single active research corpus (default: project memory/)")
     parser.add_argument("--live", action="store_true", help="explicitly use live canonical storage")
     parser.add_argument("--test-embedding", action="store_true", help="token-hash test double, not semantic retrieval")
     parser.add_argument("--embedding-url")

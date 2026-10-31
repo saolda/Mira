@@ -153,7 +153,7 @@ def apply(state, memories, ledger, identity, inputs, value, supplied=None):
     output_id = "s" + base36(ledger["s"]); ledger["s"] += 1
     output = Memory(output_id, value["title"], value["summary"], metadata={"node_id": identity,
         "kind": "synthesis", "source_memories": [m.id for m in consumed], "synthesized_by": None,
-        "created_order": len(memories) + 1})
+        "created_order": len(memories) + 1, "markdown_format": 2})
     if supplied is not None:
         output.metadata["synthesis_inputs"] = [{"memory_id": s["id"], "memory_sha256": s["memory_sha256"],
             "representation": s["representation"],

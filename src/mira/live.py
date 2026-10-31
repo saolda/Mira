@@ -158,6 +158,12 @@ class LiveStore:
         result = {}
         for base in ("memories", "equations", "research", "events"):
             for p in self.path(base).rglob("*"):
+                # Protected legacy corpora can coexist during an explicit storage
+                # transition. They are independent stores, never active after-images.
+                relative_parts = p.relative_to(self.root).parts
+                if base == 'research' and len(relative_parts) > 2:
+                    legacy = self.root / 'research' / relative_parts[1]
+                    if (legacy / '.writer.lock').is_file() and (legacy / 'research').is_dir(): continue
                 self.path(p.relative_to(self.root).as_posix())
                 if p.is_file():
                     relative = p.relative_to(self.root).as_posix()
@@ -214,6 +220,9 @@ class LiveStore:
             self.path(entry["payload"])
 
     def read(self):
+        if not getattr(self, '_storage_transition', False) and any(
+                (self.root / name).exists() for name in ('.transition.json', '.reset.json')):
+            raise RecoveryRequired('incomplete storage transition; explicitly resume migration/reset')
         manifests = self._journals()
         orphans = self._orphans(manifests)
         if orphans or manifests and manifests[-1]["status"] != "committed":

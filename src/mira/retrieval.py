@@ -75,6 +75,7 @@ def next_entry(state, node, adapters, timestamp):
 
 
 def ready(state, node, adapters, timestamp):
+    if node.get('search_blocked'): return False
     if node['pending_results'] or node['keywords'] is None: return True
     if node['next_database_index'] < len(strategy(state)['databases']): return True
     return not node.get('deferred_searches') or next_entry(state, node, adapters, timestamp)[0] is not None
@@ -137,7 +138,13 @@ def perform(research, state, node, event):
     adapter = research.adapters.get(provider)
     until = eligible_at(state, entry, adapter)
     queue = node.setdefault('deferred_searches', [])
-    if until > timestamp:
+    from .r1 import completed, repeated
+    previous = repeated(entry, completed(research.store._files(), node['id']))
+    if previous is not None:
+        result = {'status': 'duplicate_skipped', 'results': [],
+                  'original_reference': previous['reference'], 'skipped': 'completed_query'}
+        submitted = False
+    elif until > timestamp:
         result = {'status':'deferred', 'results':[], 'skipped':'provider_availability', 'retry_at':until}
         entry['retry_at'] = until
         submitted = False
@@ -256,7 +263,7 @@ def validate_state(state):
                 all(type(i) is int and 0 <= i < n['next_database_index'] for i in legacy)
                 and len(legacy)==len(set(legacy)), 'invalid legacy provider prefix')
             require(isinstance(terminal, dict) and all(isinstance(k, str) and k.isdigit() and
-                0 <= int(k) < n['next_database_index'] and v in {'ok','empty','failed','unavailable'}
+                0 <= int(k) < n['next_database_index'] and v in {'ok','empty','failed','unavailable','duplicate_skipped'}
                 for k,v in terminal.items()), 'invalid terminal provider outcomes')
             groups = [seen, {int(k) for k in terminal}, set(legacy)]
             require(sum(map(len, groups)) == len(set.union(*groups)) and

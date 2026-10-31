@@ -188,7 +188,7 @@ class Research:
                     "committed_event": event})
 
     def _model(self, event, action, context, state):
-        context = {"research_brief": None, **context}
+        context = context if action == "R1" else {"research_brief": None, **context}
         reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
         require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
         unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
@@ -276,6 +276,7 @@ class Research:
             evidence_ref = "research/results/" + uuid.uuid4().hex + ".json"
             event.update(**plan, evidence_ref=evidence_ref)
             if submitted:
+                r1.mark_submitted(n, plan, evidence_ref)
                 used = self.glossary.used(query, state)
                 event['used_glossary_term_ids'] = used
                 n['used_glossary_term_ids'] = sorted(set(n.get('used_glossary_term_ids', [])) | set(used), key=lambda i:int(i[1:]))
@@ -305,12 +306,13 @@ class Research:
             if unique: n["pending_results"] = evidence_ref
         else:
             if action == "R1":
-                context = r1.context(state, memories, files, identity, self.control_terms)
+                lookup = r1.retrieval_context(state, memories, files, identity, self.control_terms)
                 started = time.perf_counter()
-                context["glossary_context"] = self.glossary.retrieve(state, context, identity)
+                terminology = self.glossary.retrieve(state, lookup, identity)
+                context = r1.context(state, memories, files, identity, self.control_terms, terminology)
                 event["glossary_retrieval"] = {"seconds": time.perf_counter() - started,
-                    "suggested_ids": [entry["id"] for entry in context["glossary_context"]["entries"]],
-                    "context_bytes": len(dumps(context["glossary_context"]).encode("utf-8"))}
+                    "suggested_ids": [entry["id"] for entry in terminology["entries"]],
+                    "context_bytes": len(dumps(terminology).encode("utf-8"))}
             elif action == "R3":
                 evidence = sources.hydrate(self.store, loads(files[n["pending_results"]]))
                 evidence["results"], duplicates = sources.unique(evidence["results"], state.setdefault("source_index", {}))
@@ -336,18 +338,13 @@ class Research:
                 event['source_dispositions'] = {r['id']:disposition for r in evidence['results']}
             else:
                 value = self._model(event, action, context, state)
-                decisions.validate(action, value)
+                decisions.validate(action, value, context['term_limit'] if action == 'R1' else None)
             if action == "R1":
-                accepted = r1.filter_terms(value["keywords"], self.control_terms)
-                self.trace.normalized[event["interaction_id"]] = {"keywords": accepted}
-                event["keyword_filter"] = {"original": value["keywords"], "accepted": accepted}
-                n["keywords"] = accepted
-                n["search_round"] = n.get("search_round",0) + 1
-                n["next_database_index"] = 0
-                n["round_outcomes"] = []
-                n["provider_outcomes"] = {}
-                n["deferred_searches"] = []
-                n['legacy_completed_provider_indices'] = []
+                selected = r1.filter_terms(value['search_concepts'], self.control_terms)
+                plans = [retrieval.compile_entry(state, p, selected) for p in databases] if selected else []
+                known = self.glossary.known(r1.filter_terms(value['new_concepts'], self.control_terms), state)
+                accepted = r1.accept(n, value, context, event, r1.completed(files, identity), plans, known)
+                self.trace.normalized[event['interaction_id']] = accepted
             elif action == "R3":
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
@@ -490,7 +487,7 @@ class Research:
             event = {"run_id": state["run_id"], "timestamp": now(),
                      "cycle": state["research_cycles"] + state["synthesis_cycles"] + state["branching_cycles"] + 1,
                      "research_cycle": state["research_cycles"] + 1,
-                     "node_id": state["active_node_id"], "action": "select", "status": "committed"}
+                     "node_id": state["active_node_id"], "action": "select", "status": "committed", "event_id": event_id}
             extras = {}
             try:
                 event["exhaustion"] = branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
@@ -499,24 +496,36 @@ class Research:
                     ready = [i for i in state['living_priority_order'] if retrieval.ready(state, state['nodes'][i], self.adapters, self.clock())]
                     active = state['active_node_id']
                     if active not in ready and ready: state['active_node_id'] = ready[0]
-                    synthesis_due = state['pending_synthesis'] is not None or (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] and state['synthesis_candidate_order'])
-                    if state['living_priority_order'] and not ready and not synthesis_due and not branching.due(state):
+                    blocked = [i for i in state['living_priority_order'] if state['nodes'][i].get('search_blocked')]
+                    synthesis_due = state['pending_synthesis'] is not None or bool(state['synthesis_candidate_order'] and
+                        (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] or blocked and not ready))
+                    branching_due = branching.due(state) or bool(blocked and not ready and state['ripeness_order'])
+                    if state['living_priority_order'] and not ready and not synthesis_due and not branching_due:
                         pending = {i:[{**e, 'eligible_at':retrieval.eligible_at(state,e,self.adapters.get(e['provider']))}
                             for e in state['nodes'][i].get('deferred_searches', [])] for i in state['living_priority_order']}
-                        retry_at = min(e['eligible_at'] for entries in pending.values() for e in entries)
+                        times = [e['eligible_at'] for entries in pending.values() for e in entries]
+                        if not times:
+                            return {'status': 'waiting_for_r4_upgrade', 'pending_r4': blocked,
+                                'recoverable': True, 'research_cycles': state['research_cycles'],
+                                'synthesis_cycles': state['synthesis_cycles']}
+                        retry_at = min(times)
                         return {'status':'waiting_for_provider', 'retry_at':retry_at, 'pending':pending,
+                            'pending_r4': blocked,
                             'research_cycles':state['research_cycles'], 'synthesis_cycles':state['synthesis_cycles']}
+                else:
+                    synthesis_due = state['pending_synthesis'] is not None or (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] and state['synthesis_candidate_order'])
+                    branching_due = branching.due(state)
 
-                if state["pending_synthesis"] is not None or (state["research_cycles_since_synthesis"] >= state["synthesis_interval"] and state["synthesis_candidate_order"]):
+                if synthesis_due:
                     success = self._synthesis(state, memories, equations, ledger, event)
-                elif branching.due(state):
+                elif branching_due:
                     # Publish a newly observed exhaustion before granting its R5
                     # opportunity; living -> exhausted -> split are durable transitions.
                     ready = next((i for i in state["ripeness_order"]
                                   if original[0]["nodes"][i]["status"] == "exhausted" or original[0]["mira_research"] == 1), None)
                     if ready:
                         success = self._branching(state, memories, equations, event, event_id, ready)
-                    elif state["active_node_id"] is not None:
+                    elif state["active_node_id"] is not None and not state['nodes'][state['active_node_id']].get('search_blocked'):
                         extras, success = self._research(state, memories, equations, ledger, files, event)
                     else:
                         event.update(action="capacity_transition", reason="capacity_transition")

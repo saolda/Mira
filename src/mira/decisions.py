@@ -43,7 +43,10 @@ def validate(action, value, evidence=None):
         select(evidence, value["strategy"])
     elif action == "R1":
         from .r1 import validate_concepts
-        fields(value, ["keywords"]); validate_concepts(value["keywords"])
+        fields(value, ["new_concepts", "search_concepts", "reason"])
+        validate_concepts(value["new_concepts"])
+        validate_concepts(value["search_concepts"], evidence if evidence is not None else 6)
+        text(value["reason"])
     elif action == "R4":
         fields(value, ["decision", "reason"])
         require(isinstance(value["decision"], str) and value["decision"] in {"kill", "answered", "retry"}, "invalid node decision")

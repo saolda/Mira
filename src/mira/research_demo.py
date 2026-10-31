@@ -25,7 +25,7 @@ class DemoLLM(ScriptedLLM):
     def complete(self, serialized_request):
         self.requests.append(serialized_request)
         content = loads(serialized_request)["messages"][-1]["content"]
-        action = ("R1" if "PREVIOUSLY GENERATED SEARCH TERMS\n" in content else
+        action = ("R1" if "AVAILABLE CONCEPTS\n" in content else
                   "R3" if "RETRIEVED RESEARCH\n" in content else
                   "R4" if "PREVIOUS SEARCHES\n" in content else
                   "R5" if "ACCUMULATED RESEARCH\n" in content else
@@ -33,7 +33,13 @@ class DemoLLM(ScriptedLLM):
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
-        if action == "R1": value = {"keywords": ["fictional", "heat", "barrier"]}
+        if action == "R1":
+            plans = [["fictional heat barrier", "measurement uncertainty"], ["thermal resistance", "heat flux"],
+                     ["thermal conductivity", "heat transfer"], ["boundary conditions", "thermal gradient"],
+                     ["measurement precision", "temperature dependence"], ["thermal diffusivity", "heat capacity"]]
+            count = getattr(self, '_plans', 0)
+            value = {"new_concepts": [], "search_concepts": plans[count % len(plans)], "reason": "Prewritten fixture plan."}
+            self._plans = count + 1
         elif action == "R3":
             supplied = decoder.raw_decode(content.split("RETRIEVED RESEARCH\n", 1)[1])[0]
             source_id = supplied["results"][0]["id"]

@@ -48,7 +48,8 @@ class ExecutionLog:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         sync_dir(self.directory.parent)
         self.identity = uuid.uuid4().hex
-        self.experiment = self.root.name
+        policy = self.root / 'experiment.json'
+        self.experiment = loads(policy.read_text()).get('name', self.root.name) if policy.exists() else self.root.name
         self.secrets = tuple(secrets)
         self.model, self.settings = model, settings
         # The random suffix prevents collisions and never reopens an old run.
@@ -108,7 +109,7 @@ class Interactions:
             yield self.log
             return
         root = self.store.root
-        directory = directory or ((root.parent.parent if root.parent.name == "research" else root.parent) / "run-logs")
+        directory = directory or ((root.parent.parent.parent if root.parent.name == "research" else root.parent) / "log")
         self.log = ExecutionLog(directory, root, command=command, model=model, settings=settings, secrets=self.secrets)
         exception, lease = None, None
         try:

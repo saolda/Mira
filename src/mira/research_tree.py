@@ -250,6 +250,8 @@ def validate(state, memories, files):
                 and isinstance(source.get("source"),dict) and isinstance(source.get("evidence_ref"),str), "invalid processed source")
     linked, orders = [], []
     for identity, n in nodes.items():
+        from .r1 import validate_state as validate_r1
+        validate_r1(n)
         require(re.fullmatch(r"q[1-9][0-9]*", identity) and n["id"] == identity and
                 n["created_order"] == int(identity[1:]) < state["next_node"], "invalid node allocator/order")
         require(n["status"] in {"living", "answered", "exhausted", "killed", "split"}, "invalid node status")
@@ -373,6 +375,7 @@ def metrics(state):
         if n["status"] == "living":
             living[depths[i]] += 1
     return {"active_node": state["active_node_id"], "research_cycles": state["research_cycles"],
+            "pending_r4_upgrade": [i for i, n in state['nodes'].items() if n['status'] == 'living' and n.get('search_blocked')],
             "synthesis_cycles": state["synthesis_cycles"], "max_depth": max(depths.values()),
             "living_by_depth": dict(sorted(living.items())), "nodes": state["nodes"],
             "candidates": state["synthesis_candidate_order"],
@@ -410,6 +413,15 @@ def validate_transition(before, after):
     require(after.get("mira_research") == 2, "cannot downgrade research state")
     for identity, old in before["nodes"].items():
         require(set(old.get("used_glossary_term_ids", [])) <= set(after["nodes"][identity].get("used_glossary_term_ids", [])), "cannot forget submitted glossary terms")
+        previous = old.get('concept_candidates', [])
+        current = after['nodes'][identity].get('concept_candidates', [])
+        require(len(current) >= len(previous), 'cannot forget discovered concepts')
+        for earlier, later in zip(previous, current):
+            mutable = {'considered_rounds', 'selected_rounds', 'submitted_queries', 'last_considered_round'}
+            require({k:v for k,v in earlier.items() if k not in mutable} ==
+                    {k:v for k,v in later.items() if k not in mutable}, 'candidate provenance is immutable')
+            require(all(later[k][:len(earlier[k])] == earlier[k] for k in mutable - {'last_considered_round'})
+                and later['last_considered_round'] >= earlier['last_considered_round'], 'cannot forget candidate usage')
     if "synthesis_attempts" in before:
         require(all(k in after for k in ("synthesis_attempts", "pending_synthesis", "synthesis_evaluated_catalogue")),
                 "cannot discard synthesis bookkeeping")

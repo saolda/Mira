@@ -283,6 +283,19 @@ class Directory:
             row = db.execute("SELECT id,sha FROM terms WHERE key=?", (key,)).fetchone()
         return self._read(row["id"], row["sha"]) if row else None
 
+    def known(self, terms, state):
+        """Bounded indexed membership check for R1 discoveries, including aliases."""
+        self.ensure(state)
+        known = []
+        with closing(self._db()) as db:
+            for term in terms:
+                row = db.execute('SELECT t.id,t.sha FROM names n JOIN terms t ON n.id=t.id WHERE n.name=? LIMIT 1',
+                    (normalize(term),)).fetchone()
+                if row:
+                    self._read(row['id'], row['sha'])
+                    known.append(term)
+        return known
+
     def proposals(self, state, values, evidence, node_id):
         self.ensure(state)
         accepted, rejected = [], []
@@ -366,7 +379,8 @@ class Directory:
             names = r1.tokens(row["term"] + " " + row["aliases"])
             return (4 * len(names & relevant) + len(names & findings) + .1 * (row["id"] not in used), -int(row["id"][1:]))
         entries = []
-        result = {"entries": entries, "untrusted_glossary_data": True}
+        result = {"entries": entries, "untrusted_glossary_data": True,
+                  "omitted_count": meta['next_id'] - 1, "selection_policy": "indexed relevance then per-node novelty"}
         for row in sorted(candidates.values(), key=score, reverse=True):
             term, _ = r1.clean_text(row["term"], 160)
             if not term: continue
@@ -392,6 +406,7 @@ class Directory:
                 entry["relationships"] = [{"target": link["target"], "type": link["type"]} for link in record["relationships"][:3]]
         while entries and len(dumps(result).encode("utf-8")) > meta["token_budget"]:
             entries.pop()
+        result['omitted_count'] = meta['next_id'] - 1 - len(entries)
         return result
 
     def export(self, state):

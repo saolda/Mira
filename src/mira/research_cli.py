@@ -14,7 +14,8 @@ def register(sub):
     init = sub.add_parser("research-init")
     init.add_argument("question", nargs="?", help="research question (alternative to --question-file)")
     init.add_argument("--question-file", metavar="PATH", help="Markdown question, optional context and research objectives")
-    init.add_argument("--disposable", action="store_true", help="designate this development experiment for explicit cleanup after completion")
+    init.add_argument("--disposable", action="store_true", help="legacy flag accepted for compatibility; new runs use one active corpus")
+    init.add_argument("--new-experiment", action="store_true", help="explicitly replace the previous generated active corpus; preserve private inputs")
     selection = init.add_mutually_exclusive_group()
     selection.add_argument("--database", action="append", help="explicit database sequence (compatibility)")
     selection.add_argument("--strategy", help="named strategy; omit for mandatory R0 selection")
@@ -47,7 +48,7 @@ def register(sub):
     run.add_argument("--acknowledge-interrupted-searches", action="store_true", help="authorize another submission after inspecting uncertain retrieval_calls")
     demo = sub.add_parser("research-demo")
     demo.add_argument("--max-cycles", type=int, default=50)
-    cleanup = sub.add_parser("research-cleanup", help="list experiments; delete explicitly selected, completed disposable experiments only with --apply")
+    cleanup = sub.add_parser("research-cleanup", help="inspect legacy corpora; remove explicitly selected idle, recovery-safe legacy directories with --apply")
     cleanup.add_argument("--experiment", action="append", default=[])
     cleanup.add_argument("--older-than-days", type=float)
     cleanup.add_argument("--apply", action="store_true")
@@ -68,7 +69,7 @@ def register(sub):
     show = sub.add_parser("transcript")
     show.add_argument("--full", action="store_true")
     show.add_argument("--concise", action="store_true")
-    show.add_argument("--output", help="optional export path; catalog runs also export under memory/transcripts/")
+    show.add_argument("--output", help="optional export path; managed runs also export under log/transcripts/")
     for command in (init, run, demo, state, show, prune, glossary_export, glossary_rebuild):
         command.add_argument("--experiment", help="persistent experiment name")
 
@@ -93,15 +94,24 @@ def execute(args):
     require(not (args.root and args.experiment), "choose --root or --experiment")
     managed = args.root is None
     if managed:
-        path = catalog.create(args.experiment, disposable=args.command == "research-demo" or getattr(args, "disposable", False)) if args.command in {"research-init", "research-demo"} else catalog.select(args.experiment)
+        try:
+            path = catalog.create(args.experiment, reset=getattr(args, 'new_experiment', False)) if args.command in {"research-init", "research-demo"} else catalog.select(args.experiment)
+        except BaseException as exc:
+            if args.command in {'research-init', 'research-demo', 'research-run'}:
+                from .interactions import ExecutionLog, configured_secrets
+                failed = ExecutionLog(catalog.log_home, catalog.home, command=args.command, secrets=configured_secrets())
+                failed.close(exc)
+            raise
         args.root = str(path)
-        args.experiment = path.name
+        args.experiment = catalog.active_name() if path == catalog.home else path.name
+    elif args.command == 'research-init' and args.new_experiment:
+        Experiments(args.root).create(Path(args.root).absolute().name, reset=True)
     if args.command in {"research-init", "research-run", "research-demo"}:
         from .interactions import Interactions, configured_secrets
         from .live import LiveStore
         import os
         trace = Interactions(LiveStore(args.root), configured_secrets([os.environ.get(getattr(args, "api_key_env", "MIRA_LLM_API_KEY"), "")]))
-        directory = catalog.home / "run-logs" if managed or args.memory_dir else None
+        directory = catalog.log_home if managed or args.memory_dir else None
         with trace.execution(directory, command=args.command) as log:
             result = _execute(args, catalog, managed, trace)
             log.reason = result.get("status", "initialized")
@@ -185,5 +195,5 @@ def _tag_explicit_root(args, managed, *, disposable):
     if managed: return
     from .experiments import atomic_text
     from .interactions import now
-    atomic_text(Path(args.root).absolute() / "experiment.json", dumps({"version": 1,
-        "created_at": now(), "retention": "disposable" if disposable else "retain"}))
+    atomic_text(Path(args.root).absolute() / "experiment.json", dumps({"version": 2,
+        "name": Path(args.root).absolute().name, "created_at": now(), "layout": "single-active-corpus"}))
