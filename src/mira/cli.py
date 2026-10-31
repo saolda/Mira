@@ -42,7 +42,7 @@ def main():
         from .viewer import serve
         serve(args.memory_dir, port=args.port)
         return
-    if args.command in {"research-init", "research-run", "research-state", "research-demo", "research-import", "transcript", "research-prune", "glossary-export", "glossary-rebuild", "research-cleanup"}:
+    if args.command in {"research-init", "research-run", "research-state", "research-demo", "research-import", "transcript", "research-prune", "glossary-export", "glossary-view", "glossary-rebuild", "research-cleanup"}:
         result = research_cli.execute(args)
         print(result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False))
         return

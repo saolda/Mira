@@ -16,7 +16,7 @@ mira = "mira.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mira = ["strategies.json", "query_profiles.json", "viewer_assets/*.html", "viewer_assets/*.js", "viewer_assets/*.css"]
+mira = ["strategies.json", "query_profiles.json", "viewer_assets/*.html", "viewer_assets/*.js", "viewer_assets/*.css", "glossary_assets/*.js", "glossary_assets/*.css"]
 
 [tool.setuptools.data-files]
 "share/mira/prompt_templates" = ["prompt_templates/*.txt"]

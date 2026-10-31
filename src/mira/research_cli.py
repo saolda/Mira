@@ -56,7 +56,7 @@ def register(sub):
     policy.add_argument("--disposable", dest="retention", action="store_const", const="disposable", help="designate selected experiments disposable; this mode never deletes")
     policy.add_argument("--retain", dest="retention", action="store_const", const="retain", help="protect selected experiments from cleanup")
     state = sub.add_parser("research-state")
-    glossary_export = sub.add_parser("glossary-export", help="regenerate research/glossary.md")
+    glossary_export = sub.add_parser("glossary-export", aliases=['glossary-view'], help="export Markdown and standalone searchable HTML glossaries")
     glossary_rebuild = sub.add_parser("glossary-rebuild", help="rebuild the disposable glossary SQLite index")
     prune = sub.add_parser("research-prune")
     prune.add_argument("--apply", action="store_true", help="discard completed temporary retrievals; default dry run")
@@ -179,11 +179,11 @@ def _execute(args, catalog, managed, trace=None):
         return {**result, "storage_root": args.root, "experiment": args.experiment}
     if args.command == "research-state": return research.inspect()
     if args.command == "research-prune": return research.prune_retrievals(apply=args.apply)
-    if args.command in {"glossary-export", "glossary-rebuild"}:
+    if args.command in {"glossary-export", "glossary-view", "glossary-rebuild"}:
         with research.store.lock():
             research.store.read()
             state = loads(research.store._files()["research/state.json"])
-            if args.command == "glossary-export": return research.glossary.export(state)
+            if args.command in {"glossary-export", "glossary-view"}: return research.glossary.export(state)
             research.glossary.ensure(state, rebuild=True)
             return {"path": str(research.glossary.path), "rebuilt": True}
     if args.acknowledge_interrupted: research.acknowledge_interrupted()

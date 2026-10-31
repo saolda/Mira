@@ -59,6 +59,21 @@ LLM prompts are editable in [prompt_templates/](prompt_templates/).
 The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.
 
+Generate the complete glossary as Markdown and a standalone searchable HTML page:
+
+```bash
+PYTHONPATH=src python3 -m mira glossary-view
+xdg-open memory/research/glossary.html
+```
+
+`glossary-export` is an alias for the same operation. Both commands write
+`memory/research/glossary.md` and `memory/research/glossary.html`, using complete,
+hash-validated canonical entries in alphabetical order. The HTML works offline
+from `file://`; its search matches names and aliases, with arrow keys and Enter
+for navigation. Ctrl+F remains available for full text. `--memory-dir PATH`
+selects another active corpus, and `--experiment NAME` supports legacy corpora.
+Exports are derived views; canonical research and glossary records stay unchanged.
+
 Each `research-init`, `research-run` and `research-demo` invocation writes a new,
 append-only JSONL file in ignored project `log/` (beside `--memory-dir` when configured). Filenames include UTC time, experiment name and a unique suffix.
 Resuming creates another file. Logs contain complete rendered prompts and inputs,

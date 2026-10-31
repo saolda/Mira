@@ -410,23 +410,38 @@ class Directory:
         return result
 
     def export(self, state):
+        """Export both views under the caller's live-store writer lock."""
+        from . import glossary_view
+        self.store.read()  # Recovery/canonical gate also applies to direct API callers.
         self.ensure(state)
-        with closing(self._db()) as db:
-            rows = sorted(db.execute("SELECT id,term,sha FROM terms"), key=lambda r: (r["term"].casefold(), r["id"]))
-        lines = ["# Research glossary", "", "Source-derived terminology; definitions are not independently verified.", ""]
-        for row in rows:
-            record = self._read(row["id"], row["sha"])
-            lines += ["## " + r3_prose(record["term"]) + " (" + record["id"] + ")", "", "Status: " + record["status"], ""]
-            if record["aliases"]: lines += ["Aliases: " + ", ".join(map(r3_prose, record["aliases"])), ""]
-            for definition in record["definitions"]:
-                lines += ["- " + r3_prose(definition["text"]) + " — " + r3_prose(definition["qualification"])]
-            for evidence in record["evidence"]:
-                lines += ["", "> " + r3_prose(evidence["passage"]).replace("\n", "\n> "), "", "Source: " + r3_prose(evidence["source_id"]) + "; evidence: " + evidence["evidence_ref"] + "; node: " + evidence["node_id"]]
-                if evidence["qualification"]: lines += ["", "Qualification: " + r3_prose(evidence["qualification"])]
-            for link in record["relationships"]: lines += ["", link["type"] + ": " + link["target"]]
-            lines += [""]
-        self.store._replace("research/glossary.md", "\n".join(lines))
-        return {"path": str(self.store.path("research/glossary.md")), "entries": len(rows)}
+        # Export is an explicit full audit. Neither a stale index nor forged cache
+        # hashes may hide missing/unregistered or externally changed canonical data.
+        manifests = self.store._journals()
+        verify(self.store, state, manifests)
+        hashes = {entry['path'].split('/')[1][:-5]: entry['after'] for manifest in manifests
+                  for entry in manifest['files'] if TERM_PATH.fullmatch(entry['path'])}
+        for attempt in range(2):
+            try:
+                with closing(self._db()) as db:
+                    # Python's Unicode casefold preserves the existing Markdown
+                    # order; SQLite performs enumeration and sorting, not FTS.
+                    db.create_collation('GLOSSARY_ALPHABETICAL', lambda a, b:
+                        (a.casefold() > b.casefold()) - (a.casefold() < b.casefold()))
+                    rows = list(db.execute('SELECT id,term,sha FROM terms ORDER BY term COLLATE GLOSSARY_ALPHABETICAL,id'))
+                valid = len(rows) == len(hashes) and {row['id']: row['sha'] for row in rows} == hashes
+            except sqlite3.DatabaseError:
+                valid = False
+            if valid:
+                records = [self._read(row['id'], hashes[row['id']]) for row in rows]
+                valid = all(record['term'] == row['term'] for record, row in zip(records, rows))
+            if valid: break
+            require(attempt == 0, 'glossary index differs from committed records')
+            self.ensure(state, rebuild=True)
+        outputs = {'research/glossary.md': glossary_view.markdown(records),
+                   'research/glossary.html': glossary_view.html(records)}
+        glossary_view.publish(self.store, outputs)
+        return {'path': str(self.store.path('research/glossary.md')),
+                'html_path': str(self.store.path('research/glossary.html')), 'entries': len(records)}
 
 
 def r3_prose(text):

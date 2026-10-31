@@ -1,19 +1,19 @@
 # Latest development test results
 
-Recorded: 2026-10-31T03:45:58.081587+00:00
+Recorded: 2026-10-31T04:37:33.486416+00:00
 
-Tested implementation commit: `89cc7e994c9978f459b155854bdb2a0c053731aa (working tree under test)`.
+Tested implementation commit: `6fcb80604a12dfaa53da2bcbc22ceff4ea2939ea (working tree under test)`.
 
-Tests: **381**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **392**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-R4 scientific projections, synthesis support closure, exact anchors and source attribution, approved prompt slots, root-kill rejection, unresolved round transitions, search-exhaustion proof and below-capacity R5, deferred/R3 guards, restart and journal recovery, and complete-context budget enforcement. Exact R4 prompt verified against the supplied request.
+glossary-export/glossary-view compatibility; complete hash-validated records and provenance; Unicode alphabetical ordering; standalone HTML with safe names/aliases-only search, keyboard navigation, highlighting, relationship links and CSP; corrupt/stale index repair; deterministic and atomic exports; canonical-state and recovery preservation. Real offline Chromium desktop/mobile checks passed. Current corpus exports contain 6 entries.
 
 ## Regressions and limitations
 
-- Scientific judgments use controlled scripted fixtures; no live scientific-quality experiment was run.
+None reported.
 
 ## Execution logs
 

@@ -199,7 +199,7 @@ class Experiments(LegacyReader):
                 require(not child.is_symlink(), 'symlink generated file')
                 if re.fullmatch(pattern, child.name) and child.is_file(): result.append(child)
                 # Unrelated files are not generated and remain untouched.
-        for relative in ('research/state.json', 'research/question.md', 'research/glossary.md',
+        for relative in ('research/state.json', 'research/question.md', 'research/glossary.md', 'research/glossary.html',
                          'identity.json', 'glossary.sqlite3', 'glossary.sqlite3-wal', 'glossary.sqlite3-shm',
                          'index.sqlite3', 'index.sqlite3-wal', 'index.sqlite3-shm'):
             path = root / relative
