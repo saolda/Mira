@@ -229,6 +229,22 @@ class TerminologyTests(unittest.TestCase):
         self.assertEqual(self.record()['terminology'][-1]['status'],'error')
         self.assertEqual(self.transport.call_count,0)
 
+    def test_malformed_unicode_cache_cannot_discard_scientific_memory(self):
+        import json
+        _,_,e=self.lookup()
+        for path in self.cache.glob('*.json'):
+            data=loads(path.read_text())
+            if 'result' in data:
+                data['result']['concepts'][0]['descriptions'][0]['text']='\ud800'
+                path.write_text(json.dumps(data))
+        self.transport.side_effect=[TimeoutError('fallback API unavailable')]
+        research=self.make_research(e)
+        event=research.step()
+        self.assertEqual(event['status'],'committed')
+        self.assertEqual(event['memory_ids'],['r1'])
+        self.assertEqual(self.record()['definitions'],[])
+        self.assertEqual(self.record()['terminology'][-1]['status'],'unavailable')
+
     def test_unsupported_empty_or_metadata_source_is_not_admitted(self):
         for content in ['', 'Unrelated metadata only.']:
             with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
