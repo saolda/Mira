@@ -6,14 +6,16 @@ in `branching.py`, and the synthesis gardener.
 
 ## Implementation status and scope (31 October 2026)
 
-The R1 two-responsibility contract, single-active-corpus storage layout and
-compact synthesis Markdown below are **approved targets for the next implementation**.
-They are not claims that existing Python code already implements them.
-R2 retains **one logical provider search per action**. R3 retains one source
-per action. **R4's prompt and scientific decision contract will be reviewed
-separately next; do not implement or silently alter them in the R1/storage task.**
-Existing on-disk experiments and legacy memory layouts remain readable until
-the explicitly requested transition and cleanup.
+The R1 discovery/selection contract, single-active-corpus storage,
+compact synthesis Markdown and R4 scientific-assessment contract have been
+implemented (R1/storage: `4c18972`, `89cc7e9`; R4: `fe684fd`).
+Each R1 plan serves the full provider round; R2 executes **one logical
+provider search per action**, and R3 extracts one source per action.
+The R4 decision set is `answered|kill|unresolved`, with Python-owned
+`search_blocked` exhaustion and a separate capacity-exhaustion path.
+Historical file formats and legacy corpora remain compatible for reading.
+**Research-stagnation detection/termination is a future proposal, not
+implemented by these changes.**
 
 ## Purpose and canonical knowledge
 
@@ -247,7 +249,7 @@ Other research nodes and synthesis actions may be scheduled between steps.
 | **R1** | **Plan** | Discover 0–6 genuinely new concepts and select one ordered search plan for the **whole provider round**. | Read selected `question` and bounded context; supply `term_limit = max(profile.max_terms)` for this strategy; persist new candidates and accepted `keywords`/`search_concepts`; increment `search_round`; reset `next_database_index=0`. Empty/repeat-only selection sets a durable `search_blocked` flag. | **1** |
 | **R2** | **Search** | Compile and execute **one logical provider search** using the **same R1 concept list**. | Read `keywords`, `next_database_index` and the provider's snapshotted query profile; advance index **once on first visit**; record `provider_outcomes`, query/receipt and optional `deferred_searches`; set `pending_results` for new sources. | **0** |
 | **R3** | **Extract** | Extract one previously unprocessed retrieved source. | Read `pending_results` and the per-source processed cursor; create at most one `r*` memory, accepted glossary terms/equations and source disposition; advance processing state atomically. | **1** |
-| **R4** | **Assess** | Evaluate whether direct investigation answered the selected question, went off-track or remains unresolved. **Exact revised decisions are deferred to the next design review.** | Requires the provider pass and R3/deferred work to be complete, or the pending `search_blocked` handoff after R4 is updated; subsequently changes node `status`/next-round eligibility. Existing R4 validation/prompt is unchanged in this implementation stage. | **1** |
+| **R4** | **Assess** | Assess whether relevant direct and synthesized scientific evidence answers the selected question, is irrelevant to both parent and root, or remains unresolved. | Read `question`, `question_scope`, `scientific_evidence`; return `answered|kill|unresolved`. Python persists `last_r4_assessment`, updates `status=answered|killed`, resets R1 when unresolved and unblocked, or sets `exhaustion_reason=search_blocked` and `status=exhausted` when unresolved and blocked. | **1** |
 | **R5** | **Branch** | Develop child research questions from an eligible exhausted node. | Read `status=exhausted` and ripeness; allocate child node IDs; persist `child_ids`, `split_attempt` and `status=split` (even for an empty split). | **1** |
 
 A normal progression is `R1 → R2 → R3 (one action per source, if any)
@@ -277,13 +279,11 @@ effective provider query is needed for a productive R1 round.
 When R1 returns no selected concepts, or every effective provider query
 would repeat completed work, Python records its discoveries plus
 `search_blocked=true` and its reason, with **no fictitious R2/R3 actions**.
-A blocked node is not immediately declared answered, killed or exhausted.
-The blocked-node handoff and final R4 decisions will be completed in the
-**separate R4 design task**. Until then, the harness must not busy-loop R1,
-silently convert a block into a scientific conclusion or invoke incompatible
-R4 decisions; it may report an explicit recoverable waiting-for-R4-upgrade
-state while continuing other eligible nodes. Capacity exhaustion remains
-separate and retains its existing safeguards.
+A blocked node remains `living` for its next eligible R4 assessment.
+R4 judges the available science; Python declares it `exhausted` only if
+R4 returns `unresolved`. An `answered` or `kill` assessment instead
+sets the corresponding terminal research status. No R1/R4 retry loop is
+permitted while `search_blocked`. Capacity exhaustion remains separate.
 
 ### R2: query compilation and evidence
 
@@ -430,9 +430,9 @@ Python-generated scientific terms is permitted. Preserve the exact raw
 model response and normalized outcome for auditing.
 
 Empty/repeat-only selections set durable `search_blocked` with reason
-and leave the node available for the **future R4 blocked-path assessment**,
-not automatically exhausted. R4's revised decision contract is a separate
-review and must not be inferred from this R1 specification.
+and make the next eligible direct research action R4. Python does not
+automatically exhaust or answer the node; it applies the R4 scientific
+decision as specified below.
 
 ### R3: ordered extraction and provenance
 
@@ -526,25 +526,75 @@ rebuilds it. `glossary-export --experiment NAME` atomically regenerates the deri
 case-insensitive alphabetical `research/glossary.md`, including evidence and links.
 R3 never rewrites that whole export; it may be stale until explicitly regenerated.
 
-### R4: assess research progress (separate next design review)
+### R4: assess research progress
 
-R4's **currently implemented** prompt accepts `kill`, `answered` and
-`retry` following a fully completed provider round. It receives the
-assigned question, ancestor scope, direct research and compact search
-history. R4 cannot generate search terms or child questions. An
-unsuccessful search does not prove that the question is answered or
-irrelevant. The existing prompt and validator remain unchanged for the
-R1/storage implementation task.
+R4 makes a **scientific assessment**, not a search-planning or scheduling
+decision. It runs after a complete provider round (no pending R3 evidence
+or deferred provider searches) **or** after R1 has durably recorded
+`search_blocked=true`. It makes one LLM call and returns exactly
+`{"decision":"unresolved","reason":"Brief evidence-based explanation."}`.
 
-**Next planned R4 review (not part of this task):** decide how to
-incorporate relevant, source-checkable synthesis memories, how to
-assess relevance to both parent **and** root objectives, and how to
-replace `retry` with a scientific `unresolved` judgment. Python should
-then combine that scientific assessment with the deterministic
-`search_blocked` flag to choose between another R1 round and
-exhaustion/R5. No new R4 decision schema is approved by this section;
-do not silently implement the superseded `no_viable_search` /
-R4 `exhausted` contract.
+#### Inputs and how to use them
+
+Python supplies exactly these three R4 prompt inputs:
+
+| Input | Contents | How R4 uses it |
+| --- | --- | --- |
+| `question` | The selected research question. | Decide whether **this question**, not a related one, has been answered. |
+| `question_scope` | Immediate parent question (if any), root question, `is_root` and relevant research objectives. | Judge relevance to **both** parent and root; objectives set scope, not scientific evidence. |
+| `scientific_evidence` | Relevant direct and synthesis memories, anchored findings, supporting sources/relationships, qualifications, unresolved questions and coverage details. | Assess completeness, citation support, contradictions and limitations; check synthesized claims against source findings. |
+
+R4 receives **no** provider configuration, search concepts, query histories
+or search scheduling state. Python retains these separately.
+
+The evidence projection deterministically includes eligible direct
+research **including consumed originals**, applicable synthesis findings
+(including relevant descendant/related lineage), exact supporting
+finding anchors, source citations, relevant questions, equations,
+qualifications and relationships. Killed-branch evidence is excluded.
+Present each scientific unit once; do not replace full scientific
+support with an unsupported summary or add model-generated interpretation
+when constructing the projection. Preserve attribution and uncertainties.
+
+Check whether findings support conclusions for the populations,
+comparators, measurements, timescales and limitations actually supplied.
+A synthesis is **not independent scientific evidence**; valid anchors
+prove traceability, not scientific correctness. One sufficiently
+conclusive reliable direct source may answer a question without requiring
+a synthesis, while numerous syntheses may remain inadequate.
+
+The evidence projection explicitly identifies its coverage and missing
+support. If necessary scientific context would exceed the model budget,
+fail with the existing explicit context-budget error **before dispatch**,
+rather than silently truncating evidence and claiming completeness.
+Unsuccessful searches do not establish a scientific proposition's truth
+or falsity.
+
+#### Decisions and deterministic effects
+
+| R4 decision | Scientific meaning | Python transition |
+| --- | --- | --- |
+| `answered` | Available evidence adequately addresses all material aspects of the selected question with justified, appropriately qualified conclusions. | Set `status=answered`. |
+| `kill` | The selected question is irrelevant to **both** its immediate parent and the root research objectives. **Invalid for root nodes.** | Set `status=killed`; retain records and killed-branch synthesis restrictions. |
+| `unresolved` | The question remains relevant but is not adequately answered by the supplied evidence. | If unblocked, remain `living`, preserve history and reset `keywords`/`next_database_index` for another R1 round. If `search_blocked=true`, set `status=exhausted` and `exhaustion_reason=search_blocked`. |
+
+The validator accepts exactly `answered|kill|unresolved` and a nonempty
+`reason`. The root cannot return `kill`; R4 never generates search terms,
+child questions or research plans. Python decides whether searches remain,
+rather than asking R4 to judge provider availability.
+
+Every R4 assessment is durably recorded in `last_r4_assessment` with
+the decision, interaction ID, committed event reference and prior
+`search_blocked` status. Search-blocked exhaustion additionally persists
+`exhaustion_assessment`, linking that validated `unresolved` decision
+to the `exhausted` state. These updates, the event and state transition
+commit atomically and survive restart and journal repair.
+
+For an unresolved search-blocked node, R5 may run **below** the normal
+research-capacity threshold, but only after validating this exact
+R4 exhaustion receipt. Capacity-based exhaustion remains independent.
+Neither search exhaustion nor lack of evidence is proof that the question
+has been answered.
 
 ## Deterministic research capacity
 
@@ -587,12 +637,21 @@ bytes from today's templates.
 
 ## Ripeness queue
 
-Only nodes with `status=exhausted` enter `ripeness_order`.
-The **implemented** path is deterministic research-capacity exhaustion.
-A future R4 design may also make a persistently search-blocked, scientifically
-unresolved node exhausted, but that transition is **not part of the current
-R1/storage implementation** and must be reviewed separately before R5
-accepts it below the capacity threshold. The score starts as:
+Only nodes with `status=exhausted` enter `ripeness_order`. Two
+exhaustion causes are implemented:
+
+1. **`research_capacity_reached`:** a living node crosses the
+   deterministic R5 context-capacity threshold with direct research,
+   after its pending retrieval/extraction obligations are resolved.
+2. **`search_blocked`:** R1 has no distinct worthwhile search and
+   a committed R4 assessment returned `unresolved`. Python stores
+   and validates the exact R4 event/receipt; R5 accepts this cause
+   even when the capacity threshold has **not** been reached.
+
+The causes remain distinct. Failed/deferred searches alone prove
+neither scientific exhaustion nor an answer. A future
+research-stagnation guard, if approved, would require its **own**
+exhaustion cause and reviewed transition policy. The score starts as:
 
 `ripeness = F + 2*H + 2*Q - D`
 
@@ -823,13 +882,14 @@ separate from current scientific memory and clearly label old runs.
 Human-readable per-memory or per-question browsing should not require
 navigating logs, journals or old experiment directories.
 
-The current implementation still uses `memory/research/<name>/` and
-`memory/run-logs/`. The R1/storage Codex task must implement the
-single-corpus transition and explicitly requested removal of prior
-generated experiments, with compatibility for reading older formats
-and with safe journal/lock handling. The earlier experiment-catalog
-`retain/disposable` workflow is superseded for new runs; do not retain
-it as a second default directory layout.
+The single-active-corpus layout, explicit new-experiment reset and
+project `log/` execution directory are implemented. New research
+does not create `memory/research/<name>/` subfolders. Legacy
+corpora remain readable through explicit compatibility paths, and
+the dedicated cleanup operation can remove verified idle legacy
+experiment directories; **implementation does not prove that every
+old directory on a particular machine has been removed**. The former
+retain/disposable catalogue is not the default new-experiment layout.
 
 Every multi-file operation uses the existing small journal: validated changed-file
 after-images are fsynced, a prepared manifest is published before canonical edits,
