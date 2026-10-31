@@ -421,11 +421,10 @@ class Research:
             event["decision"] = value
             if not inputs:
                 event["reason"] = "no_candidate"
-                # Only terminal catalogues are guarded; active research gets a
-                # fresh S1 assessment at the next normal synthesis cadence.
-                if not state["living_priority_order"] and not state["ripeness_order"]:
-                    state["synthesis_evaluated_catalogue"] = {"fingerprint": tree.catalogue_fingerprint(state, memories),
-                                                            "reason": value["reason"], "interaction_id": event["interaction_id"]}
+                # The guard applies while research continues too. New eligible
+                # memory versions or question scope invalidate it in refresh().
+                state["synthesis_evaluated_catalogue"] = {"fingerprint": tree.catalogue_fingerprint(state, memories),
+                                                        "reason": value["reason"], "interaction_id": event["interaction_id"]}
                 state.pop("synthesis_deferred", None)
             else:
                 identity, supplied, selection = gardener.prepare(state, memories, equations, inputs, value["objective"],

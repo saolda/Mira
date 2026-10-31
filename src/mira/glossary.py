@@ -368,19 +368,33 @@ class Directory:
                 if link not in record["relationships"]: record["relationships"].append(link)
         enrichment = None
         if enricher is not None:
+            from .terminology import FAILURE_COOLDOWN, RESULT_TTL, lookup_due, timestamp, failure_reason
             # Newly admitted records and touched undefined candidates first; a
             # bounded indexed backlog lets later R3 actions enrich older candidates.
-            targets = [r for r in records.values() if not r['definitions'] or
-                       int(r['id'][1:]) >= metadata(state)['next_id']]
+            now = enricher.clock()
+            targets = [r for r in records.values() if (not r['definitions'] or
+                       int(r['id'][1:]) >= metadata(state)['next_id'] or
+                       (r.get('terminology') and r['terminology'][-1]['status'] in
+                        {'not_attempted', 'unavailable', 'error'}))
+                       and lookup_due(r, now)]
+            with closing(self._db()) as db:
+                suppressed = db.execute("""SELECT COUNT(*) FROM terms t JOIN lookups l ON l.id=t.id
+                    WHERE l.status IN ('unavailable','error') AND l.checked>?""",
+                    (now-FAILURE_COOLDOWN,)).fetchone()[0]
             if len(targets) < enricher.max_terms:
                 with closing(self._db()) as db:
                     backlog = list(db.execute("""SELECT t.id,t.sha FROM terms t LEFT JOIN lookups l ON l.id=t.id
-                        WHERE t.status='candidate' AND (l.status IS NULL OR l.status IN ('unavailable','error','not_attempted') OR l.checked<?)
-                        ORDER BY l.checked,CAST(substr(t.id,2) AS INTEGER) LIMIT ?""",
-                        (enricher.clock()-86400, enricher.max_terms + len(records))))
+                        WHERE (t.status='candidate' OR l.status IN ('not_attempted','unavailable','error'))
+                            AND (l.status IS NULL OR l.status='not_attempted'
+                            OR (l.status IN ('unavailable','error') AND l.checked<=?)
+                            OR (l.status IN ('matched','not_found','ambiguous') AND l.checked<=?))
+                        ORDER BY CASE WHEN l.status IS NULL OR l.status='not_attempted' THEN 0 ELSE 1 END,
+                            l.checked,CAST(substr(t.id,2) AS INTEGER) LIMIT ?""",
+                        (now-FAILURE_COOLDOWN, now-RESULT_TTL, enricher.max_terms + len(records))))
                 for row in backlog:
                     if row['id'] not in records:
                         record = self._read(row['id'], row['sha'])
+                        if not lookup_due(record, now): continue
                         records[record['id']] = record; targets.append(record)
                         if len(targets) >= enricher.max_terms: break
             # The optional boundary cannot invalidate already validated science.
@@ -388,10 +402,11 @@ class Directory:
                 outcomes, enrichment = enricher.enrich(targets)
                 require(isinstance(outcomes, dict) and isinstance(enrichment, dict), 'invalid enrichment result')
             except Exception as exc:
-                from .terminology import timestamp, failure_reason
                 outcomes = {r['id']: {'provider': 'mesh', 'term': r['term'], 'status': 'error',
-                    'reason': failure_reason(exc), 'retrieved_at': timestamp(), 'concepts': []} for r in targets}
+                    'reason': failure_reason(exc), 'retrieved_at': timestamp(enricher.clock()), 'concepts': []} for r in targets}
                 enrichment = {'api_calls': 0, 'outcomes': list(outcomes.values()), 'error': failure_reason(exc)}
+            # Count entries suppressed in this action, not API requests.
+            enrichment['cooldown_suppressions'] = suppressed
             for record in targets:
                 result = outcomes.get(record['id'])
                 if result is None: continue
@@ -400,9 +415,8 @@ class Directory:
                     validate_result(result, record['term'])
                 except (ValueError, TypeError, KeyError) as exc:
                     enrichment.setdefault('rejected', []).append({'id': record['id'], 'error': str(exc)})
-                    from .terminology import timestamp, failure_reason
                     record.setdefault('terminology', []).append({'provider': 'mesh', 'term': record['term'],
-                        'status': 'error', 'reason': failure_reason(exc), 'retrieved_at': timestamp(), 'concepts': []})
+                        'status': 'error', 'reason': failure_reason(exc), 'retrieved_at': timestamp(enricher.clock()), 'concepts': []})
                     continue
                 history = record.setdefault('terminology', [])
                 if result not in history: history.append(result)

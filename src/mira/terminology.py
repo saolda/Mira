@@ -23,14 +23,26 @@ from .format import digest, dumps, loads, require
 BASE = 'https://id.nlm.nih.gov/mesh/'
 URI = re.compile(r'https?://id\.nlm\.nih\.gov/mesh/([MTD][0-9]+)\Z')
 STATUSES = {'matched', 'not_found', 'ambiguous', 'unavailable', 'error', 'not_attempted'}
+FAILURE_COOLDOWN = 900
+RESULT_TTL = 86400
 
 
 def normalize(text):
     return ' '.join(unicodedata.normalize('NFKC', text).casefold().split())
 
 
-def timestamp():
-    return datetime.now(timezone.utc).isoformat()
+def timestamp(now=None):
+    return (datetime.now(timezone.utc) if now is None else
+            datetime.fromtimestamp(now, timezone.utc)).isoformat()
+
+
+def lookup_due(record, now):
+    """Canonical lookup history controls retries, even after cache/index loss."""
+    history = record.get('terminology', [])
+    if not history or history[-1]['status'] == 'not_attempted': return True
+    last = history[-1]
+    delay = FAILURE_COOLDOWN if last['status'] in {'unavailable', 'error'} else RESULT_TTL
+    return datetime.fromisoformat(last['retrieved_at']).timestamp() + delay <= now
 
 
 def failure_reason(exc):
@@ -224,7 +236,7 @@ class Enricher:
         for record in records:
             term = record['term']; key = normalize(term)
             outcome = {'provider': self.provider.name, 'term': term, 'status': 'not_attempted',
-                       'reason': 'Per-R3 lookup budget exhausted.', 'retrieved_at': timestamp(), 'concepts': []}
+                       'reason': 'Per-R3 lookup budget exhausted.', 'retrieved_at': timestamp(self.clock()), 'concepts': []}
             if key in seen:
                 outcome = {**deepcopy(seen[key]), 'term': term}
                 report['cache_hits'] += 1
@@ -234,7 +246,8 @@ class Enricher:
                     outcome = self._lookup(term, end, report)
                     validate_result(outcome, term)
                 except Exception as exc:
-                    outcome.update(status='error', reason=failure_reason(exc), concepts=[])
+                    outcome.update(status='error', reason=failure_reason(exc),
+                                   retrieved_at=timestamp(self.clock()), concepts=[])
                 seen[key] = outcome
             results[record['id']] = outcome
             report['outcomes'].append({'id': record['id'], **outcome})
@@ -250,16 +263,21 @@ class Enricher:
             require(not cache.is_symlink(), 'symlink terminology cache')
             try:
                 data = loads(cache.read_text())
-                if data['expires_at'] > self.clock():
-                    result = {**data['result'], 'term': term}
-                    validate_result(result, term)
+                result = {**data['result'], 'term': term}
+                validate_result(result, term)
+                expires = data['expires_at']
+                if result['status'] in {'unavailable', 'error'}:
+                    # Honour the cooldown for caches written before it increased
+                    # from one minute, without changing the original attribution.
+                    expires = max(expires, datetime.fromisoformat(result['retrieved_at']).timestamp() + FAILURE_COOLDOWN)
+                if expires > self.clock():
                     report['cache_hits'] += 1
                     return result
             except (OSError, ValueError, TypeError, KeyError): pass
         hit = cached()
         if hit is not None: return hit
         result = {'provider': self.provider.name, 'term': term, 'status': 'unavailable',
-                  'reason': 'Terminology provider is busy.', 'retrieved_at': timestamp(), 'concepts': []}
+                  'reason': 'Terminology provider is busy.', 'retrieved_at': timestamp(self.clock()), 'concepts': []}
         lock_path = directory / (self.provider.name + '.lock')
         require(not lock_path.is_symlink() and not cache.is_symlink(), 'symlink terminology cache')
         with lock_path.open('a') as lock:
@@ -285,12 +303,10 @@ class Enricher:
                 atomic_text(pacing, dumps({'next_at': next_at}))
                 report['api_calls'] += 1
                 return self.transport(url, min(remaining, self.request_timeout))
-            expires = self.clock() + 60
             try:
                 status, reason, concepts = self.provider.lookup(term, get)
                 result.update(status=status, reason=reason, concepts=concepts)
                 validate_result(result, term)
-                expires = self.clock() + 86400
                 for concept in concepts:
                     # Concept cache retains the validated identity/provenance, not
                     # a fuzzy alias shortcut. Different names still resolve identity.
@@ -318,11 +334,13 @@ class Enricher:
                     except (ValueError, TypeError, AttributeError): pass
                 next_at = max(next_at, self.clock()+delay)
                 atomic_text(pacing, dumps({'next_at': next_at}))
-                expires = next_at
                 result.update(status='unavailable', reason='HTTP ' + str(exc.code) + '; retry after provider cooldown.')
             except (TimeoutError, OSError) as exc:
                 result.update(status='unavailable', reason=failure_reason(exc), concepts=[])
             except Exception as exc:
                 result.update(status='error', reason=failure_reason(exc), concepts=[])
+            result['retrieved_at'] = timestamp(self.clock())
+            expires = self.clock() + (FAILURE_COOLDOWN if result['status'] in {'unavailable', 'error'} else RESULT_TTL)
+            if result['status'] == 'unavailable': expires = max(expires, next_at)
             atomic_text(cache, dumps({'expires_at': expires, 'result': result}))
         return result

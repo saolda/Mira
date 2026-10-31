@@ -110,6 +110,7 @@ def permitted(state, inputs):
 
 
 def catalogue_fingerprint(state, memories):
+    """Identify eligible scientific inputs and question scope, excluding run bookkeeping."""
     return digest(dumps({"memories": memory_versions(frontier(state, memories, state["root_id"])),
         "questions": [{k: state["nodes"][i][k] for k in ("id", "question", "parent_id")}
                       for i in eligible_subtree(state, state["root_id"])]}))

@@ -14,12 +14,17 @@ QUERY_PARAMETERS = dict(zip(PROVIDERS, ('gsrsearch', 'search_query', 'term', 'qu
 RULES = {
     'legacy': ('provider_legacy', 'provider_legacy', 'provider_legacy'),
     'pubmed': ('AND', 'unquoted_atm', 'literal_words'),
+    'pubmed_or': ('OR', 'unquoted_atm', 'literal_words'),
     'phrase_and': ('AND', 'phrase', 'backslash'),
+    'phrase_or': ('OR', 'phrase', 'backslash'),
     'text': ('spaces', 'none', 'literal_words'),
     'arxiv': ('AND', 'all_field_phrase', 'backslash'),
 }
-COMPATIBLE = {'legacy': set(PROVIDERS), 'pubmed': {'pubmed'},
-    'phrase_and': {'europe_pmc', 'eric'}, 'text': {'wikipedia', 'crossref', 'openalex'}, 'arxiv': {'arxiv'}}
+# OR compilers are available only through explicitly supplied profiles; the
+# shipped registry continues to select the existing production compilers.
+COMPATIBLE = {'legacy': set(PROVIDERS), 'pubmed': {'pubmed'}, 'pubmed_or': {'pubmed'},
+    'phrase_and': {'europe_pmc', 'eric'}, 'phrase_or': {'europe_pmc', 'eric'},
+    'text': {'wikipedia', 'crossref', 'openalex'}, 'arxiv': {'arxiv'}}
 
 
 def number(value):
@@ -98,8 +103,10 @@ def compile(provider, concepts, profile, *, legacy=False):
     def words(c): return ' '.join(re.findall(r'[\w+.,/−-]+', c))
     compiler = profile['compiler']
     if compiler == 'legacy': query = legacy_query(provider, retained)
-    elif compiler == 'pubmed': query = ' AND '.join('(' + words(c) + ')' for c in retained)
-    elif compiler == 'phrase_and': query = ' AND '.join(phrase(c) for c in retained)
+    elif compiler in {'pubmed', 'pubmed_or'}:
+        query = (' ' + profile['combination'] + ' ').join('(' + words(c) + ')' for c in retained)
+    elif compiler in {'phrase_and', 'phrase_or'}:
+        query = (' ' + profile['combination'] + ' ').join(phrase(c) for c in retained)
     elif compiler == 'arxiv': query = ' AND '.join('all:' + phrase(c) for c in retained)
     else: query = ' '.join(words(c) for c in retained)
     require(query.strip(), 'empty compiled query')
