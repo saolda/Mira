@@ -49,8 +49,12 @@ def validate(action, value, evidence=None):
         text(value["reason"])
     elif action == "R4":
         fields(value, ["decision", "reason"])
-        require(isinstance(value["decision"], str) and value["decision"] in {"kill", "answered", "retry"}, "invalid node decision")
+        require(isinstance(value["decision"], str) and value["decision"] in {"kill", "answered", "unresolved"}, "invalid node decision")
         text(value["reason"])
+        if evidence is not None:
+            require(value['decision'] != 'kill' or not evidence['question_scope']['is_root'], 'R4 cannot kill the root question')
+            require(value['decision'] != 'answered' or evidence['scientific_evidence']['coverage']['complete_for_selected_scope'],
+                    'R4 cannot declare answered with missing required scientific evidence')
     elif action == "R5":
         fields(value, ["questions"])
         require(isinstance(value["questions"], list), "questions list required")

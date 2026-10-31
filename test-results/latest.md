@@ -1,22 +1,22 @@
 # Latest development test results
 
-Recorded: 2026-10-31T03:13:56.755196+00:00
+Recorded: 2026-10-31T03:45:58.081587+00:00
 
-Tested implementation commit: `4c18972dee1410301e61a470458ce629b2dce1c8 (working tree under test)`.
+Tested implementation commit: `89cc7e994c9978f459b155854bdb2a0c053731aa (working tree under test)`.
 
-Tests: **365**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **381**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-Validated R1 discovery/selection, full-history provider duplicate guards, pending-R4 recovery, restricted single-corpus reset and legacy relocation, known-glossary discovery checks, and compact/legacy synthesis round-trips. Active medical corpus relocated with all scientific file hashes preserved.
+R4 scientific projections, synthesis support closure, exact anchors and source attribution, approved prompt slots, root-kill rejection, unresolved round transitions, search-exhaustion proof and below-capacity R5, deferred/R3 guards, restart and journal recovery, and complete-context budget enforcement. Exact R4 prompt verified against the supplied request.
 
 ## Regressions and limitations
 
-- Recovery-blocked legacy dropout-sustained remains preserved pending explicit interaction recovery.
+- Scientific judgments use controlled scripted fixtures; no live scientific-quality experiment was run.
 
 ## Execution logs
 
-- `log/storage-transition-20261031.json`
+No persistent experiment was run; automated fixtures use temporary directories.
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.

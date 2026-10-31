@@ -170,7 +170,7 @@ class StrategyTests(unittest.TestCase):
         a=FixtureSearch([{'status':'failed','results':[],'error':'offline'}])
         b=FixtureSearch([{'status':'empty','results':[]}])
         c=FixtureSearch([evidence()])
-        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]},decision('retry'),{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['thermal', 'conductivity']}],{'a':a,'b':b,'c':c})
+        r=self.runner([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat', 'transfer']},{"summary": "Scoped summary of all extracted results and their limitations.", 'results':[draft()]},decision('unresolved'),{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['thermal', 'conductivity']}],{'a':a,'b':b,'c':c})
         r.initialize('Root?',['a','b','c'],context_budget=20000)
         events=[r.step() for _ in range(5)]
         self.assertEqual([e['action'] for e in events],['R1','R2','R2','R2','R3'])

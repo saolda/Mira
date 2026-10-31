@@ -17,6 +17,7 @@ SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context"
 SLOTS = {action: (*slots, "research_brief") for action, slots in SLOTS.items()}
 SLOTS["R1"] = ("question", "question_scope", "research_context", "term_context",
                "completed_queries", "term_limit", "control_terms")
+SLOTS["R4"] = ("question", "question_scope", "scientific_evidence")
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 
 
@@ -39,7 +40,7 @@ class PromptTemplates:
 
     def render(self, action, context):
         # Existing callers and durable pending S2 contexts predate question files.
-        context = context if action == "R1" else {"research_brief": None, **context}
+        context = context if action in {"R1", "R4"} else {"research_brief": None, **context}
         sources = self.sources(action)
         declared = set(SLOTS[action])
         require(not (set(context) - declared), "context has no declared prompt slot: " + str(set(context) - declared))

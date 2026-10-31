@@ -8,7 +8,7 @@ from .api import Knowledge
 from .format import digest, dumps, loads, render, require
 from .live import LiveStore
 from .interactions import Interactions, now, read_records
-from . import decisions, research_tree as tree, r1, r3, branching
+from . import decisions, research_tree as tree, r1, r3, r4, branching
 from .search import validate_search
 from . import strategies, sources, query_profiles, retrieval
 import time
@@ -188,7 +188,7 @@ class Research:
                     "committed_event": event})
 
     def _model(self, event, action, context, state):
-        context = context if action == "R1" else {"research_brief": None, **context}
+        context = context if action in {"R1", "R4"} else {"research_brief": None, **context}
         reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
         require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
         unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
@@ -266,8 +266,8 @@ class Research:
         identity = state["active_node_id"]; n = state["nodes"][identity]
         before_nodes = set(state["nodes"])
         databases = state["strategies"][state["strategy_index"]]["databases"]
-        action = ("R3" if n["pending_results"] else "R1" if n["keywords"] is None else
-                  "R2" if n["next_database_index"] < len(databases) or n.get("deferred_searches") else "R4")
+        action = ("R3" if n["pending_results"] else "R4" if r4.eligible(state, n) else
+                  "R1" if n["keywords"] is None else "R2")
         event.update(action=action, node_id=identity, question=n["question"])
         extras = {}
         if action == "R2":
@@ -323,10 +323,7 @@ class Research:
                 evidence["results"] = evidence["results"][:1]
                 context = r3.context(state, identity, evidence)
             else:
-                old_context, searches = self._context(state, memories, equations, files, identity)
-                context = {k: v for k, v in branching.context(state, memories, equations, identity, action="R4").items() if k != "max_children"}
-                context = {**context,
-                           "search_history": old_context["search_history"]}
+                context = r4.context(state, memories, equations, identity)
             if action == "R3":
                 event["evidence_ref"] = n["pending_results"]
             if action == "R3":
@@ -338,7 +335,7 @@ class Research:
                 event['source_dispositions'] = {r['id']:disposition for r in evidence['results']}
             else:
                 value = self._model(event, action, context, state)
-                decisions.validate(action, value, context['term_limit'] if action == 'R1' else None)
+                decisions.validate(action, value, context['term_limit'] if action == 'R1' else context if action == 'R4' else None)
             if action == "R1":
                 selected = r1.filter_terms(value['search_concepts'], self.control_terms)
                 plans = [retrieval.compile_entry(state, p, selected) for p in databases] if selected else []
@@ -350,18 +347,7 @@ class Research:
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))
                 if not remaining: n["pending_results"] = None
             else:
-                decision = value["decision"]
-                if decision in {"kill", "answered"}:
-                    n["status"] = "killed" if decision == "kill" else "answered"
-                if decision == "retry":
-                    n["previous_search_terms"] = r1.unique(n["previous_search_terms"] + n["keywords"])
-                    n["keywords"] = None
-                    n["next_database_index"] = 0
-                    n["round_outcomes"] = []
-                    n["provider_outcomes"] = {}
-                    n["deferred_searches"] = []
-                    n['legacy_completed_provider_indices'] = []
-                event["decision"] = value
+                r4.apply(state, identity, value, event)
         for i in before_nodes:
             other = state["nodes"][i]
             if i == identity: other["priority"] = max(0, other["priority"] - 1)
@@ -374,7 +360,7 @@ class Research:
         identity = identity or state["ripeness_order"][0]
         n = state["nodes"][identity]
         require(n["status"] == "exhausted" and n["split_attempt"] is None, "R5 requires exhausted node")
-        if getattr(self.llm, "count_tokens", None):
+        if getattr(self.llm, "count_tokens", None) and not r4.search_exhausted(n):
             require(n["research_capacity"]["estimated_tokens"] >= n["research_capacity"]["threshold"],
                     "R5 node is below current token capacity; inspect its prior exhaustion before resuming")
         event.update(action="R5", node_id=identity, question=n["question"],
@@ -504,10 +490,7 @@ class Research:
                         pending = {i:[{**e, 'eligible_at':retrieval.eligible_at(state,e,self.adapters.get(e['provider']))}
                             for e in state['nodes'][i].get('deferred_searches', [])] for i in state['living_priority_order']}
                         times = [e['eligible_at'] for entries in pending.values() for e in entries]
-                        if not times:
-                            return {'status': 'waiting_for_r4_upgrade', 'pending_r4': blocked,
-                                'recoverable': True, 'research_cycles': state['research_cycles'],
-                                'synthesis_cycles': state['synthesis_cycles']}
+                        require(times, 'no eligible research action or provider retry time')
                         retry_at = min(times)
                         return {'status':'waiting_for_provider', 'retry_at':retry_at, 'pending':pending,
                             'pending_r4': blocked,
@@ -560,7 +543,8 @@ class Research:
                         "pending_synthesis": state["synthesis_candidate_order"]}
                     extras["events/" + terminal_id + ".json"] = dumps(terminal)
                 if success: state["revision"] += 1
-                combined = {**files, **extras, "research/state.json": dumps(state)}
+                combined = {**files, **extras, "research/state.json": dumps(state),
+                    "events/" + event_id + ".json": dumps({**event, 'action_committed': event['action'] if success else None})}
                 tree.validate(state, memories, combined)
                 # Admission includes canonical Markdown/lineage checks before marking valid.
                 from .live import decode

@@ -81,8 +81,10 @@ the recovery authority, and the viewer/transcript commands continue to use them.
 R1 discovers 0–6 new concepts and selects one ordered plan for the whole provider
 round. Python uses each provider's own prefix, persists unused discoveries and
 skips searches already completed for the selected node. Empty or entirely
-repeated plans remain living and return `waiting_for_r4_upgrade`; R4's prompt
-and decisions are unchanged pending their separate review.
+repeated plans reach R4, which assesses canonical research and synthesis with
+their supporting findings. R4 returns `answered`, `kill` or `unresolved`; the
+root cannot be killed. An unresolved blocked plan becomes exhausted for R5,
+while an unresolved plan with available searches starts another R1 round.
 
 Starting another experiment requires an explicit reset:
 

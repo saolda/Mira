@@ -1,153 +1,155 @@
-"""Lossless scientific inputs and compact, complete R4 retrieval histories."""
+"""R4 scientific evidence, exact provenance and bounded-request integrity."""
 from copy import deepcopy
-import multiprocessing
-import os
 from pathlib import Path
 import tempfile
 import unittest
 
-from mira import branching, decisions, research_tree as tree
-from mira.budget import measure
-from mira.decisions import ScriptedLLM
-from mira.experiments import file_hashes
-from mira.format import dumps, loads
+from mira import r4, research_tree as tree
+from mira.decisions import ScriptedLLM, validate
+from mira.format import Memory, Unit, Relationship, dumps, loads
 from mira.interactions import read_records
-from mira.research import Research, search_outcome
-from mira.search import FixtureSearch
-from test_research import decision, draft, evidence
+from mira.research import Research
+from mira.prompts import SLOTS, PromptTemplates
 
 
-FIELDS = {'round', 'provider', 'profile_id', 'query', 'query_submitted', 'status',
-          'returned_record_count', 'unique_record_count', 'duplicate_count'}
+def source(identity, order, owner='q1', text='Synthetic sample A had a mean of 4 units.'):
+    m = Memory(identity, 'Synthetic source study', 'Measured synthetic samples only; generalization is unknown.',
+        metadata={'kind':'research','node_id':owner,'created_order':order,'source_memories':[],
+            'synthesized_by':None,'evidence_ref':f'research/results/{identity}.json',
+            'source':{'id':'source-'+identity,'url':'https://example.org/'+identity,'title':'Synthetic controlled study',
+                'published':'2020-01-01','content_kind':'abstract'}})
+    m.units.append(Unit(m.allocate('f'), 'Finding', {'Kind':'finding','Proposition':text,
+        'Qualification':'N=10 synthetic samples; same measurement scale; no clinical inference.'}))
+    return m
 
 
-def crash_r4(root):
-    def fault(stage):
-        if stage == 'replaced:research/state.json': os._exit(76)
-    Research(root, ScriptedLLM([decision('retry')]), {}).step(fault=fault)
+def synthesis(identity, order, inputs, text='The synthetic samples differ by 4 units.', owner='q1'):
+    m = Memory(identity, 'Synthetic comparison', 'A scoped comparison; uncertainty remains.',
+        metadata={'kind':'synthesis','node_id':owner,'created_order':order,'source_memories':[v.id for v in inputs],
+            'synthesized_by':None,'markdown_format':2})
+    m.units.append(Unit(m.allocate('f'), 'Comparison', {'Kind':'synthesis','Evidence status':'unverified',
+        'Proposition':text,'Explanation':'Compare the supplied source measurements with equal scales.',
+        'Provenance':'Interpretation restricted to the supplied synthetic studies.'}))
+    m.relationships=[Relationship('f1','SYNTHESIZES',v.id+'#f1','unverified') for v in inputs]
+    return m
+
+
+def scientific_fixture():
+    state=tree.initial('How do synthetic samples A and B compare?', ['fixture'], context_budget=50000)
+    a=source('r1',1); b=source('r2',2,text='Synthetic sample B had a mean of 8 units.')
+    s=synthesis('s1',3,[a,b])
+    a.metadata['synthesized_by']=b.metadata['synthesized_by']='s1'
+    state['nodes']['q1']['memory_ids']=['r1','r2','s1']
+    return state,[a,b,s]
 
 
 class R4ContextTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / 'run'
-        self.model = ScriptedLLM([])
-        self.r = Research(self.root, self.model, {})
-        self.state = tree.initial('What does the evidence establish?', ['fixture'],
-                                  context_budget=16384, output_reserve=4096)
+    def test_supported_synthesis_has_exact_anchors_sources_and_no_duplicate_findings(self):
+        state,docs=scientific_fixture(); original=deepcopy(docs)
+        context=r4.context(state,docs,[],'q1'); science=context['scientific_evidence']
+        self.assertEqual(set(context), {'question','question_scope','scientific_evidence'})
+        self.assertEqual(set(context),set(SLOTS['R4']))
+        self.assertEqual(context['question'],state['nodes']['q1']['question'])
+        self.assertEqual(science['findings'][-1]['supporting_anchors'],['r1#f1','r2#f1'])
+        self.assertEqual([f['id'] for f in science['findings']],['r1#f1','r2#f1','s1#f1'])
+        self.assertEqual(science['memories'][0]['sources'],[docs[0].metadata['source']])
+        self.assertEqual(science['memories'][0]['evidence_ref'],docs[0].metadata['evidence_ref'])
+        self.assertEqual(science['findings'][0]['qualification'],docs[0].units[0].fields['Qualification'])
+        self.assertTrue(science['coverage']['complete_for_selected_scope'])
+        self.assertFalse(science['coverage']['truncated'])
+        self.assertEqual(docs,original)
+        self.assertEqual(context,r4.context(state,list(reversed(docs)),[],'q1'))
+        validate('R4',{'decision':'answered','reason':'The supplied comparison answers the synthetic question.'},context)
 
-    def context(self, files):
-        return self.r._context(self.state, [], [], files, 'q1')[0]['search_history']
+    def test_unsupported_synthesis_keeps_the_source_disagreement_visible(self):
+        state,docs=scientific_fixture()
+        docs[-1].units[0].fields['Proposition']='The synthetic mean is 1000 units in every population.'
+        context=r4.context(state,docs,[],'q1')
+        findings={v['id']:v for v in context['scientific_evidence']['findings']}
+        self.assertIn('1000', findings['s1#f1']['proposition'])
+        self.assertIn('4 units',findings['r1#f1']['proposition'])
+        self.assertIn('8 units',findings['r2#f1']['proposition'])
+        self.assertIn('N=10',findings['r1#f1']['qualification'])
+        prompt=PromptTemplates().render('R4',context)[0][0]['content']
+        self.assertIn('Check synthesis conclusions against their supporting findings.',prompt)
+        validate('R4',{'decision':'unresolved','reason':'The universal 1000-unit conclusion is unsupported by these source measurements.'},context)
 
-    def test_complete_chronological_history_all_outcomes_and_no_record_mutation(self):
-        files = {}
-        statuses = ['ok', 'empty', 'failed', 'rate_limited', 'deferred', 'unavailable']
-        for i in reversed(range(30)):
-            row = {'node_id':'q1', 'round':i//6+1, 'provider':'provider-'+str(i%6),
-                'profile_id':'balanced', 'query':'("exact phrase") AND term-'+str(i),
-                'query_submitted':i%6 != 4, 'status':statuses[i%6],
-                'timestamp':f'2026-10-30T01:{i:02}:00Z', 'reference':str(i),
-                'returned_record_count':3 if i%6==0 else 0,
-                'unique_record_count':1 if i%6==0 else 0,
-                'duplicates':[{'id':'dup-a'}, {'id':'dup-b'}] if i%6==0 else [],
-                'results':[{'id':'a','content':'Exact scientific evidence: P < .05; N > 10.'}],
-                'profile_config':{'huge':'configuration'}, 'requests':[{'receipts':'transport'}],
-                'submission_id':'internal-uuid', 'source_dispositions':{'a':'memory_created'},
-                'payload_ref':'retrieved/a.json', 'error':'failure details retained on disk'}
-            if i%6 in (2,3,5):row['http_status'] = 429 if i%6!=2 else 503
-            files[f'research/results/{i}.json'] = dumps(row)
-        files['research/results/other.json'] = dumps({'node_id':'q2', 'query':'not this node'})
-        before = deepcopy(files); history = self.context(files)
-        self.assertEqual(len(history),30)
-        self.assertEqual([h['query'] for h in history],['("exact phrase") AND term-'+str(i) for i in range(30)])
-        for i,h in enumerate(history):
-            self.assertEqual(set(h),FIELDS | ({'http_status'} if i%6 in (2,3,5) else set()))
-            self.assertEqual(h['provider'],'provider-'+str(i%6))
-            self.assertEqual(h['round'],i//6+1)
-            self.assertEqual(h['status'],statuses[i%6])
-            self.assertEqual(h['query_submitted'],i%6!=4)
-            self.assertEqual(h['duplicate_count'],2 if i%6==0 else 0)
-            self.assertEqual(h['returned_record_count'],3 if i%6==0 else 0)
-            self.assertEqual(h['unique_record_count'],1 if i%6==0 else 0)
-        self.assertEqual(files,before)
+    def test_conflicts_limits_and_unresolved_questions_are_preserved(self):
+        state,docs=scientific_fixture()
+        docs[1].units[0].fields['Proposition']='Synthetic sample A had a mean of 20 units.'
+        docs[1].relationships.append(Relationship('f1','CONTRADICTS','r1#f1','unverified'))
+        q=Unit(docs[0].allocate('q'),'Open measurement gap',{'Question':'Do other synthetic populations agree?',
+            'State':'open','Origin':'derived','Qualification':'No other population has been measured.'})
+        docs[0].units.append(q)
+        science=r4.context(state,docs,[],'q1')['scientific_evidence']
+        self.assertEqual(science['unresolved_questions'][0]['id'],'r1#q1')
+        self.assertEqual(science['unresolved_questions'][0]['qualification'],q.fields['Qualification'])
+        self.assertIn({'from':'r2#f1','type':'CONTRADICTS','to':'r1#f1','status':'unverified'},science['relationships'])
+        self.assertEqual(len(science['findings']),3)
 
-    def test_equal_timestamps_keep_reference_order(self):
-        files={'research/results/'+r+'.json':dumps({'node_id':'q1','timestamp':'same',
-               'reference':r,'provider':'fixture','query':r,'status':'empty'}) for r in ('c','a','b')}
-        self.assertEqual([h['query'] for h in self.context(files)],['a','b','c'])
+    def test_descendant_synthesis_and_nested_supports_survive_consumption(self):
+        state,docs=scientific_fixture()
+        state['nodes']['q2']=tree.node('q2','Which synthetic comparisons apply?','q1')
+        state['nodes']['q1']['child_ids']=['q2'];state['next_node']=3
+        for m in docs:m.metadata['node_id']='q2'
+        docs.append(source('r3',4,'q2',text='A second synthetic population had a mean of 7 units.'))
+        nested=synthesis('s2',5,[docs[2],docs[3]],owner='q2');docs.append(nested)
+        docs[2].metadata['synthesized_by']=docs[3].metadata['synthesized_by']='s2'
+        state['nodes']['q1']['memory_ids']=[];state['nodes']['q2']['memory_ids']=[m.id for m in docs]
+        science=r4.context(state,docs,[],'q1')['scientific_evidence']
+        self.assertEqual({v['id'] for v in science['findings']},{'r1#f1','r2#f1','s1#f1','r3#f1','s2#f1'})
+        nested_finding=next(v for v in science['findings'] if v['id']=='s2#f1')
+        self.assertEqual(nested_finding['supporting_anchors'],['s1#f1','r3#f1'])
 
-    def test_legacy_unknown_metadata_and_counts_are_not_invented(self):
-        old={'provider':'pubmed','query':'legacy exact string','status':'ok',
-             'results':[{'id':'unique'}],'duplicates':[{'id':'old-duplicate'}]}
-        original=deepcopy(old);out=search_outcome(old)
-        self.assertEqual(out,{'round':None,'provider':'pubmed','profile_id':None,'query':'legacy exact string',
-            'query_submitted':None,'status':'ok','returned_record_count':2,'unique_record_count':1,'duplicate_count':1})
-        self.assertEqual(old,original)
-        self.assertEqual(search_outcome({**old,'returned_record_count':0,'unique_record_count':0})['returned_record_count'],0)
-        self.assertEqual(search_outcome({**old,'query_submitted':False})['query_submitted'],False)
+    def test_legacy_synthesis_without_exact_citations_is_explicitly_uncited(self):
+        state,docs=scientific_fixture();docs[-1].metadata.pop('markdown_format');docs[-1].relationships=[]
+        science=r4.context(state,docs,[],'q1')['scientific_evidence']
+        self.assertEqual(science['coverage']['uncited_synthesis_findings'],['s1#f1'])
+        self.assertEqual(science['findings'][-1]['supporting_anchors'],[])
+        self.assertEqual(len(science['findings']),3)
 
-    def test_verbose_bookkeeping_overflow_fits_without_dropping_entries_or_science(self):
-        rows=[{'node_id':'q1','round':i//4+1,'provider':'fixture','profile_id':'default',
-            'query':'unchanged scientific query '+str(i),'query_submitted':True,'status':'empty',
-            'results':[],'duplicates':[], 'timestamp':str(i).zfill(2),'reference':str(i),
-            'profile_config':{'settings':'x'*1000}, 'requests':[{'receipt':'y'*2000}]} for i in range(20)]
-        files={'research/results/'+str(i)+'.json':dumps(r) for i,r in enumerate(rows)}
-        science={'memories':[{'id':'r1','markdown':'All evidence and qualifications: P < .05 and size > 10.'}], 'equations':[]}
-        common={'question':'Q?', 'question_context':[], 'research_results':science, 'research_brief':None}
-        verbose=[{k:v for k,v in r.items() if k not in {'results','duplicates'}} for r in rows]
-        old=decisions.request(self.model.model,self.model.settings,'R4',{**common,'search_history':verbose})
-        compact={**common,'search_history':self.context(files)}
-        new=decisions.request(self.model.model,self.model.settings,'R4',compact)
-        # Offline conservative UTF-8 byte budgeting, not a claim about model tokens.
-        self.assertTrue(measure(old,4096,16384)['over_context_budget'])
-        self.assertFalse(measure(new,4096,16384)['over_context_budget'])
-        self.assertEqual(len(compact['search_history']),20)
-        self.assertEqual(compact['research_results'],science)
+    def test_incomplete_support_coverage_cannot_be_treated_as_a_complete_answer(self):
+        state,docs=scientific_fixture()
+        docs[-1].relationships[0]=Relationship('f1','SYNTHESIZES','r1#f2','unverified')
+        context=r4.context(state,docs,[],'q1')
+        coverage=context['scientific_evidence']['coverage']
+        self.assertFalse(coverage['complete_for_selected_scope'])
+        self.assertEqual(coverage['missing_support_anchors'],['r1#f2'])
+        with self.assertRaisesRegex(ValueError,'missing required scientific evidence'):
+            validate('R4',{'decision':'answered','reason':'Complete.'},context)
+        validate('R4',{'decision':'unresolved','reason':'The required support is missing.'},context)
 
-    def test_actual_r4_retains_entire_scientific_context_and_original_retrieval_bytes(self):
-        model=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat','transfer']},
-            {'summary':'Scientific fixture summary.','results':[draft()]},decision('retry')])
-        r=Research(self.root,model,{'fixture':FixtureSearch([evidence()])})
-        r.initialize('Q?',['fixture'],context_budget=30000)
-        for _ in range(3):self.assertEqual(r.step()['status'],'committed')
-        with r.store.lock():
-            _,memories,equations,_=r.store.read();s=loads((self.root/'research/state.json').read_text())
-            expected=branching.context(s,memories,equations,'q1',action='R4')['research_results']
-        before=file_hashes(self.root/'research/results')
-        self.assertEqual(r.step()['action'],'R4')
-        actual=read_records(self.root)[-1]['request']['context']
-        self.assertEqual(actual['research_results'],expected)
-        self.assertEqual(actual['search_history'][0]['query'],'heat transfer')
-        self.assertEqual(set(actual['search_history'][0]),FIELDS)
-        self.assertEqual(file_hashes(self.root/'research/results'),before)
+    def test_killed_branches_and_their_synthesis_lineage_are_excluded(self):
+        state,docs=scientific_fixture()
+        state['nodes']['q2']=tree.node('q2','Off-track synthetic study?','q1');state['nodes']['q2']['status']='killed'
+        state['nodes']['q1']['child_ids']=['q2'];state['next_node']=3
+        docs[1].metadata['node_id']='q2'
+        science=r4.context(state,docs,[],'q1')['scientific_evidence']
+        self.assertEqual([m['id'] for m in science['memories']],['r1'])
+        self.assertEqual(science['coverage']['omitted_memories'],[
+            {'id':'r2','reason':'killed_branch_or_lineage'},{'id':'s1','reason':'killed_branch_or_lineage'}])
 
-    def test_genuinely_oversized_scientific_request_blocks_without_model_dispatch(self):
-        context={'question':'Q?', 'question_context':[], 'research_brief':None,'search_history':[],
-                 'research_results':{'memories':[{'id':'r1','markdown':'unabridged evidence '*2000}], 'equations':[]}}
-        original=deepcopy(context)
-        with self.assertRaisesRegex(ValueError,'blocked_context_budget'):
-            self.r._model({'action':'R4','cycle':1,'node_id':'q1'},'R4',context,self.state)
-        self.assertEqual(self.model.requests,[])
-        self.assertEqual(read_records(self.root),[])
+    def test_only_approved_scientific_inputs_and_scope_objectives(self):
+        state,docs=scientific_fixture()
+        state['nodes']['q2']=tree.node('q2','Which measurement scale applies?','q1')
+        state['nodes']['q1']['child_ids']=['q2'];state['next_node']=3
+        state['question_document']={'objectives':['- Compare measurements.','- Preserve uncertainty.']}
+        context=r4.context(state,docs,[],'q2')
+        self.assertEqual(context['question_scope'], {'parent_question':state['nodes']['q1']['question'],
+            'root_question':state['nodes']['q1']['question'],'is_root':False,
+            'research_objectives':state['question_document']['objectives']})
+        text=dumps(context)
+        for unwanted in ('profile_config','search_history','search_concepts','priority','cooldown','research_capacity','next_database_index'):
+            self.assertNotIn(unwanted,text)
+
+    def test_complete_scientific_context_blocks_at_budget_without_truncation(self):
+        state,docs=scientific_fixture();docs[0].units[0].fields['Proposition']='Unabridged synthetic evidence ' * 3000
+        context=r4.context(state,docs,[],'q1'); original=deepcopy(context)
+        with tempfile.TemporaryDirectory() as directory:
+            model=ScriptedLLM([]);r=Research(directory,model,{})
+            state['context_budget']=15000
+            with self.assertRaisesRegex(ValueError,'blocked_context_budget'):
+                r._model({'action':'R4','cycle':1,'node_id':'q1'},'R4',context,state)
+            self.assertEqual(model.requests,[]);self.assertEqual(read_records(directory),[])
         self.assertEqual(context,original)
-
-    def test_r4_projection_and_outcome_survive_journal_repair_and_restart(self):
-        r=Research(self.root,ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['heat','transfer']}]),
-                   {'fixture':FixtureSearch([{'status':'empty','results':[]}])})
-        r.initialize('Q?',['fixture'],context_budget=30000);r.step();r.step()
-        before=file_hashes(self.root/'research/results')
-        process=multiprocessing.get_context('fork').Process(target=crash_r4,args=(str(self.root),))
-        process.start();process.join(10);self.assertEqual(process.exitcode,76)
-        operation=r.store.recovery_status()['operations'][0]
-        r.store.repair(operation['id'],apply=True)
-        restarted=Research(self.root,ScriptedLLM([]),{})
-        restarted._recover_outcomes()
-        with restarted.store.lock():
-            restarted.store.read();self.assertFalse(restarted._unresolved(restarted.store._files()))
-        records=read_records(self.root);self.assertEqual(len(records),2)
-        self.assertEqual(records[-1]['request']['action'],'R4')
-        self.assertEqual(set(records[-1]['request']['context']['search_history'][0]),FIELDS)
-        self.assertEqual(records[-1]['outcome']['action_committed'],'R4')
-        self.assertEqual(file_hashes(self.root/'research/results'),before)
-        self.assertIsNone(loads((self.root/'research/state.json').read_text())['nodes']['q1']['keywords'])
-        self.assertEqual(restarted.llm.requests,[])
+        self.assertEqual(context['scientific_evidence']['findings'][0]['proposition'],docs[0].units[0].fields['Proposition'])

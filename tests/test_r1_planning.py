@@ -50,14 +50,12 @@ class PlanningTests(unittest.TestCase):
                 self.assertTrue(node['search_blocked']); self.assertEqual(node['status'], 'living')
                 self.assertFalse(node['synthesis_complete'])
                 self.assertEqual(node['concept_candidates'][0]['term'], 'heat capacity')
-                before = file_hashes(self.root)
-                restarted = Research(self.root, ScriptedLLM([]), {})
-                for _ in range(3):
-                    outcome = restarted.step()
-                    self.assertEqual(outcome['status'], 'waiting_for_r4_upgrade')
-                    self.assertEqual(outcome['pending_r4'], ['q1'])
-                self.assertEqual(file_hashes(self.root), before)
-                self.assertEqual(len(read_records(self.root)), 1)
+                restarted = Research(self.root, ScriptedLLM([{'decision':'unresolved','reason':'Evidence gap.'}]), {})
+                outcome = restarted.step()
+                self.assertEqual(outcome['action'], 'R4')
+                self.assertEqual(self.state()['nodes']['q1']['status'], 'exhausted')
+                self.assertTrue(self.state()['nodes']['q1']['search_blocked'])
+                self.assertEqual(len(read_records(self.root)), 2)
 
     def test_all_repeated_selection_checked_beyond_bounded_history(self):
         r = self.make([plan(['thermal resistance'])])
@@ -117,7 +115,7 @@ class PlanningTests(unittest.TestCase):
 
     def test_unused_candidates_reappear_and_known_discoveries_keep_original_provenance(self):
         r = self.make([plan(['heat flux'], ['thermal diffusivity']),
-            {'decision': 'retry', 'reason': 'More research.'},
+            {'decision': 'unresolved', 'reason': 'More research.'},
             plan(['thermal diffusivity'], ['THERMAL diffusivity'])],
             {'fixture': FixtureSearch([{'status': 'empty', 'results': []}])})
         first = r.step(); r.step(); r.step(); second = r.step()
@@ -147,11 +145,11 @@ class PlanningTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): r.step(fault=fault)
         operation = r.store.recovery_status()['operations'][0]['id']
         r.store.repair(operation, apply=True)
-        restarted = Research(self.root, ScriptedLLM([]), {})
-        self.assertEqual(restarted.run(2)['status'], 'waiting_for_r4_upgrade')
+        restarted = Research(self.root, ScriptedLLM([{'decision':'unresolved','reason':'Evidence gap.'}]), {})
+        self.assertEqual(restarted.run(1)['actions'][0]['action'], 'R4')
         self.assertEqual(len(self.state()['nodes']['q1']['concept_candidates']), 1)
         self.assertEqual(len(r.llm.requests), 1)
-        self.assertEqual(len(read_records(self.root)), 1)
+        self.assertEqual(len(read_records(self.root)), 2)
 
     def test_projection_relevance_rotation_omissions_and_untrusted_filter(self):
         state = tree.initial('Thermal resistance?', ['fixture'])
@@ -170,7 +168,7 @@ class PlanningTests(unittest.TestCase):
         self.assertLess(len(dumps(two).encode()), 6500)
 
     def test_blocked_node_does_not_starve_other_living_node(self):
-        r = self.make([plan([]), plan(['heat capacity'])])
+        r = self.make([plan([]), {'decision':'unresolved','reason':'Evidence gap.'}, plan(['heat capacity'])])
         with r.store.lock():
             token, docs, eqs, ledger = r.store.read(); state = self.state()
             state['next_node'] = 3
@@ -179,6 +177,7 @@ class PlanningTests(unittest.TestCase):
             tree.refresh(state, docs)
             r.store.publish(docs, eqs, ledger, token, files={'research/state.json': dumps(state)})
         self.assertTrue(r.step()['search_blocked'])
+        self.assertEqual(r.step()['action'], 'R4')
         event = r.step()
         self.assertEqual((event['action'], event['node_id']), ('R1', 'q2'))
         self.assertTrue(self.state()['nodes']['q1']['search_blocked'])

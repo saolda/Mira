@@ -38,7 +38,7 @@ def assess(state, memories, equations, model, settings, counter=None):
             "request_sha256": digest(serialized), "template_sha256": template["files"][0]["sha256"],
             "model": model}
         n["research_capacity"] = assessment
-        if n["status"] == "living" and n["pending_results"] is None and not n.get("deferred_searches") and assessment["memory_ids"] and usage["estimated_tokens"] >= assessment["threshold"]:
+        if n["status"] == "living" and not n.get('search_blocked') and n["pending_results"] is None and not n.get("deferred_searches") and assessment["memory_ids"] and usage["estimated_tokens"] >= assessment["threshold"]:
             n["status"] = "exhausted"
             changes.append({"node_id": identity, "reason": "research_capacity_reached", **assessment})
     tree.refresh(state, memories)

@@ -29,7 +29,7 @@ def file_hashes(root):
 
 
 def make_run(root):
-    r = Research(root, ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision("kill")]),
+    r = Research(root, ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft()]}, decision("answered")]),
                  {"fixture": FixtureSearch([evidence()])})
     r.initialize("Original recorded question?", ["fixture"], context_budget=12000)
     r.run(5)
@@ -114,11 +114,11 @@ class ViewerTests(unittest.TestCase):
         self.assertIsNone(data["inputs"]["system_messages"])
         self.assertEqual(data["inputs"]["user_messages"][0], payload["messages"][0])
         self.assertIsNone(data["inputs"]["developer_messages"])
-        self.assertIn("The fixture describes", data["structured_context"]["research_results"]["memories"][0]["markdown"])
+        self.assertIn("The fixture describes", data["structured_context"]["scientific_evidence"]["findings"][0]["proposition"])
         self.assertEqual(len(data["inputs"]["existing_memories"]), 1)
         self.assertEqual(len(data["retrieved_before_decision"]), 1)
         self.assertEqual(data["tree_before"]["q1"]["status"], "living")
-        self.assertEqual(data["tree_after"]["q1"]["status"], "killed")
+        self.assertEqual(data["tree_after"]["q1"]["status"], "answered")
         self.assertTrue(data["historical_corpus"][0]["included_in_request"])
         self.assertEqual(file_hashes(self.root), before)
 
@@ -144,9 +144,9 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual({slot["name"]: slot["value"] for slot in data["prompt_slots"]},
                          data["record"]["request"]["prompt_template"]["bindings"]["context"])
         slots = {slot["name"]: slot for slot in data["prompt_slots"]}
-        self.assertEqual(slots["question_context"]["status"], "Empty collection")
-        self.assertEqual(slots["research_results"]["value"]["equations"], [])
-        self.assertEqual(slots["research_results"]["status"], "Supplied")
+        self.assertTrue(slots["question_scope"]["value"]["is_root"])
+        self.assertEqual(slots["scientific_evidence"]["value"]["equations"], [])
+        self.assertEqual(slots["scientific_evidence"]["status"], "Supplied")
 
     def test_missing_and_interrupted_record_is_visible_without_state(self):
         path = self.root / "interactions" / "00000004-interrupted"

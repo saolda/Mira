@@ -111,21 +111,17 @@ class ResearchTests(unittest.TestCase):
         r3 = prompts["R3"]["context"]
         self.assertEqual(r3["research"]["results"], evidence()["results"])
         r4 = prompts["R4"]["context"]
-        self.assertEqual([s["status"] for s in r4["search_history"]], ["failed", "ok"])
-        self.assertEqual([s["query"] for s in r4["search_history"]], ["heat transfer", "heat transfer"])
-        self.assertEqual(r4["search_history"][0]["provider"], "offline")
-        self.assertNotIn("error", r4["search_history"][0])
-        failed = next(loads(p.read_text()) for p in (self.root / "research/results").glob("*.json")
-                      if loads(p.read_text())["provider"] == "offline")
-        self.assertEqual(failed["error"], "offline")
-        self.assertIn("r1", [m["id"] for m in r4["research_results"]["memories"]])
+        self.assertEqual(set(r4), {'question', 'question_scope', 'scientific_evidence'})
+        self.assertNotIn('search_history', r4)
+        self.assertTrue(r4['question_scope']['is_root'])
+        self.assertIn("r1", [m["id"] for m in r4["scientific_evidence"]["memories"]])
         self.assertNotIn("raw_api_response", dumps(prompts))
         files = r.store._files()
         self.assertFalse(any("Raw provider feed" in raw for raw in files.values()))
         self.assertTrue(list((self.root / "retrieved").glob("*.json")))
 
     def test_all_dispositions_retry_to_r1_and_sustained_priority(self):
-        for kind in ("kill", "answered", "retry"):
+        for kind in ("answered", "unresolved"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, decision(kind), {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal transfer", "insulation"]}])
                 r = Research(directory, llm, {"fixture": FixtureSearch([{"status": "empty", "results": []}])})
@@ -133,7 +129,7 @@ class ResearchTests(unittest.TestCase):
                 for _ in range(3): self.assertEqual(r.step()["status"], "committed")
                 state = loads((Path(directory) / "research/state.json").read_text()); root = state["nodes"]["q1"]
                 self.assertEqual(root["child_ids"], [])
-                if kind == "retry":
+                if kind == "unresolved":
                     self.assertEqual(root["next_database_index"], 0)
                     self.assertEqual(root["priority"], 7)
                     self.assertEqual(state["active_node_id"], "q1")

@@ -252,6 +252,8 @@ def validate(state, memories, files):
     for identity, n in nodes.items():
         from .r1 import validate_state as validate_r1
         validate_r1(n)
+        from .r4 import validate_state as validate_r4
+        validate_r4(n, files)
         require(re.fullmatch(r"q[1-9][0-9]*", identity) and n["id"] == identity and
                 n["created_order"] == int(identity[1:]) < state["next_node"], "invalid node allocator/order")
         require(n["status"] in {"living", "answered", "exhausted", "killed", "split"}, "invalid node status")
@@ -375,7 +377,7 @@ def metrics(state):
         if n["status"] == "living":
             living[depths[i]] += 1
     return {"active_node": state["active_node_id"], "research_cycles": state["research_cycles"],
-            "pending_r4_upgrade": [i for i, n in state['nodes'].items() if n['status'] == 'living' and n.get('search_blocked')],
+            "pending_r4_assessment": [i for i, n in state['nodes'].items() if n['status'] == 'living' and n.get('search_blocked')],
             "synthesis_cycles": state["synthesis_cycles"], "max_depth": max(depths.values()),
             "living_by_depth": dict(sorted(living.items())), "nodes": state["nodes"],
             "candidates": state["synthesis_candidate_order"],
@@ -450,6 +452,10 @@ def validate_transition(before, after):
         require(identity in after["nodes"], "cannot delete research node")
         new = after["nodes"][identity]
         require(new["status"] in allowed[old["status"]], "invalid research status transition")
+        require('last_r4_assessment' not in old or 'last_r4_assessment' in new, 'cannot forget the latest R4 assessment')
+        if old.get('exhaustion_reason') == 'search_blocked':
+            require(new.get('exhaustion_reason') == 'search_blocked' and
+                    new.get('exhaustion_assessment') == old.get('exhaustion_assessment'), 'search exhaustion proof is immutable')
         if old["split_attempt"] is not None:
             require(new["split_attempt"] == old["split_attempt"] and new["child_ids"] == old["child_ids"],
                     "branching attempt already committed")

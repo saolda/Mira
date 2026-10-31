@@ -1,28 +1,40 @@
-Evaluate the selected research question using the accumulated research and its wider context.
-
-Choose exactly one decision:
-- kill: The research direction does not meaningfully contribute to answering or understanding its parent or root question. It is off-track. An unsuccessful search alone is not grounds for killing a question.
-- answered: Given the question's context, a sufficiently complete answer has been established, making further research on this question unnecessary.
-- retry: The question remains relevant and warrants further research.
-
-Do not confuse lack of search results with an answered question.
-Do not generate search terms or child questions.
+Assess whether the SELECTED QUESTION has been adequately answered by the available scientific evidence.
 
 SELECTED QUESTION
 {{question}}
 
-QUESTION CONTEXT
-{{question_context}}
+QUESTION SCOPE
+{{question_scope}}
 
-ACCUMULATED RESEARCH
-{{research_results}}
+Use the parent and root questions to assess relevance. Research objectives define scope, not scientific evidence.
 
-PREVIOUS SEARCHES
-{{search_history}}
+SCIENTIFIC EVIDENCE
+{{scientific_evidence}}
+
+This includes relevant direct research findings, synthesized findings, their supporting sources, qualifications and unresolved uncertainties.
+
+Evaluate:
+- Whether the evidence addresses all material aspects of the selected question.
+- Whether findings support the conclusions attributed to them.
+- Whether study populations, comparisons, measurements, timescales and limitations are correctly represented.
+- Whether important uncertainties, contradictions or evidence gaps remain.
+
+Check synthesis conclusions against their supporting findings. A synthesis is not independent evidence.
+
+Choose exactly one decision:
+
+answered: The available evidence adequately answers the selected question, with conclusions supported and appropriately qualified.
+
+kill: The selected question is irrelevant to BOTH its parent AND root research objectives. Never choose kill for the root question.
+
+unresolved: The question remains relevant but is not adequately answered by the available evidence.
+
+Missing or unsuccessful searches are not evidence that a scientific proposition is false.
+
+If essential evidence is missing from the supplied context, do not declare the question answered.
+
+Do not generate search terms, subsidiary questions or research plans.
 
 Return JSON only:
-{"decision":"retry","reason":"Brief explanation."}
 
-SUPPLEMENTARY QUESTION CONTEXT AND RESEARCH OBJECTIVES
-{{research_brief}}
-Use this background and the complete objective list to scope the selected question. Background may be excerpted; it is not research evidence. Null means no question document was supplied.
+{"decision":"unresolved","reason":"Brief evidence-based explanation."}

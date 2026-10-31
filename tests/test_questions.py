@@ -142,6 +142,9 @@ class QuestionTests(unittest.TestCase):
         for record in read_records(self.root):
             supplied = record["request"]["context"]
             self.assertEqual(supplied["question"], questions.parse(MARKDOWN)["question"])
+            if record["request"]["action"] == "R4":
+                self.assertEqual(supplied['question_scope']['research_objectives'], questions.parse(MARKDOWN)['objectives'])
+                continue
             brief = (supplied["question_scope"] if record["request"]["action"] == "R1" else supplied)["research_brief"]
             self.assertEqual(brief["context"], questions.parse(MARKDOWN)["context"])
             self.assertEqual(brief["objectives"], questions.parse(MARKDOWN)["objectives"])

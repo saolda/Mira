@@ -227,7 +227,7 @@ class RoundTests(unittest.TestCase):
         self.assertEqual(self.adapters['b'].queries,['heat transfer thermal insulation'])
 
     def test_rate_limit_deferred_restart_wait_no_cycles_or_llm_then_retry_and_r4(self):
-        self.make(responses=[decision('retry')],outcomes={'a':FixtureSearch([
+        self.make(responses=[decision('unresolved')],outcomes={'a':FixtureSearch([
             {'status':'rate_limited','results':[],'retry_after':'10000'},{'status':'empty','results':[]}]),
             'b':FixtureSearch([{'status':'empty','results':[]}])})
         first=self.r.step();self.assertTrue(first['query_submitted'])

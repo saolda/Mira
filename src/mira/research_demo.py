@@ -27,7 +27,7 @@ class DemoLLM(ScriptedLLM):
         content = loads(serialized_request)["messages"][-1]["content"]
         action = ("R1" if "AVAILABLE CONCEPTS\n" in content else
                   "R3" if "RETRIEVED RESEARCH\n" in content else
-                  "R4" if "PREVIOUS SEARCHES\n" in content else
+                  "R4" if "SCIENTIFIC EVIDENCE\n" in content else
                   "R5" if "ACCUMULATED RESEARCH\n" in content else
                   "S1" if "Eligible memory catalogue:\n" in content else "S2")
         # Fixture-only inspection of explicitly labelled JSON values, not a
@@ -45,7 +45,7 @@ class DemoLLM(ScriptedLLM):
             source_id = supplied["results"][0]["id"]
             value = {"summary": "Scoped summary of all extracted results and their limitations.", "results": [finding("A transfers 4 units", source_id), finding("B transfers 8 units", source_id)]}
         elif action == "R4":
-            value = {"decision": "retry", "reason": "Scripted second research batch; the question remains relevant."}
+            value = {"decision": "unresolved", "reason": "Scripted second research batch; the question remains relevant."}
         elif action == "R5":
             question = decoder.raw_decode(content.split("SELECTED QUESTION\n", 1)[1])[0]
             children = {"What can the fictional heat-barrier fixture tell us?":

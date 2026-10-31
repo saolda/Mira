@@ -208,7 +208,7 @@ class BranchingTests(unittest.TestCase):
         self.assertTrue({'R1', 'R2', 'R3', 'R4', 'R5', 'S1', 'S2'} <= actions, actions)
 
     def test_malformed_r4_r5_and_child_limit_preserve_state(self):
-        for value in ({'decision': 'exhaust', 'reason': 'old'}, {'decision': 'retry', 'reason': 'ok', 'keywords': ['bad']},
+        for value in ({'decision': 'exhaust', 'reason': 'old'}, {'decision': 'unresolved', 'reason': 'ok', 'keywords': ['bad']},
                       {'decision': [], 'reason': 'bad'}, {'decision': 'answered', 'reason': ''}):
             self.assertRaises(ValueError, decisions.validate, 'R4', value)
         self.make([{'questions': 'bad'}, {'questions': [None]}, {'questions': ['A?', 'B?']}], max_children=1)

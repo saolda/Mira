@@ -90,8 +90,8 @@ class PromptTests(unittest.TestCase):
                 self.assertIn("{{" + key + "}}", snapshot["files"][0]["source"])
                 self.assertIn(dumps(context[key]).rstrip("\n"), messages[0]["content"])
         r4 = PromptTemplates().sources("R4")[0]["source"]
-        for decision in ("kill", "answered", "retry"):
-            self.assertIn("- " + decision + ":", r4)
+        for decision in ("kill", "answered", "unresolved"):
+            self.assertIn(decision + ":", r4)
 
     def test_surrounding_text_crlf_and_empty_values_preserved_exactly(self):
         source = "Prefix 温度\r\n" + " / ".join("{{" + key + "}}" for key in SLOTS["R1"]) + "\r\nSuffix\r\n"

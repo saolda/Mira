@@ -215,13 +215,13 @@ class R1Tests(unittest.TestCase):
 
     def test_control_term_rejected_before_downstream_query(self):
         with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["solar", "metadata"]}])
+            llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["solar", "metadata"]}, {"decision":"unresolved", "reason":"Evidence missing."}])
             research = Research(directory, llm, {}, control_terms=["solar"])
             research.initialize("Thermal question?", ["fixture"])
             event = research.step()
             self.assertEqual(event["status"], "committed")
             self.assertTrue(event['search_blocked'])
-            self.assertEqual(research.step()['status'], 'waiting_for_r4_upgrade')
+            self.assertEqual(research.step()['action'], 'R4')
             self.assertTrue(read_records(directory)[0]["validation"]["accepted"])
 
     def test_raw_proposed_and_accepted_output_survive_interaction_and_execution_logs(self):
