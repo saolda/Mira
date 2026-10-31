@@ -144,6 +144,58 @@ class TerminologyTests(unittest.TestCase):
                     self.assertEqual(other['g2']['status'], 'unavailable')
                     self.assertEqual(audit['api_calls'], 0)
 
+    def test_temporary_failure_cache_cooldown_and_retry_boundary(self):
+        for failure, status in [(TimeoutError('offline'), 'unavailable'), ({'bad': []}, 'error')]:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                self.cache = Path(tmp)/'cache'
+                original, _, e = self.lookup(rows=[failure])
+                self.clock.now += terminology.FAILURE_COOLDOWN - 1
+                cached, report = e.enrich([{'id':'g1', 'term':TERM}])
+                self.assertEqual(cached['g1'], original)
+                self.assertEqual(report['api_calls'], 0)
+                self.assertEqual(report['cache_hits'], 1)
+                self.clock.now += 1
+                self.transport.side_effect = responses()
+                retried, report = e.enrich([{'id':'g1', 'term':TERM}])
+                self.assertEqual(retried['g1']['status'], 'matched')
+                self.assertEqual(report['api_calls'], 2)
+
+    def test_legacy_short_failure_cache_honours_new_cooldown(self):
+        original, _, e = self.lookup(rows=[TimeoutError('offline')])
+        cache = next(p for p in self.cache.glob('*.json') if len(p.stem) == 64)
+        data = loads(cache.read_text()); data['expires_at'] = self.clock.now + 60
+        cache.write_text(dumps(data))
+        self.clock.now += 61
+        cached, report = e.enrich([{'id':'g1', 'term':TERM}])
+        self.assertEqual(cached['g1'], original)
+        self.assertEqual(report['api_calls'], 0)
+
+    def test_confirmed_negative_cache_outlasts_temporary_failure_cooldown(self):
+        original, _, e = self.lookup(rows=[[]])
+        self.assertEqual(original['status'], 'not_found')
+        self.clock.now += terminology.FAILURE_COOLDOWN
+        cached, report = e.enrich([{'id':'g1', 'term':TERM}])
+        self.assertEqual(cached['g1'], original)
+        self.assertEqual(report['api_calls'], 0)
+        self.clock.now += terminology.RESULT_TTL - terminology.FAILURE_COOLDOWN
+        self.transport.side_effect = responses()
+        retried, report = e.enrich([{'id':'g1', 'term':TERM}])
+        self.assertEqual(retried['g1']['status'], 'matched')
+        self.assertEqual(report['api_calls'], 2)
+
+    def test_provider_retry_after_longer_than_failure_cooldown_is_preserved(self):
+        failure = HTTPError(terminology.BASE, 429, 'limited', {'Retry-After':'1200'}, BytesIO())
+        original, _, e = self.lookup(rows=[failure])
+        self.clock.now += terminology.FAILURE_COOLDOWN
+        cached, report = e.enrich([{'id':'g1', 'term':TERM}])
+        self.assertEqual(cached['g1'], original)
+        self.assertEqual(report['api_calls'], 0)
+        self.clock.now += 300
+        self.transport.side_effect = responses()
+        retried, report = e.enrich([{'id':'g1', 'term':TERM}])
+        self.assertEqual(retried['g1']['status'], 'matched')
+        self.assertEqual(report['api_calls'], 2)
+
     def test_lookup_budget_duplicate_prevention_and_pacing(self):
         e = self.enricher(max_terms=1)
         result, report = e.enrich([{'id':'g1','term':TERM}, {'id':'g2','term':TERM}, {'id':'g3','term':'Different'}])
@@ -163,13 +215,13 @@ class TerminologyTests(unittest.TestCase):
             self.assertEqual(report['api_calls'], 1)
             self.assertEqual(result['status'], 'unavailable')
 
-    def make_research(self, enricher, *, source_text=TEXT, terms=True, strategy='medical'):
+    def make_research(self, enricher, *, source_text=TEXT, terms=True, strategy='medical', definition=None):
         supplied = evidence(source_text)['results'][0]
         if not source_text:
             supplied.pop('content'); supplied['content_kind']='bibliographic_metadata'
         extraction = {'summary': 'A source-grounded fixture finding.', 'results': [{
             'type':'finding', 'text':TEXT, 'qualification':'Fixture source.', 'source_ids':['source-1'], 'related_to':None}],
-            'terms':[proposal(TERM, None, passage=source_text)] if terms else []}
+            'terms':[proposal(TERM, definition, passage=source_text)] if terms else []}
         llm = ScriptedLLM([plan(), extraction, {'decision':'unresolved','reason':'Evidence remains incomplete.'}, plan()])
         adapters = {name:FixtureSearch([{'status':'ok','results':[supplied]}] if name=='pubmed' else
             [{'status':'empty','results':[]}]) for name in ['pubmed','europe_pmc','crossref','wikipedia']}
@@ -180,6 +232,17 @@ class TerminologyTests(unittest.TestCase):
 
     def state(self): return loads((self.root/'research/state.json').read_text())
     def record(self): return loads((self.root/'glossary/g1.json').read_text())
+
+    def propose(self, research, values=(), *, passage=TEXT, enricher=None, rebuild=False):
+        with research.store.lock():
+            token, docs, eqs, ledger = research.store.read(); state = self.state()
+            if rebuild: research.glossary.ensure(state, rebuild=True)
+            files, audit = research.glossary.proposals(state, list(values), evidence(passage), 'q1',
+                enricher=research.terminology if enricher is None else enricher)
+            if files:
+                research.store.publish(docs, eqs, ledger, token,
+                    files={**files, 'research/state.json':dumps(state)})
+            return files, audit
 
     def test_r3_atomic_enrichment_r1_context_exports_and_rebuild(self):
         research = self.make_research(self.enricher())
@@ -218,6 +281,7 @@ class TerminologyTests(unittest.TestCase):
         self.assertEqual(record['terminology'][-1]['status'], 'unavailable')
         self.assertIn('Lookup unavailable', glossary_view.html([record]))
         self.assertTrue((self.root/'memories/r1.md').exists())
+        self.assertEqual(len(research.llm.requests), 2)
 
     def test_optional_enricher_exception_preserves_science_and_error_state(self):
         e=self.enricher()
@@ -288,7 +352,7 @@ class TerminologyTests(unittest.TestCase):
     def test_existing_candidate_enriched_no_duplicate_ids_or_definitions(self):
         research = self.make_research(self.enricher([TimeoutError('offline')]))
         research.step()
-        self.clock.now += 61  # A failed lookup's cooldown is not bypassed.
+        self.clock.now += terminology.FAILURE_COOLDOWN
         good = self.enricher()
         with research.store.lock():
             token, docs, eqs, ledger = research.store.read(); state = self.state()
@@ -300,6 +364,140 @@ class TerminologyTests(unittest.TestCase):
         self.assertEqual(self.state()['glossary']['next_id'], 2)
         self.assertEqual(len(self.record()['definitions']), 1)
         self.assertEqual(self.transport.call_count, 2)
+
+    def test_recent_failure_is_skipped_when_touched_and_after_index_rebuild(self):
+        research = self.make_research(self.enricher([TimeoutError('offline')]))
+        research.step()
+        original = self.record()
+        self.clock.now += terminology.FAILURE_COOLDOWN - 1
+        # The canonical failure, rather than the disposable response cache, must
+        # retain the cooldown across index reconstruction or cache loss.
+        for path in self.cache.glob('*.json'): path.unlink()
+        good = self.enricher()
+        for values in [[], [proposal(TERM, None, passage=TEXT)]]:
+            files, audit = self.propose(research, values, enricher=good, rebuild=True)
+            if not values: self.assertEqual(files, {})
+            self.assertEqual(audit['enrichment']['api_calls'], 0)
+            self.assertEqual(audit['enrichment']['cooldown_suppressions'], 1)
+            self.assertEqual(audit['enrichment']['outcomes'], [])
+            self.assertEqual(self.record()['terminology'], original['terminology'])
+            self.assertEqual(self.record()['definitions'], [])
+        self.assertEqual(self.transport.call_count, 0)
+        self.assertEqual(len(research.llm.requests), 2)
+        self.clock.now += 1
+        _, audit = self.propose(research, enricher=good)
+        self.assertEqual(audit['enrichment']['api_calls'], 2)
+        self.assertEqual(audit['enrichment']['cooldown_suppressions'], 0)
+        self.assertEqual(self.record()['definitions'][0]['text'], NOTE)
+        self.assertEqual(self.record()['terminology'][0], original['terminology'][0])
+        self.assertEqual(len(research.llm.requests), 2)
+
+    def test_unattempted_backlog_not_starved_by_recent_failed_candidates(self):
+        research = self.make_research(self.enricher([TimeoutError('offline')], max_terms=1))
+        research.step()
+        passage = 'Other medical term and Third medical term are recorded here.'
+        pending = self.enricher([[]], max_terms=1)
+        _, audit = self.propose(research,
+            [proposal(term, None, passage=passage) for term in ['Other medical term', 'Third medical term']],
+            passage=passage, enricher=pending)
+        self.assertEqual(audit['enrichment']['api_calls'], 1)
+        self.assertEqual(audit['enrichment']['cooldown_suppressions'], 1)
+        self.assertEqual(loads((self.root/'glossary/g3.json').read_text())['terminology'][-1]['status'], 'not_attempted')
+        next_lookup = self.enricher([[]], max_terms=1)
+        _, audit = self.propose(research, passage=passage, enricher=next_lookup, rebuild=True)
+        self.assertEqual(audit['enrichment']['api_calls'], 1)
+        self.assertEqual([r['id'] for r in audit['enrichment']['outcomes']], ['g3'])
+        self.assertEqual(audit['enrichment']['cooldown_suppressions'], 1)
+        self.assertEqual(self.record()['terminology'][-1]['status'], 'unavailable')
+        self.assertEqual(len(research.llm.requests), 2)
+
+    def test_quota_delayed_source_defined_term_remains_eligible(self):
+        research = self.make_research(self.enricher([TimeoutError('offline')], max_terms=1))
+        research.step()
+        passage = ('Other medical term is a source-defined term. Third medical term is another source-defined term. '
+                   'Fourth medical term is a further source-defined term.')
+        first = self.enricher([[]], max_terms=1)
+        values = [proposal('Other medical term', 'Other medical term is a source-defined term.', passage=passage),
+                  proposal('Third medical term', 'Third medical term is another source-defined term.', passage=passage),
+                  proposal('Fourth medical term', 'Fourth medical term is a further source-defined term.', passage=passage)]
+        self.propose(research, values, passage=passage, enricher=first)
+        pending = loads((self.root/'glossary/g3.json').read_text())
+        self.assertEqual(pending['status'], 'source_defined')
+        self.assertEqual(pending['terminology'][-1]['status'], 'not_attempted')
+        next_lookup = self.enricher([[]], max_terms=1)
+        # Touched pending entries and the indexed backlog must both remain
+        # eligible even though their source already supplied a definition.
+        _, audit = self.propose(research, passage=passage, enricher=next_lookup, rebuild=True)
+        self.assertEqual(audit['enrichment']['api_calls'], 1)
+        self.assertEqual([r['id'] for r in audit['enrichment']['outcomes']], ['g3'])
+        after = loads((self.root/'glossary/g3.json').read_text())
+        self.assertEqual(after['definitions'], pending['definitions'])
+        self.assertEqual(after['terminology'][-1]['status'], 'not_found')
+        _, audit = self.propose(research, [values[2]], passage=passage,
+            enricher=self.enricher([[]], max_terms=1))
+        self.assertEqual([r['id'] for r in audit['enrichment']['outcomes']], ['g4'])
+        self.assertEqual(audit['enrichment']['api_calls'], 1)
+        self.assertEqual(len(research.llm.requests), 2)
+
+    def test_source_defined_failure_retries_only_when_cooldown_is_due(self):
+        for failure, status in [(TimeoutError('offline'), 'unavailable'), ({'bad': []}, 'error')]:
+            for touched in [False, True]:
+                with self.subTest(status=status, touched=touched), tempfile.TemporaryDirectory() as tmp:
+                    self.root = Path(tmp)/'memory'; self.cache = Path(tmp)/'cache'
+                    research = self.make_research(self.enricher([failure]), definition=TEXT)
+                    event = research.step()
+                    self.assertEqual(event['memory_ids'], ['r1'])
+                    original = self.record()
+                    self.assertEqual(original['status'], 'source_defined')
+                    self.assertEqual(original['terminology'][-1]['status'], status)
+                    self.clock.now += terminology.FAILURE_COOLDOWN - 1
+                    for path in self.cache.glob('*.json'): path.unlink()
+                    good = self.enricher()
+                    values = [proposal(TERM, None, passage=TEXT)] if touched else []
+                    _, audit = self.propose(research, values, enricher=good, rebuild=True)
+                    self.assertEqual(audit['enrichment']['api_calls'], 0)
+                    self.assertEqual(audit['enrichment']['cooldown_suppressions'], 1)
+                    self.assertEqual(self.transport.call_count, 0)
+                    self.assertEqual(self.record()['definitions'], original['definitions'])
+                    self.assertEqual(self.record()['terminology'], original['terminology'])
+                    self.clock.now += 1
+                    _, audit = self.propose(research, values, enricher=good, rebuild=True)
+                    self.assertEqual(audit['enrichment']['api_calls'], 2)
+                    self.assertEqual(audit['enrichment']['cooldown_suppressions'], 0)
+                    after = self.record()
+                    self.assertEqual(after['definitions'][0], original['definitions'][0])
+                    self.assertEqual(after['definitions'][1]['text'], NOTE)
+                    self.assertEqual(after['definitions'][1]['authority']['concept_id'], 'M123')
+                    self.assertEqual(after['terminology'][0], original['terminology'][0])
+                    self.assertEqual(after['terminology'][-1]['status'], 'matched')
+                    self.assertEqual(len(research.llm.requests), 2)
+                    # Successful, already-defined terms remain outside backlog.
+                    self.clock.now += terminology.RESULT_TTL + 1
+                    files, audit = self.propose(research, values, enricher=good, rebuild=True)
+                    self.assertEqual(files, {})
+                    self.assertEqual(audit['enrichment']['api_calls'], 0)
+                    self.assertEqual(self.record(), after)
+
+    def test_failure_cooldown_survives_r3_journal_recovery_without_calls(self):
+        research = self.make_research(self.enricher([TimeoutError('offline')]))
+        def crash(stage):
+            if stage == 'before_commit': raise RuntimeError('simulated crash')
+        with self.assertRaises(RuntimeError): research.step(fault=crash)
+        status = research.store.recovery_status()
+        calls = self.transport.call_count
+        research.store.repair(status['operations'][0]['id'], apply=True)
+        self.assertTrue((self.root/'memories/r1.md').exists())
+        self.assertEqual(self.record()['terminology'][-1]['status'], 'unavailable')
+        self.assertEqual(self.transport.call_count, calls)
+        restarted = Research(self.root, ScriptedLLM([]), {}, terminology=self.enricher())
+        restarted._recover_outcomes()
+        files, audit = self.propose(restarted, rebuild=True)
+        self.assertEqual(files, {})
+        self.assertEqual(audit['enrichment']['api_calls'], 0)
+        self.assertEqual(audit['enrichment']['cooldown_suppressions'], 1)
+        self.assertEqual(self.transport.call_count, 0)
+        self.assertEqual(len(restarted.llm.requests), 0)
+        self.assertEqual(len(research.llm.requests), 2)
 
     def test_paper_definition_preserved_with_authority_and_validation_not_weakened(self):
         research=self.make_research(self.enricher())

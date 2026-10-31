@@ -13,7 +13,9 @@ from mira.format import Unit, dumps, loads, render
 from mira.interactions import read_records
 from mira.live import LiveStore
 from mira.research import Research
+from mira.search import FixtureSearch
 from test_gardener import seed
+from test_research import draft, evidence
 
 
 def selection(ids=('r1', 'r2'), **changes):
@@ -39,6 +41,12 @@ def crash_s1(root):
     def fault(stage):
         if stage == 'replaced:research/state.json': os._exit(78)
     Research(root, ScriptedLLM([selection()]), {}).step(fault=fault)
+
+
+def crash_s1_no_candidate(root):
+    def fault(stage):
+        if stage == 'replaced:research/state.json': os._exit(78)
+    Research(root, ScriptedLLM([{'disposition':'no_candidate', 'reason':'No coherent comparison yet.'}]), {}).step(fault=fault)
 
 
 def crash_dispatch(root): Research(root, ExitDuringCall([]), {}).step()
@@ -122,6 +130,7 @@ class SynthesisTests(unittest.TestCase):
                 r.llm = ScriptedLLM([proposal]); before = self.state()
                 e = r.step(); self.assertEqual(e['status'], 'rejected', e)
                 self.assertEqual(self.state(), before)
+                self.assertIsNone(self.state()['synthesis_evaluated_catalogue'])
                 self.assertEqual(len(r.llm.requests), 1)
         self.assertIsNone(r.knowledge.document('r1').metadata['synthesized_by'])
 
@@ -196,16 +205,85 @@ class SynthesisTests(unittest.TestCase):
         r.llm = ScriptedLLM([selection()]); self.assertEqual(r.step()['action'],'S1')
         self.assertEqual(len(r.llm.requests),1)
 
-    def test_active_no_candidate_is_reassessed_at_cadence(self):
-        responses = [{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}, selection()]
+    def test_active_no_candidate_skips_unchanged_catalogue_across_restart(self):
+        responses = [{'disposition':'no_candidate','reason':'No coherent comparison yet.'},
+                     {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}]
         r = self.make(responses, own=2, living=('q3',))
         self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
         self.assertEqual(r.step()['reason'],'no_candidate')
-        self.assertIsNone(self.state()['synthesis_evaluated_catalogue'])
+        receipt = self.state()['synthesis_evaluated_catalogue']
+        self.assertTrue(receipt); self.assertFalse(self.state()['synthesis_candidate_order'])
         self.assertIsNone(self.state()['terminal_event'])
-        self.assertEqual(r.step()['action'],'R1')
+        r = Research(self.root, self.llm, {'fixture': FixtureSearch([evidence()])})
+        self.r = r
         self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),3)
+        self.assertEqual(r.step()['action'],'R1')
+        self.assertEqual(r.step()['action'],'R2')
+        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
+        self.assertFalse(self.state()['synthesis_candidate_order'])
+        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['S1','R1'])
+        self.assertEqual(len(self.llm.requests),2)
+
+    def test_active_no_candidate_reassesses_new_eligible_memory(self):
+        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        r.step(); receipt = self.state()['synthesis_evaluated_catalogue']
+        def append(s, docs, equations, ledger):
+            memory = deepcopy(docs[0]); memory.id = 'r3'
+            memory.summary = 'New independently extracted evidence.'
+            memory.metadata.update(node_id='q3', created_order=3)
+            docs.append(memory); s['nodes']['q3']['memory_ids'].append(memory.id); ledger['r'] = 4
+            s['research_cycles_since_synthesis'] = 5
+        self.change(append)
+        self.assertTrue(self.state()['synthesis_candidate_order'])
+        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
+        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
+
+    def test_active_no_candidate_reassesses_changed_question_scope(self):
+        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        r.step()
+        def scope(s, *_):
+            s['nodes']['q3']['question'] = 'How do the methods affect measurement uncertainty?'
+            s['research_cycles_since_synthesis'] = 5
+        self.change(scope)
+        self.assertTrue(self.state()['synthesis_candidate_order'])
+        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
+
+    def test_no_candidate_guard_ignores_bookkeeping_but_new_scope_reopens(self):
+        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        r.step(); receipt = self.state()['synthesis_evaluated_catalogue']
+        def bookkeeping(s, *_):
+            s['nodes']['q3']['priority'] = 7
+            s['research_cycles_since_synthesis'] = 5
+            s['provider_availability']['fixture'] = {'next_request_at':123, 'consecutive_rate_limits':1}
+        self.change(bookkeeping)
+        self.assertFalse(self.state()['synthesis_candidate_order'])
+        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
+        def new_scope(s, *_):
+            s['nodes']['q4'] = tree.node('q4', 'Can calibration uncertainty explain the discrepancy?', 'q1')
+            s['nodes']['q1']['child_ids'].append('q4'); s['next_node'] = 5
+        self.change(new_scope)
+        self.assertTrue(self.state()['synthesis_candidate_order'])
+        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
+
+    def test_pending_r3_precedes_redundant_s1_and_new_memory_reopens_selection(self):
+        responses = [{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']},
+                     {'disposition':'no_candidate','reason':'No coherent comparison yet.'},
+                     {'summary':'A source-supported research extraction.', 'results':[draft()]}, selection()]
+        r = self.make(responses, own=2, living=('q3',))
+        r.adapters = {'fixture':FixtureSearch([evidence()])}
+        self.assertEqual(r.step()['action'],'R1'); self.assertEqual(r.step()['action'],'R2')
+        self.assertTrue(self.state()['nodes']['q3']['pending_results'])
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        self.assertEqual(r.step()['reason'],'no_candidate')
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        event = r.step(); self.assertEqual((event['action'],event['status']),('R3','committed'))
+        self.assertEqual(event['memory_ids'],['r3'])
+        self.assertEqual(r.step()['action'],'S1')
+        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['R1','S1','R3','S1'])
+        self.assertEqual(len(self.llm.requests),4)
 
     def test_pending_s2_precedes_research_and_branching(self):
         r = self.make([selection(), synthesis()], own=2, living=('q3',))
@@ -243,6 +321,7 @@ class SynthesisTests(unittest.TestCase):
         state = self.state(); a = state['synthesis_attempts'][0]
         self.assertEqual(a['status'],'failed'); self.assertTrue(a['s2_interaction_id'])
         self.assertIsNone(state['pending_synthesis']); self.assertTrue(state['synthesis_candidate_order'])
+        self.assertIsNone(state['synthesis_evaluated_catalogue'])
         for i, text in before.items(): self.assertEqual(render(r.knowledge.document(i)),text)
         self.assertEqual(r.step()['status'],'committed'); self.assertEqual(len(self.state()['synthesis_attempts']),2)
         self.assertFalse(read_records(self.root)[1]['validation']['accepted'])
@@ -300,6 +379,24 @@ class SynthesisTests(unittest.TestCase):
         r.llm=ScriptedLLM([synthesis()]);self.assertEqual(r.step()['action'],'S2')
         self.assertEqual(len(r.llm.requests),1)
         self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'completed')
+        self.assertFalse(r.store.recovery_status()['blocked'])
+
+    def test_active_no_candidate_fingerprint_recovers_atomically(self):
+        r = self.make(own=2, living=('q3',))
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        p=multiprocessing.get_context('fork').Process(target=crash_s1_no_candidate,args=(str(self.root),))
+        p.start();p.join(10);self.assertEqual(p.exitcode,78)
+        operation=r.store.recovery_status()['operations'][0]
+        r.store.repair(operation['id'],apply=True);r.store.repair(operation['id'],apply=True)
+        receipt = self.state()['synthesis_evaluated_catalogue']
+        self.assertTrue(receipt); self.assertFalse(self.state()['synthesis_candidate_order'])
+        self.assertIsNone(self.state()['terminal_event'])
+        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
+        r.llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}])
+        self.assertEqual(r.step()['action'],'R1');self.assertEqual(len(r.llm.requests),1)
+        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
+        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['S1','R1'])
+        self.assertEqual(r.knowledge.validate()['documents'],2)
         self.assertFalse(r.store.recovery_status()['blocked'])
 
     def test_unknown_s2_dispatch_requires_explicit_acknowledgement(self):
