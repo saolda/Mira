@@ -7,7 +7,82 @@ Changes to either require user review and approval before being committed.
 Codex implements approved specifications and reports proposed amendments
 instead of editing `architecture.md` or independently rewriting LLM prompts.
 
-Updated: 2026-10-30.
+Updated: 2026-10-31.
+
+## Current proposal under discussion (31 October): R1/R2 shared search round
+
+**PROPOSED ONLY. NOT APPROVED OR IMPLEMENTED.** Do not implement the
+older R1/R4 scheme in `architecture.md` commit `a3bd513` or its earlier
+Codex prompt without a reviewed amendment. Preserve the existing production
+scheduler and prompt templates until explicit user approval.
+
+### R1: one LLM selection for the entire provider round
+
+- Keep **one R1 call per research round**, not one R1 per provider.
+  R1 has exactly two scientific tasks: discover **0–6 genuinely new useful
+  concepts** (possibly zero); select a single ordered search-concept list
+  using new and/or known concepts, without repeating completed searches.
+  R1 does **not** generate child questions (R5 does that).
+- The R1 input has a single integer `term_limit`, defined as
+  `max(profile.max_terms for provider in the current snapshotted strategy)`.
+  It is **not** the max across all installed providers, and R1 does not need
+  provider names, individual profiles, or future-cycle settings. For the
+  current medical strategy, PubMed 3, Europe PMC 3, Crossref 4 and
+  Wikipedia 3 yield `term_limit=4`.
+- R1 selects **0 through term_limit** meaningful ordered concepts.
+  Empty selection means it cannot identify a worthwhile distinct search;
+  Python handles blocked/exhaustion progression. Previously proposed
+  terms may be reused in a *new* combination; a completed repeated query
+  is not a productive new search. Python checks compiled provider/query
+  history, not just raw concept-list identity.
+- R1 should receive only question/scope, relevant bounded scientific
+  context, useful known/unused terminology, concise relevant completed
+  search history, `term_limit` and control terms. State each input's
+  intended use in the short prompt; avoid irrelevant provider metadata.
+- Persist new discoveries not used immediately, separately and explicitly
+  marked unverified; bounded deterministic Python projections leave all
+  stored candidates intact. Propose prompt/schema and transition details
+  for review rather than changing files yet.
+
+### R2: keep the shared concepts, examine action granularity
+
+- **The same ordered R1 concept list is reused for every provider in the
+  round.** Each provider's *existing snapshotted query profile* applies
+  its own `max_terms` prefix and query compiler; actual query strings can
+  differ. There is no R1 call between individual provider searches.
+- **CURRENT IMPLEMENTATION:** one R2 controller action performs one logical
+  provider search and records its independent durable outcome. Each unique
+  returned source is processed by one R3 action before the next R2 provider.
+  R2 may involve multiple HTTP requests within its one logical search.
+  The provider index, pending R3 cursor, deferred requests, deduplication,
+  pacing, per-node scheduling and crash recovery persist across cycles.
+- **OPEN DESIGN QUESTION:** is one batched R2 action for all providers actually
+  simpler/better? Compare against the existing atomic per-provider actions.
+  A batch must not weaken independent request receipts, rate-limit handling,
+  deferred retries, recovery, journal integrity or prompt action cadence.
+  **Current recommendation: retain per-provider R2 actions** unless a
+  concrete measured advantage justifies a reviewed change.
+- A completed provider query should not be needlessly resubmitted in the same
+  node. Exact duplicate policy, how to skip some repeats while still visiting
+  other providers, and the zero-usable-search transition remain to be
+  specified before implementation.
+
+### R4: separate scientific assessment from search scheduling
+
+- Proposed short R4 outcomes: `answered`, `kill`, `unresolved`.
+  Python (not R4) tracks whether further direct searches are available
+  and marks an unresolved, search-blocked node exhausted for possible R5.
+- Proposed `kill` wording for a **non-root** selected question:
+  "The selected question is irrelevant to its parent **and** root research
+  objective." Define the root-only case separately; do not silently
+  reinterpret this AND as OR.
+- R4 should assess sufficient scientifically supported direct **and relevant
+  synthesis** memories, not assume an S2 summary is verified; the current
+  R4 request omits synthesis memories. The exact bounded evidence projection
+  and memory lineage requirements need reviewed specification.
+- This supersedes the earlier unimplemented R4 `exhausted` decision and
+  R1 `disposition=search|no_viable_search` schema in `a3bd513`.
+  No architecture or prompt edits are authorized by this planning note.
 
 ## Roadmaps recovered from 29 October: Priority 1–3
 
@@ -155,13 +230,16 @@ traceability. The medical benchmark and configuration tuning remain ongoing.
 - OpenAlex's observed 429 / ~19.8-hour Retry-After is an availability issue,
   not a negative search result: do not busy-wait during short benchmarks.
 
-## R1 redesign specified; pending Codex implementation
+## Earlier R1/R4 specification (historical, superseded for planning)
 
-The authoritative design is now specified in `architecture.md` at
-`a3bd513`. The exact R1 and narrowly updated R4 prompt text is supplied
-by ChatGPT in the scoped Codex implementation task. Existing code still
-uses the original 2–6 `keywords` contract until that work is implemented
-and validated. Codex must not independently revise the architecture/prompts.
+The following is a **historical snapshot of the earlier unimplemented
+design** at `architecture.md` commit `a3bd513`. It is now superseded for
+planning by the 31 October proposal above. **Do not hand this earlier
+section or its Codex prompt to an implementer as the current approved
+specification.** Existing code still uses the original 2–6 `keywords`
+contract. No new R1/R2/R4 prompt or state-machine implementation is
+approved; review and amend `architecture.md` and prompts explicitly
+before implementation.
 
 - **One R1 call with two scientific responsibilities:** (A) discover **0–6
   genuinely NEW** useful scientific concepts, possibly none; (B) select an
