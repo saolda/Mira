@@ -4,6 +4,17 @@ Implemented architecture, 27 October 2026. This document describes the controlle
 in `src/mira/research.py`, tree contracts in `research_tree.py`, capacity/branching
 in `branching.py`, and the synthesis gardener.
 
+## Implementation status and scope (31 October 2026)
+
+The R1 two-responsibility contract, single-active-corpus storage layout and
+compact synthesis Markdown below are **approved targets for the next implementation**.
+They are not claims that existing Python code already implements them.
+R2 retains **one logical provider search per action**. R3 retains one source
+per action. **R4's prompt and scientific decision contract will be reviewed
+separately next; do not implement or silently alter them in the R1/storage task.**
+Existing on-disk experiments and legacy memory layouts remain readable until
+the explicitly requested transition and cleanup.
+
 ## Purpose and canonical knowledge
 
 Mira investigates a root question, retains inspectable research and develops
@@ -37,6 +48,96 @@ still pass the actual model-tokenizer/context-budget check. Context curation is
 a Python-harness responsibility; scientific interpretation and search choices
 remain with the assigned LLM action, and child-question creation remains R5's
 responsibility.
+
+## Canonical research and synthesis memory formats
+
+New canonical memories are readable Markdown files with stable identities:
+`memories/r*.md` for source-derived research and `memories/s*.md` for synthesis.
+Both use the same **compact version-2 layout**: a title, small JSON metadata
+header, `## Summary`, `## Knowledge`, and terminal `## Relationships`.
+
+**Research example** (illustrative values, not scientific evidence):
+
+```markdown
+# Research: Selected question
+
+```json
+{"version":2,"id":"r1","revision":1,"kind":"research","node_id":"q1","created_order":1,"next":{"f":2,"q":1,"e":1},"source":{"id":"source-1","url":"https://example.org/study"},"evidence_ref":"research/results/example.json","source_memories":[],"synthesized_by":null}
+```
+
+## Summary
+
+A concise, source-qualified account of this paper's findings.
+
+## Knowledge
+
+### #f1 | Finding
+
+A proposition extracted from the source.
+
+Qualification: Limits, study population, uncertainty and context.
+
+## Relationships
+
+```json
+{"relationships":[]}
+```
+```
+
+A research memory represents **one source**. Its source ID/URL and immutable
+retrieval reference establish provenance. `#f` anchors denote findings
+(including claims, observations, inferences or hypotheses); `#q` denotes
+questions; `#e` equations; `#i` images. Equation assets retain their
+independent JSON records. Optional qualifications and explicit `RELATED_TO`
+relationships are retained. The summary does not imply independent verification.
+
+**Synthesis example** (illustrative values):
+
+```markdown
+# Synthesis: Combined evidence
+
+```json
+{"version":2,"id":"s1","revision":1,"kind":"synthesis","node_id":"q1","created_order":3,"next":{"f":2,"q":1,"e":1},"source_memories":["r1","r2"],"synthesized_by":null}
+```
+
+## Summary
+
+Integrated findings and their unresolved limitations.
+
+## Knowledge
+
+### #f1 | Combined evidence
+
+An integrated proposition supported by the cited memory units.
+
+Evidence status: unverified
+Explanation: How the cited findings agree, differ or remain limited.
+Provenance: Interpretation restricted to the supplied sources.
+
+## Relationships
+
+```json
+{"relationships":[{"from":"f1","type":"SYNTHESIZES","to":"r1#f1","status":"unverified"},{"from":"f1","type":"SYNTHESIZES","to":"r2#f1","status":"unverified"}]}
+```
+```
+
+A synthesis memory is **not itself an independent source**. It has a
+`summary`, integrated anchored findings, stable `SYNTHESIZES` relationships
+to input knowledge units, and `source_memories`/optional `synthesis_inputs`
+lineage metadata. It has **no separate `conclusion` field**: its propositions
+carry conclusions, and the summary states their scope and limitations.
+Each synthesis finding retains its `Kind=synthesis` and
+`Evidence status=unverified`; the compact parser derives the Kind from
+memory metadata, not the human-readable finding label. Preserve exact input
+anchors, source lineage, qualifiers, revisions and ID allocators.
+
+Markdown should display the scientific content first. Machine-only
+bookkeeping stays in compact metadata; do not duplicate it in prose.
+Rendering and parsing must be lossless, including journal/recovery,
+relationships and historical citations. **Existing verbose version-1
+synthesis memories remain parseable** for compatibility, but new synthesis
+memories use the compact format. No model-generated content is rewritten
+or invented during format conversion.
 
 ## Research question documents
 
@@ -135,64 +236,65 @@ preserves compatible basic search behaviour.
 
 ### Research rounds and action selection
 
-Every living node maintains its own R1 concept list, **next database index**
-(starting at zero), pending R3 evidence and deferred-provider searches. A
-single R1 concept list is used for one complete pass through the selected
-strategy's ordered databases. The index denotes the **next unvisited
-database**, not the last database used. It survives node scheduling switches.
+**R1–R5 are controller actions, not persistent node states.** One controller
+cycle performs one action and at most one LLM call. A **research round** is
+one R1 search plan executed against the selected strategy's ordered
+providers, with R3 extraction between provider searches, followed by R4.
+Other research nodes and synthesis actions may be scheduled between steps.
 
-| Action | Predicate | Result | Model calls |
-| --- | --- | --- | --- |
-| R1 | No current concepts, pending evidence, deferred round or recorded no-viable-search disposition | Discover and retain 0–6 new concepts; select 1–6 ordered search concepts, or record `no_viable_search` | 1 |
-| R2 | Concepts exist, no pending R3 source, and an eligible provider remains in the ordered pass or deferred queue | Compile and submit that provider's query; record outcome, source evidence and deferred work as appropriate | 0 |
-| R3 | At least one pending, unprocessed source | Extract **one** source; atomically advance its processed-source cursor and store any accepted memory/glossary terms | 1 |
-| R4 | A normal completed provider round **or** an R1 `no_viable_search` disposition, with no pending R3/deferred work | Evaluate the question; for a normal round decide `kill`, `answered` or `retry`; for no viable search decide `kill`, `answered` or `exhausted` | 1 |
-| R5 | Selected exhausted node (capacity or R4 no-viable-search exhaustion) with no committed split receipt | Develop children; persist IDs and split receipt, including an empty split | 1 |
+| Action | Name | Responsibility | Key variables / effects | LLM calls |
+| --- | --- | --- | --- | ---: |
+| **R1** | **Plan** | Discover 0–6 genuinely new concepts and select one ordered search plan for the **whole provider round**. | Read selected `question` and bounded context; supply `term_limit = max(profile.max_terms)` for this strategy; persist new candidates and accepted `keywords`/`search_concepts`; increment `search_round`; reset `next_database_index=0`. Empty/repeat-only selection sets a durable `search_blocked` flag. | **1** |
+| **R2** | **Search** | Compile and execute **one logical provider search** using the **same R1 concept list**. | Read `keywords`, `next_database_index` and the provider's snapshotted query profile; advance index **once on first visit**; record `provider_outcomes`, query/receipt and optional `deferred_searches`; set `pending_results` for new sources. | **0** |
+| **R3** | **Extract** | Extract one previously unprocessed retrieved source. | Read `pending_results` and the per-source processed cursor; create at most one `r*` memory, accepted glossary terms/equations and source disposition; advance processing state atomically. | **1** |
+| **R4** | **Assess** | Evaluate whether direct investigation answered the selected question, went off-track or remains unresolved. **Exact revised decisions are deferred to the next design review.** | Requires the provider pass and R3/deferred work to be complete, or the pending `search_blocked` handoff after R4 is updated; subsequently changes node `status`/next-round eligibility. Existing R4 validation/prompt is unchanged in this implementation stage. | **1** |
+| **R5** | **Branch** | Develop child research questions from an eligible exhausted node. | Read `status=exhausted` and ripeness; allocate child node IDs; persist `child_ids`, `split_attempt` and `status=split` (even for an empty split). | **1** |
 
-For each database in the initial pass, R2 either submits its query or
-recognises that it cannot yet be submitted. After recording that outcome,
-R2 advances the node's **next database index by exactly one**, including
-for `empty`, `failed`, HTTP 429 and deferred/cooldown cases. Successful
-nonduplicate results become pending R3 evidence, which is fully processed
-before the node's next R2 action. An empty response produces no R3 action.
+A normal progression is `R1 → R2 → R3 (one action per source, if any)
+→ R2 → … → R4`. In particular, **R1 is not re-run between providers**.
+R2 may make multiple HTTP requests as part of **one logical provider search**,
+but never searches two providers within one controller action.
 
-A provider not yet eligible to submit, or returning a retryable HTTP 429,
-places its original provider-query into the node's deferred queue with
-the provider index, attempt count and retry timestamp. This is **not a
-terminal search outcome**; it does not advance the database index a second
-time when retried. Once the initial index reaches the provider count, R2
-revisits eligible deferred entries in original provider order, subject to
-the provider availability policy. A deferred entry is removed only after
-an actual terminal result or exhaustion of its allowed submission attempts.
-Other nodes may execute between any two actions.
+Each living node keeps its own selected concepts, `next_database_index`
+(the **next unvisited provider**, starting at zero), pending evidence,
+completed outcomes and deferred-provider requests. These survive node switches,
+crashes and journal recovery. A provider visited for the first time advances
+the index exactly once, even on an empty/failed/deferred outcome. An eligible
+deferred request is retried with the **original query** without advancing
+the index again. R3 fully processes pending unique sources before the
+next R2 action. R4 cannot assess a normal completed round while R3
+evidence or deferred work remains.
 
-R4 is ineligible while deferred entries remain, even when the database
-index has reached the end of the strategy. On a normal round's `retry`,
-R4 appends the selected concepts to `previous_search_terms`, clears current
-concepts and round outcomes, and resets the index to zero. On `kill` or
-`answered`, the node's research status changes accordingly. A valid R1
-`no_viable_search` instead records a distinct durable no-search disposition
-(with no fabricated R2 results, no database-index advancement and no R3).
-The next direct research action is R4 using the accumulated existing
-research/search history and the no-viable-search reason. In this special case
-R4 cannot return `retry`, which would repeat R1 on unchanged information.
-It may return `exhausted` (relevant but no productive direct search is
-available), `kill` or `answered`. `exhausted` enters the existing R5
-ripeness queue without declaring that scientific evidence is sufficient or
-claiming the research-capacity threshold was reached. Exhaustion cause is
-persisted; R5 must accept either capacity or this explicit R4 disposition.
-An unsuccessful retrieval does not itself prove the question answered,
-irrelevant or exhausted.
+Python compiles each provider's **own prefix** of the shared ordered list
+using that provider's snapshotted `max_terms` and compiler. If a compiled
+provider query for this node has already completed with `ok` or `empty`,
+R2 records a deterministic duplicate skip referring to the original
+search outcome; it does not make a duplicate network call or fabricate
+retrieval evidence. Failed or unsubmitted/deferred queries are not evidence
+that a search has been adequately performed. At least one non-duplicate
+effective provider query is needed for a productive R1 round.
+
+When R1 returns no selected concepts, or every effective provider query
+would repeat completed work, Python records its discoveries plus
+`search_blocked=true` and its reason, with **no fictitious R2/R3 actions**.
+A blocked node is not immediately declared answered, killed or exhausted.
+The blocked-node handoff and final R4 decisions will be completed in the
+**separate R4 design task**. Until then, the harness must not busy-loop R1,
+silently convert a block into a scientific conclusion or invoke incompatible
+R4 decisions; it may report an explicit recoverable waiting-for-R4-upgrade
+state while continuing other eligible nodes. Capacity exhaustion remains
+separate and retains its existing safeguards.
 
 ### R2: query compilation and evidence
 
-R1 supplies a **selected list of 1–6 ordered scientific search concepts**
-when its disposition is `search`. An R1 `no_viable_search` supplies no
-selected concepts and never dispatches R2. R1 separately proposes 0–6 new
-concepts, which need not be selected in the current round. Each concept is
-one scientific term or established multiword phrase of at most five words,
-without provider syntax. Python validates and filters both arrays, preserving
-accepted order; a `search` selection must remain nonempty.
+R1 supplies **one ordered list of 0–`term_limit` concepts** for
+the entire provider round, where `term_limit` is the largest configured
+`max_terms` in the selected snapshotted strategy (currently 1–6 by
+profile validation). An empty or repeat-only list is **blocked** and does
+not dispatch R2. R1 separately discovers 0–6 new concepts, which need not
+be used in the current list. Python validates and filters both arrays.
+Each concept is one scientific term or established multiword phrase of at
+most five words, without provider syntax.
 
 For a provider, R2 retains the first `max_terms` accepted concepts in
 priority order and discards the rest **for that provider only**. A multiword
@@ -270,124 +372,67 @@ and retention policy must not break pending R3 processing, crash recovery or
 existing experiments. This is a design target for implementation, not a claim
 that current retention already behaves this way.
 
-### R1: targeted search concepts
+### R1: discovery and search-term selection
 
-R1 receives the selected question, distinct root/ancestor context, previously used
-terms, relevant memory excerpts and prohibited control terms. Prior terms are soft
-avoidance guidance; essential terms may recur. Python removes prohibited literal
-whole terms/phrases and rejects an all-control query. Previous terms never become
-control terms. R1 memory excerpts remain explicitly untrusted and bounded; this
-small retrieval projection is distinct from R5's complete direct-research context.
-An indexed glossary projection adds relevant terms, aliases, concise definitions,
-definition status, explicit relationships and per-node usage status. Selection
-matches the question, its ancestors and relevant findings/gaps; novelty breaks
-relevance ties, and sourced neighbours can extend discovery. At most 96 FTS hits
-and eight neighbours per leading hit are considered, rather than scanning term
-records. The default maximum is 12 entries (configurable up to 15), within a
-3,200-token conservative UTF-8 byte upper bound. The independent
-provider-search history has its own bounded input and does not consume this
-budget. Both glossary settings are persisted by `research-init --glossary-token-budget` and
-`--glossary-limit`. Sparse catalogues or smaller budgets supply fewer entries.
-The complete request still passes the existing model-tokenizer budget check.
-Glossary prose receives the existing untrusted-text filtering; definitions guide
-terminology and are never independently verified scientific evidence.
+R1 performs exactly **one LLM call per research round** with two tasks:
+**discover** 0–6 useful genuinely new scientific concepts (zero is valid),
+and **select** up to `term_limit` ordered concepts for the shared search plan.
+Selection may reuse established or previously discovered concepts and need
+not use any newly discovered concept. It must not create subquestions; R5
+does that. Avoid inventing terms or varying synonyms solely to appear novel.
 
-The `question` input is the assigned scientific question. R1 neither
-creates nor chooses child/subresearch questions: that is exclusively R5's
-responsibility. `question_context` contains root/ancestor questions only to
-resolve scope. `memory_context` supplies bounded relevant findings,
-qualifications and gaps as terminology guidance, not independently established
-truth. `research_brief` supplies optional background and complete research
-objectives; background may be excerpted. `previous_search_terms` is a
-bounded, labelled projection of previously proposed/selected terms, not a
-claim that those terms succeeded or failed when searched.
+Python supplies **only the inputs that inform these tasks**:
 
-R1 also receives a dedicated `search_outcomes` input: up to 12 most recent
-committed provider-query outcomes for the selected node, in chronological order.
-Each entry contains provider ID, profile ID when known, compiled query,
-whether the query was actually submitted, outcome status, returned record count
-and unique record count. Status distinguishes `ok`, `empty`, `failed`,
-`rate_limited`, `deferred` and `unavailable`. An `ok` outcome confirms
-retrieval, not relevance; `empty` means no provider matches for that query,
-not absence of scientific evidence. Failed, deferred or rate-limited searches
-give no evidence of query ineffectiveness. Search outcomes are built from
-persisted retrieval records independently of the glossary and its byte budget.
-Their absence means the retrieval history is unknown, not unsuccessful.
-Only actual submitted queries count as glossary-term usage.
+| R1 input | How R1 uses it |
+| --- | --- |
+| `question` and `question_scope` | Identify the assigned scientific target; ancestor context only disambiguates scope, never replaces the question. |
+| `research_context` | Use relevant qualified findings, limitations and unresolved evidence gaps to guide terminology; do not assume extracted claims are verified. |
+| `term_context` | Consider compact relevant glossary terms, previously selected terms and unverified unused R1 discoveries; reuse known terms but do not report them as new concepts. |
+| `completed_queries` | **Do not repeat** provider searches already completed for this node. The input is a bounded relevant view; Python validates against the **complete** persisted history. |
+| `term_limit` | The **single integer maximum** across the profiles of providers in the current strategy; order up to this many concepts by search value. No individual-provider profile list is supplied. |
+| `control_terms` | Exclude supplied prohibited terms/phrases. |
 
-R1 records suggested glossary IDs in its event, without marking them used.
-Only terms/aliases matched in an actually submitted provider query enter the
-node's `used_glossary_term_ids` register and the corresponding R2
-event/evidence history. Cooldown skips do not count; submitted rate-limited
-requests do. Ambiguous abbreviations alone identify no concept. Previous
-terms and outcomes inform soft reuse guidance without new query bans or
-extra LLM calls.
+The LLM returns **exactly**:
+`{"new_concepts":[],"search_concepts":[],"reason":"Brief explanation."}`.
+`new_concepts` contains 0–6 concepts; `search_concepts` contains
+0–`term_limit`. An empty selection is valid if R1 cannot identify a
+worthwhile distinct search. `reason` is one short sentence.
+Each concept is one meaningful term/phrase of at most five words without
+Boolean operators, provider names, field tags or query syntax. Python
+validates/filters without changing the scientific selection. The accepted
+`search_concepts` are persisted as the round's `keywords` for existing
+R2 state compatibility.
 
-R1 has exactly **two scientific responsibilities in one LLM call**:
-(1) propose **0–6 genuinely new, useful concepts** for the assigned question
-without inventing poor terms to fill a quota; and (2) **select 1–6 ordered
-search concepts** from new or established terminology to advance that same
-question. Selection requires scientific judgement by R1, not a deterministic
-Python-assembled fallback. An unused discovery remains a candidate for later
-rounds. R1 does not nominate a new subquestion or research objective.
+Python retains every newly proposed concept in a **durable per-node
+candidate register**, separate from the source-supported glossary.
+Preserve original and normalized spelling, node, discovery round/event,
+order, `unverified` status, selection/consideration state and actual
+submitted-query usage. A concept not selected immediately must not be
+lost; a concept merely considered or selected has not necessarily been
+used by a submitted provider query. Deduplicate conservatively.
 
-The complete R1 JSON contract has exactly these fields:
-`{"disposition":"search","new_concepts":[],"search_concepts":["term"],"reason":"Brief reason."}`.
-`disposition` is `search` or `no_viable_search`; the latter requires
-`search_concepts:[]` and a reason and is valid when no worthwhile untried
-search can be selected. A `search` disposition requires 1–6 concepts and
-a brief reason. Both concept arrays obey the existing at-most-five-words,
-no-Boolean/provider-syntax and literal control-term validation. Python
-conservatively normalizes/deduplicates terms, preserves complete raw and
-accepted lists, and validates the selected concepts before publishing.
+Python constructs bounded, deterministic, inspectable projections, rather
+than flooding R1 with all stored information: initial limits are up to
+10 relevant unused candidates and 10 relevant prior terms, with stable
+ranking, fair rotation and visible omitted counts. The complete candidate
+records, provider-query results and source provenance remain durable.
+The exact rendered prompt and output reserve must fit the tokenizer
+budget; essential question/objectives are not silently truncated.
 
-Python persists R1 discoveries in a durable **per-node concept-candidate
-register**, separately from the source-grounded glossary. Record normalized
-and original spelling, R1 origin, node, first discovery round/event, original
-priority, unverified scientific status, selection count/last selected round
-and actual submitted-provider usage count. Preserve unselected discoveries;
-selection alone is not evidence of provider usage. Update actual usage only
-when a profile retains the concept in a **submitted** R2 query; a term cut by
-`max_terms`, a cooldown skip or a merely deferred query remains unused.
-Existing selected and previously proposed terms remain available as distinct
-historical terminology; do not upgrade a speculative R1 term to sourced
-glossary status. Candidate state and audits survive restarts, journal recovery
-and node scheduling. Legacy nodes/events without a register remain readable.
+For a nonempty selection, compile its effective query for each active
+provider **without network submission** and compare against the node's
+complete completed-query history. R1 must avoid repeated completed searches;
+Python enforces the rule and R2 skips any individually repeated provider
+query. If all providers would repeat, the entire selection is nonproductive
+and treated like an empty selection, not an invalid JSON/model response.
+No hidden fallback, LLM retry with identical context or automatic
+Python-generated scientific terms is permitted. Preserve the exact raw
+model response and normalized outcome for auditing.
 
-R1 receives separately labelled bounded projections: up to **10 unused R1
-candidates** and up to **10 previous selected/proposed terms** by default,
-with deterministic question/memory relevance, recency, stable ties and rotation
-so omitted candidates are not permanently starved. These are configurable
-projection limits, not caps on stored candidates. Each projection identifies
-its full/visible/omitted counts, usage and unverified status. Keep the existing
-independently bounded glossary and 12-search outcome projections; add a small
-list of the active provider/profile IDs and `max_terms` to explain how the
-ordered selection will be compiled. All underlying records remain durable,
-including those omitted from R1, and the fully rendered request still passes
-the tokenizer budget. Python handles the bounded input, not R1's scientific
-term selection.
-
-For a `search` disposition Python compiles the candidate ordered selection
-under **every active query profile without submitting**, then compares the
-provider ID, actual query text and relevant public request parameters against
-the node's **complete** persisted history of actually submitted terminal
-`ok`/`empty` searches. At least one provider must have a previously
-unsubmitted effective query under this criterion; another provider's repeated
-query does not invalidate the whole round. Failed, unavailable, rate-limited
-and unsubmitted/deferred searches do not establish ineffectiveness and do not
-count as completed-query duplicates. No hidden fallback, automatic query
-replacement or additional LLM call is permitted. An invalid repeat-only
-selection is rejected with its raw response retained, not misreported as
-`no_viable_search`. R2 otherwise retains its existing one-query-per-provider
-order, profile pruning, deduplication, retry and audit semantics.
-
-On a valid `no_viable_search`, persist any new discoveries and its reason,
-do not fabricate provider activity, and route immediately to R4. R4 can
-choose `exhausted` for a relevant question with no useful direct search,
-leading eventually to R5, or `kill`/`answered` when justified by existing
-research. No `retry` is permitted in this special case. This is separate
-from capacity exhaustion and never means that lack of search results proves
-a scientific conclusion.
+Empty/repeat-only selections set durable `search_blocked` with reason
+and leave the node available for the **future R4 blocked-path assessment**,
+not automatically exhausted. R4's revised decision contract is a separate
+review and must not be inferred from this R1 specification.
 
 ### R3: ordered extraction and provenance
 
@@ -481,31 +526,25 @@ rebuilds it. `glossary-export --experiment NAME` atomically regenerates the deri
 case-insensitive alphabetical `research/glossary.md`, including evidence and links.
 R3 never rewrites that whole export; it may be stale until explicitly regenerated.
 
-### R4: round evaluation and no-viable-search exhaustion
+### R4: assess research progress (separate next design review)
 
-R4 receives the assigned question, ancestor context, all direct research,
-compact **actual** provider-search history and a `search_availability`
-projection indicating `completed_round` or `no_viable_search`, including
-R1's reason for the latter. R4 returns exactly
-`{"decision":"retry","reason":"Brief explanation."}` with one of these
-context-dependent decisions:
+R4's **currently implemented** prompt accepts `kill`, `answered` and
+`retry` following a fully completed provider round. It receives the
+assigned question, ancestor scope, direct research and compact search
+history. R4 cannot generate search terms or child questions. An
+unsuccessful search does not prove that the question is answered or
+irrelevant. The existing prompt and validator remain unchanged for the
+R1/storage implementation task.
 
-- `kill`: off-track relative to the selected, parent or root question.
-- `answered`: enough scientific evidence exists to answer the selected
-  question adequately. Retrieval failure alone never suffices.
-- `retry`: **completed provider round only**; further direct searches are
-  worthwhile. Reset terms/index for another R1 as before.
-- `exhausted`: **no-viable-search only**; question remains relevant but
-  R1 identified no worthwhile untried direct search. Persist the distinct
-  `no_viable_search` exhaustion cause and hand off to R5's existing queue.
-  This does not claim that the research-capacity threshold has been reached.
-
-The validated decision set is `kill|answered|retry` for a completed round
-and `kill|answered|exhausted` for no viable search. R4 never creates terms
-or child questions; R5 alone may develop child questions. A no-viable-search
-result never fabricates a completed provider pass or invokes R2. Persist R4's
-cause/decision atomically with the state transition, and retain the existing
-complete research input and source provenance. Malformed outputs are rejected.
+**Next planned R4 review (not part of this task):** decide how to
+incorporate relevant, source-checkable synthesis memories, how to
+assess relevance to both parent **and** root objectives, and how to
+replace `retry` with a scientific `unresolved` judgment. Python should
+then combine that scientific assessment with the deterministic
+`search_blocked` flag to choose between another R1 round and
+exhaustion/R5. No new R4 decision schema is approved by this section;
+do not silently implement the superseded `no_viable_search` /
+R4 `exhausted` contract.
 
 ## Deterministic research capacity
 
@@ -723,8 +762,9 @@ retrieved evidence, generated Markdown and historical tree changes. R5 is an
 independent recorded action. Exports work without a running model or SQLite.
 
 Research executions additionally export existing interaction phases and action
-events incrementally to one append-only JSONL file under `memory/run-logs/`,
-independent of the experiment directory. Each CLI initialization/run/demo and each
+events incrementally to one append-only JSONL file under the project-level
+`log/` folder (`/home/eric/Dev/Mira/log/` on the development machine),
+**outside** the canonical `memory/` corpus. Each CLI initialization/run/demo and each
 `Research.run()` starts a fresh execution; custom supervisors may group calls with
 `Research.execution()`. Records retain chronological sequence, experiment/node/
 cycle and interaction IDs, model/settings, exact sent prompts and supplied inputs,
@@ -741,24 +781,54 @@ explicit acknowledgement; incomplete journals still require existing repair.
 
 ## Persistence, compatibility and recovery
 
-Canonical live layout remains `memories/*.md`, `equations/*.json`, `identity.json`,
-`research/state.json`, immutable `research/results/*.json`, `events/*.json` and
-per-term `glossary/g*.json` records.
-Independent `interactions/` records save the exact request before dispatch and
-then raw response, validation and outcome. Indexes remain disposable.
+### Single active memory corpus and separate experiment logs
 
-Catalog metadata `experiment.json` records creation and explicit retain/disposable
-policy outside the canonical corpus. A `.runner.lock` lease spans executions;
-the existing writer lock continues to serialize individual operations. Cleanup is
-an explicit CLI/catalog operation, never a scheduling action. Its default is a
-read-only deletion plan with names, dates, sizes and status. Applying deletion
-requires named, completed, explicitly disposable experiments and rechecks runner/
-writer locks, pending work, interaction outcomes and recovery integrity. Legacy
-unclassified and retained runs are protected. Retention designation is separate
-from deletion. No symlinks are traversed; confined, fd-safe deletion follows a
-durable archive of interaction and canonical records in the independent log home.
-Cleanup never removes run logs, user reviews or milestone reports. Ordinary
-development test reports overwrite `test-results/latest.md`.
+The **target** default storage root is the project's **one active
+`memory/` corpus**, not `memory/research/<experiment-name>/` directories.
+Canonical current files remain immediately under that root using the
+existing paths: `memories/r*.md`, `memories/s*.md`,
+`equations/*.json`, `identity.json`, `research/state.json`,
+`research/results/*.json`, `events/*.json`, `glossary/g*.json`,
+necessary `interactions/` and recovery journals. Rebuildable indexes and
+temporary retrieval payloads remain separate from scientific memories.
+Private user-authored question inputs, such as `memory/questions/*.md`,
+are **not generated experiment memories** and must be preserved unless
+the user explicitly identifies them for deletion.
+
+Do **not** create a new memory child directory for each experiment.
+Starting a **new** experiment resets/replaces the **previous generated
+active corpus** at `memory/`, including its old research and synthesis
+memories, state and temporary retrievals; no accumulating per-experiment
+memory archives, renamed memory folders or retained old experiments.
+A normal `research-run` or recovery/continuation **never** resets the
+corpus. Initialization must have an explicit, distinguishable
+new-experiment/reset operation, check active writer/runner locks and
+uncertain submissions, and safely limit deletion to verified generated
+paths (no symlink traversal or indiscriminate `memory/` deletion).
+Existing `memory/research/<experiment>/` corpora are to be **removed in
+the separately authorized storage-cleanup implementation**, not
+silently copied into nested new directories. New experiments restart
+their own allocators and scientific state; run history remains in logs.
+
+The independent project-level `log/` folder contains run-specific
+append-only execution logs, with unique run/session identifiers and
+timestamps. Initialization, continuation and failure logs belong there,
+not under `memory/run-logs/`. Logs are diagnostics, not additional
+scientific memory copies or a competing recovery store; redact secrets
+and preserve enough request/response/validation/decision trace for
+inspection. Historical generated experiments are removed rather than
+preserved as canonical memory snapshots inside `log/`. Keep log files
+separate from current scientific memory and clearly label old runs.
+Human-readable per-memory or per-question browsing should not require
+navigating logs, journals or old experiment directories.
+
+The current implementation still uses `memory/research/<name>/` and
+`memory/run-logs/`. The R1/storage Codex task must implement the
+single-corpus transition and explicitly requested removal of prior
+generated experiments, with compatibility for reading older formats
+and with safe journal/lock handling. The earlier experiment-catalog
+`retain/disposable` workflow is superseded for new runs; do not retain
+it as a second default directory layout.
 
 Every multi-file operation uses the existing small journal: validated changed-file
 after-images are fsynced, a prepared manifest is published before canonical edits,
@@ -791,13 +861,15 @@ answered question: without children it becomes exhausted; previously branched
 non-killed nodes become split with a legacy receipt. Original statuses are retained
 as `legacy_status`. Pending evidence on a formerly living, previously branched
 node is retained as `legacy_pending_results` and in its immutable evidence file,
-rather than discarded or directly rescheduled on a split node. Existing memory bytes, stable IDs, events, equation assets and
-historical prompts are preserved. Inspection does not migrate experiments.
-Experiments and historical R3 responses without glossary fields remain valid;
-the glossary is initialized lazily when terminology is first admitted.
+rather than discarded or directly rescheduled on a split node. Existing memory bytes, stable IDs, events, equation assets and historical
+prompts remain interpretable by the compatibility parser while a legacy
+corpus is selected. **Explicit new-experiment reset intentionally discards the
+previous generated scientific corpus**, as separately authorized; this is
+not an in-place scientific migration. Historical R3 responses without
+glossary fields remain valid; the glossary initializes lazily when needed.
 
-The old Phase 1 snapshot store remains supported separately. New autonomous
-experiments use live persistence; no implicit import or whole-corpus snapshot is
-introduced. Journal scans and full-tree refresh favor inspectability over extreme
+The old Phase 1 snapshot store remains supported for compatible reads.
+New autonomous research uses live persistence in the single active corpus;
+no implicit import or accumulating per-experiment snapshot is introduced. Journal scans and full-tree refresh favor inspectability over extreme
 scale. Backups, server management and automated research-quality evaluation remain
 outside this controller.
