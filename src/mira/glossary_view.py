@@ -8,6 +8,7 @@ import os
 import uuid
 
 from .store import durable_write, sync_dir
+from . import glossary_definitions as definitions
 
 
 ASSETS = Path(__file__).with_name('glossary_assets')
@@ -37,7 +38,7 @@ def citation_url(value):
     return value if re.fullmatch(r'https://id\.nlm\.nih\.gov/mesh/M[0-9]+', value) else ''
 
 
-def markdown(records):
+def markdown(records, current_scope=None):
     # Preserve the established Markdown layout and ordering. Every untrusted
     # field is prose, including legacy source/evidence/node reference strings.
     from .glossary import r3_prose as prose
@@ -48,8 +49,26 @@ def markdown(records):
         if record['aliases']: lines += ['Aliases: ' + ', '.join(map(prose, record['aliases'])), '']
         if record.get('terminology') or not record['definitions']:
             lines += [prose(lookup_status(record)), '']
-        for definition in record['definitions']:
+        ordered=definitions.preferred(record,current_scope)
+        ordered += [d for d in definitions.preferred(record) if d not in ordered]
+        if any(definitions.provisional(d) for d in ordered):
+            lines += ['Preferred definition: ' + prose(ordered[0]['text']) if definitions.preferred(record,current_scope)
+                else 'No applicable definition selected for the current research scope.', '',
+                'Supporting passages document term occurrence; they do not verify model-generated definitions.', '']
+        for definition in ordered:
+            if definitions.provisional(definition):
+                lines += ['- Definition: ' + prose(definition['text']),
+                    '  Source: LLM-generated.', '  Verification: Provisional, not independently verified.',
+                    '  Scientific scope: ' + prose(definition['scope']),
+                    '  Ambiguity: ' + prose(definition['ambiguity'] or 'None recorded.'),
+                    '  Model: ' + prose(definition['model']),
+                    '  R1 interaction: ' + prose(definition['interaction_ref']),
+                    '  R1 event: ' + prose(definition['event_ref']),
+                    '  Prompt template SHA256: ' + prose(definition['template_sha256'])]
+                continue
             lines += ['- ' + prose(definition['text']) + ' — ' + prose(definition['qualification'])]
+            if 'authority' not in definition and any(definitions.provisional(d) for d in record['definitions']):
+                lines += ['  Source: Source-supported research passage.']
             if 'authority' in definition:
                 a = definition['authority']; url = citation_url(a['url'])
                 lines += ['  ' + prose(authority_label(definition)) +
@@ -64,7 +83,7 @@ def markdown(records):
     return '\n'.join(lines)
 
 
-def html(records):
+def html(records, current_scope=None):
     by_id = {r['id']: r for r in records}
     css = (ASSETS / 'style.css').read_text(encoding='utf-8')
     script = (ASSETS / 'search.js').read_text(encoding='utf-8')
@@ -103,9 +122,27 @@ def html(records):
         if record.get('terminology') or not record['definitions']:
             parts += ['<p class="qualification prose">' + escape(lookup_status(record)) + '</p>']
         parts += ['<h3>Definitions</h3>']
+        if any(definitions.provisional(d) for d in record['definitions']):
+            preferred=definitions.preferred(record,current_scope)
+            parts += ['<p class="prose"><strong>Preferred for the current research scope:</strong> ' +
+                escape(preferred[0]['text'] if preferred else 'No applicable definition selected.') + '</p>',
+                '<p class="qualification prose">Supporting passages document term occurrence; they do not verify model-generated definitions.</p>']
         if record['definitions']:
             parts += ['<ol class="definitions">']
-            for definition in record['definitions']:
+            ordered=definitions.preferred(record,current_scope)
+            ordered += [d for d in definitions.preferred(record) if d not in ordered]
+            for definition in ordered:
+                if definitions.provisional(definition):
+                    parts += ['<li class="definition-provisional"><p class="prose"><strong>Definition:</strong> ' + escape(definition['text']) + '</p>',
+                        '<p class="reference prose"><strong>Source:</strong> LLM-generated.<br>'
+                        '<strong>Verification:</strong> Provisional, not independently verified.<br>'
+                        '<strong>Scientific scope:</strong> ' + escape(definition['scope']) + '<br>'
+                        '<strong>Ambiguity:</strong> ' + escape(definition['ambiguity'] or 'None recorded.') + '<br>'
+                        '<strong>Model:</strong> ' + escape(definition['model']) + '<br>'
+                        '<strong>R1 interaction:</strong> ' + escape(definition['interaction_ref']) + '<br>'
+                        '<strong>R1 event:</strong> ' + escape(definition['event_ref']) + '<br>'
+                        '<strong>Prompt template SHA256:</strong> ' + escape(definition['template_sha256']) + '</p></li>']
+                    continue
                 parts += ['<li><p class="prose">' + escape(definition['text']) + '</p>']
                 if definition['qualification']:
                     parts += ['<p class="qualification prose"><strong>Qualification:</strong> ' + escape(definition['qualification']) + '</p>']
@@ -115,7 +152,8 @@ def html(records):
                         (' · <a href="' + escape(url, quote=True) + '" rel="noreferrer">Source</a>' if url else '') +
                         '<br>Retrieved: ' + escape(a['retrieved_at']) + '<br>Scope: ' + escape(definition['scope']) + '</p></li>']
                 else:
-                    parts += ['<p class="reference">' + support_link(definition['evidence']) + '</p></li>']
+                    label='Source-supported research passage · ' if any(definitions.provisional(d) for d in record['definitions']) else ''
+                    parts += ['<p class="reference">' + label + support_link(definition['evidence']) + '</p></li>']
             parts += ['</ol>']
         else: parts += ['<p>No source definition recorded.</p>']
         parts += ['<h3>Supporting evidence</h3>']

@@ -291,6 +291,8 @@ def context(state, memories, files, node_id, control_terms=(), glossary_context=
 def components(value, control_terms):
     """Reject individual concepts without rewriting the model's selections."""
     accepted = {'reason': value['reason']}
+    if 'provisional_definitions' in value:
+        accepted['provisional_definitions'] = value['provisional_definitions']
     rejected = []
     for field in ('new_concepts', 'search_concepts'):
         accepted[field] = []

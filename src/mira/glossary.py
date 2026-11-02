@@ -10,7 +10,7 @@ import sqlite3
 import unicodedata
 
 from .format import digest, dumps, loads, require
-from . import r1
+from . import r1, glossary_definitions as definitions
 
 TERM_PATH = re.compile(r"glossary/g[1-9][0-9]*\.json\Z")
 TERM_ID = re.compile(r"g[1-9][0-9]*\Z")
@@ -63,6 +63,16 @@ def validate_transaction(old, proposed):
                         'terminology lookup history cannot be removed')
             else:
                 new_ids.append(int(record["id"][1:]))
+            previous_definitions=loads(old[path])['definitions'] if path in old else []
+            for definition in record['definitions']:
+                if not definitions.provisional(definition) or definition in previous_definitions: continue
+                event=loads(proposed.get(definition['event_ref'],'{}'))
+                require(event.get('action_committed')=='R1' and event.get('status')=='committed' and
+                    definition['interaction_ref']=='interactions/'+event.get('interaction_id','')+'/request.json' and
+                    definition['context']=={'node_id':event.get('node_id'),'question':event.get('question')} and
+                    {'term_id':record['id'],'definition':definition['text'],'scope':definition['scope'],
+                     'ambiguity':definition['ambiguity']} in event.get('provisional_definitions',{}).get('accepted',[]),
+                    'provisional definition lacks committed R1 provenance')
         require(sorted(new_ids) == list(range(before["next_id"], after["next_id"])), "glossary allocator would reuse or skip an ID")
     else:
         require(after["revision"] == before["revision"] and after["commitment"] == before["commitment"] and
@@ -89,6 +99,9 @@ def validate_record(record):
             if key == "qualification": require(isinstance(value, str), "invalid evidence qualification")
             else: string(value)
     for row in record["definitions"]:
+        if isinstance(row, dict) and definitions.provisional(row):
+            definitions.validate(row, record['id'])
+            continue
         if isinstance(row, dict) and 'authority' in row:
             from .terminology import validate_concept, normalize as authority_name
             require(set(row) == {'text', 'qualification', 'type', 'scope', 'authority'}, 'invalid authority definition')
@@ -106,7 +119,7 @@ def validate_record(record):
                 TERM_ID.fullmatch(row["target"]) and row["target"] != record["id"] and
                 row["type"] in RELATIONS, "invalid glossary relationship")
         require(row["evidence"] in record["evidence"], "relationship evidence missing")
-    expected = "candidate" if not record["definitions"] else "source_defined" if len({normalize(d["text"]) for d in record["definitions"]}) == 1 else "multiple_definitions"
+    expected = definitions.status(record["definitions"])
     require(record["status"] == expected, "incorrect definition status")
     from .terminology import validate_result
     require(isinstance(record.get('terminology', []), list), 'invalid terminology lookup history')
@@ -230,7 +243,7 @@ class Directory:
         identity = record["id"]
         for table in ("terms", "names", "links", "terms_fts", "lookups"):
             db.execute("DELETE FROM " + table + " WHERE id=?", (identity,))
-        definition = " | ".join(d["text"] for d in record["definitions"][:2])[:480]
+        definition = " | ".join(d["text"] for d in definitions.preferred(record)[:2])[:480]
         db.execute("INSERT INTO terms VALUES (?,?,?,?,?,?,?)", (identity, record["key"], record["term"], definition,
                    dumps(record["aliases"][:8]), record["status"], sha))
         db.executemany("INSERT OR IGNORE INTO names VALUES (?,?)", [(identity, normalize(n)) for n in [record["term"], *record["aliases"]]])
@@ -356,7 +369,7 @@ class Directory:
             if value["definition"]:
                 definition = {"text": value["definition"], "qualification": value["qualification"], "evidence": support}
                 if definition not in record["definitions"]: record["definitions"].append(definition)
-            record["status"] = "candidate" if not record["definitions"] else "source_defined" if len({normalize(d["text"]) for d in record["definitions"]}) == 1 else "multiple_definitions"
+            record["status"] = definitions.status(record["definitions"])
         for value in accepted:
             record = by_key[key_for(value)]
             for relation in value["relationships"]:
@@ -372,8 +385,8 @@ class Directory:
             # Newly admitted records and touched undefined candidates first; a
             # bounded indexed backlog lets later R3 actions enrich older candidates.
             now = enricher.clock()
-            targets = [r for r in records.values() if (not r['definitions'] or
-                       int(r['id'][1:]) >= metadata(state)['next_id'] or
+            targets = [r for r in records.values() if (not any(not definitions.provisional(d) for d in r['definitions']) or
+                       int(r['id'][1:]) >= metadata(state)['next_id'] or not r.get('terminology') or
                        (r.get('terminology') and r['terminology'][-1]['status'] in
                         {'not_attempted', 'unavailable', 'error'}))
                        and lookup_due(r, now)]
@@ -384,7 +397,7 @@ class Directory:
             if len(targets) < enricher.max_terms:
                 with closing(self._db()) as db:
                     backlog = list(db.execute("""SELECT t.id,t.sha FROM terms t LEFT JOIN lookups l ON l.id=t.id
-                        WHERE (t.status='candidate' OR l.status IN ('not_attempted','unavailable','error'))
+                        WHERE (t.status IN ('candidate','provisional') OR l.status IS NULL OR l.status IN ('not_attempted','unavailable','error'))
                             AND (l.status IS NULL OR l.status='not_attempted'
                             OR (l.status IN ('unavailable','error') AND l.checked<=?)
                             OR (l.status IN ('matched','not_found','ambiguous') AND l.checked<=?))
@@ -431,7 +444,7 @@ class Directory:
                             d.get('authority', {}).get('concept_id') == authority['concept_id'] and
                             d.get('type') == description['type'] and d['text'] == description['text']
                             for d in record['definitions']): record['definitions'].append(definition)
-                    record['status'] = 'candidate' if not record['definitions'] else 'source_defined' if len({normalize(d['text']) for d in record['definitions']}) == 1 else 'multiple_definitions'
+                    record['status'] = definitions.status(record['definitions'])
         files = {}
         for record in records.values():
             validate_record(record)
@@ -443,6 +456,39 @@ class Directory:
             state["glossary"] = meta
         return files, {"accepted": len(accepted), "rejected": rejected, "merged": merged, "changed_ids": list(records),
                        **({'enrichment': enrichment} if enrichment is not None else {})}
+
+    def provisional_definitions(self, state, values, context, event, model):
+        """Sparse after-images, committed only with the successful R1 action."""
+        scope = definitions.context(context['question'],event['node_id'],
+            r1.tree.ancestors(state,event['node_id']))
+        accepted, rejected = definitions.proposals(values, context['term_context']['glossary']['entries'], scope)
+        files={};admitted=[]
+        if not accepted: return files, {'accepted': admitted, 'rejected': rejected}
+        self.ensure(state)
+        request_ref='interactions/'+event['interaction_id']+'/request.json'
+        request=loads(self.store.path(request_ref).read_text(encoding='utf-8'))
+        template=request['prompt_template']['files'][0]['sha256']
+        for value in accepted:
+            with closing(self._db()) as db:
+                row=db.execute('SELECT sha FROM terms WHERE id=?',(value['term_id'],)).fetchone()
+            record=self._read(value['term_id'],row['sha'])
+            if not definitions.eligible(record,scope):
+                rejected.append({'field':'provisional_definitions','term_id':record['id'],
+                    'error':'term already has an applicable definition'})
+                continue
+            generated={'origin':'llm_generated','verification':'provisional','term_id':record['id'],
+                'text':value['definition'],'scope':value['scope'],'ambiguity':value['ambiguity'],
+                'model':model,'interaction_ref':request_ref,'event_ref':'events/'+event['event_id']+'.json',
+                'template_sha256':template,'request_sha256':digest(request['serialized_request']),
+                'context':{'node_id':event['node_id'],'question':context['question']}}
+            definitions.validate(generated,record['id'])
+            record['definitions'].append(generated);record['status']=definitions.status(record['definitions'])
+            validate_record(record)
+            files['glossary/'+record['id']+'.json']=dumps(record);admitted.append(value)
+        if files:
+            meta=deepcopy(metadata(state));meta['revision']+=1
+            meta['commitment']=commitment(meta['commitment'],files);state['glossary']=meta
+        return files, {'accepted':admitted,'rejected':rejected}
 
     def used(self, query, state):
         self.ensure(state)
@@ -500,19 +546,26 @@ class Directory:
         for entry in entries:
             record = self._read(entry["id"], candidates[entry["id"]]["sha"])
             entry["term"] = r1.clean_text(record["term"], 160)[0]
-            definitions = sorted(record['definitions'], key=lambda d: 'authority' not in d)[:2]
-            definition, omitted = r1.clean_text(" | ".join(d["text"] for d in definitions), 240)
-            entry["definition"] = definition or None
-            entry["aliases"] = [clean for alias in record["aliases"][:8] if (clean := r1.clean_text(alias, 100)[0])]
-            entry["status"] = record["status"]
-            if any('authority' in d for d in record['definitions']):
-                entry['definition_sources'] = [{'provider': d['authority']['provider'],
-                    'concept_id': d['authority']['concept_id'], 'type': d['type'],
-                    'preferred_name': r1.clean_text(d['authority']['preferred_name'], 160)[0]}
-                    if 'authority' in d else {'source_id': d['evidence']['source_id'], 'type': 'research_source'}
-                    for d in definitions]
+            scope = definitions.context(context['question'], node_id,
+                [n for n in record['node_ids'] if n in [node_id, *r1.tree.ancestors(state,node_id)]])
+            preferred = definitions.preferred(record, scope)[:1]
+            definition, omitted = r1.clean_text(" | ".join(d['text'] for d in preferred[:2]), 240)
+            entry['definition'] = definition or None
+            entry['aliases'] = [clean for alias in record['aliases'][:8] if (clean := r1.clean_text(alias, 100)[0])]
+            entry['status'] = record['status']
+            entry['definition_eligible'] = not preferred
+            if preferred and (definitions.provisional(preferred[0]) or 'authority' in preferred[0]):
+                entry['definition_sources'] = [{'origin':'llm_generated','verification':'provisional',
+                        'scope':r1.clean_text(d['scope'],160)[0], 'ambiguity':r1.clean_text(d['ambiguity'],160)[0]}
+                    if definitions.provisional(d) else {'provider': d['authority']['provider'],
+                        'concept_id':d['authority']['concept_id'],'type':d['type'],
+                        'preferred_name':r1.clean_text(d['authority']['preferred_name'],160)[0]}
+                    if 'authority' in d else {'source_id':d['evidence']['source_id'],'type':'research_source'}
+                    for d in preferred[:2]]
                 entry['terminology_only'] = True
-                entry['definition_omitted_or_truncated'] = omitted
+                entry['definition_omitted_or_truncated'] = omitted or any(
+                    r1.clean_text(d['scope'],160)[1] or r1.clean_text(d['ambiguity'],160)[1]
+                    for d in preferred if definitions.provisional(d))
             if record["relationships"]:
                 entry["relationships"] = [{"target": link["target"], "type": link["type"]} for link in record["relationships"][:3]]
         while entries and len(dumps(result).encode("utf-8")) > meta["token_budget"]:
@@ -548,8 +601,11 @@ class Directory:
             if valid: break
             require(attempt == 0, 'glossary index differs from committed records')
             self.ensure(state, rebuild=True)
-        outputs = {'research/glossary.md': glossary_view.markdown(records),
-                   'research/glossary.html': glossary_view.html(records)}
+        identity=state.get('active_node_id') or state['root_id']
+        definition_scope=definitions.context(state['nodes'][identity]['question'],identity,
+            r1.tree.ancestors(state,identity))
+        outputs = {'research/glossary.md': glossary_view.markdown(records, definition_scope),
+                   'research/glossary.html': glossary_view.html(records, definition_scope)}
         glossary_view.publish(self.store, outputs)
         return {'path': str(self.store.path('research/glossary.md')),
                 'html_path': str(self.store.path('research/glossary.html')), 'entries': len(records)}
