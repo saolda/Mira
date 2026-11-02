@@ -157,10 +157,21 @@ def present(term, passage):
 
 def alias_supported(term, alias, passage):
     a, b, p = map(normalize, (term, alias, passage))
+    # A quoted abbreviation inside a compound name can replace its expansion:
+    # "Transforming growth factor (TGF)-beta" -> "TGF-beta". Require the
+    # complete original naming statement; a coincidental acronym is insufficient.
+    for expanded, abbreviated in ((term, alias), (alias, term)):
+        match = re.fullmatch(r'(.+?)\s+\(([A-Za-z][A-Za-z0-9-]{1,11})\)([-‐‑–— ].+)', expanded)
+        if match and any(c.isupper() for c in match[2]) and \
+                normalize(match[2] + match[3]) == normalize(abbreviated) and present(expanded, passage):
+            return True
     # Mere co-occurrence is not synonym evidence. Parenthetical expansions and
     # explicit naming statements are accepted, with the original quote retained.
     return any(re.search(re.escape(x) + r"\s*\(\s*" + re.escape(y) + r"\s*\)", p)
                or re.search(re.escape(x) + r"\s*(?:,\s*)?(?:also (?:known|referred to) as|also called|or)\s+" + re.escape(y) + r"(?!\w)", p)
+               or any(y in [re.sub(r'^(?:and )?(?:the )?', '', n.strip()) for n in match.split(',')]
+                      for match in re.findall(r'(?:^|[.;:\n])\s*(?:the )?' + re.escape(x) +
+                          r'\s*\(also known as ([^()]{1,250})\)', p))
                for x, y in ((a, b), (b, a)))
 
 
@@ -546,9 +557,11 @@ class Directory:
         candidates = {row["id"]: dict(row) for row in rows}
         candidates.update({i: row for i, row in neighbours.items() if i not in candidates})
         relevant = r1.tokens(question); findings = r1.tokens(memory)
+        assigned = r1.tokens(context['question'])
         def score(row):
             names = r1.tokens(row["term"] + " " + row["aliases"])
-            return (4 * len(names & relevant) + len(names & findings) +
+            explicit = any(present(n, context['question']) for n in [row['term'], *loads(row['aliases'])])
+            return (explicit, 4 * len(names & assigned) + len(names & relevant) + len(names & findings) +
                     .2 * (row['status'] != 'candidate') + .1 * (row["id"] not in used), -int(row["id"][1:]))
         entries = []
         result = {"entries": entries, "untrusted_glossary_data": True,
@@ -557,45 +570,63 @@ class Directory:
             term, _ = r1.clean_text(row["term"], 160)
             if not term: continue
             definition, _ = r1.clean_text(row["definition"], 240)
-            aliases = [clean for alias in loads(row["aliases"]) if (clean := r1.clean_text(alias, 100)[0])]
+            aliases = [clean for alias in loads(row["aliases"])[:2] if (clean := r1.clean_text(alias, 100)[0])]
             entry = {"id": row["id"], "term": term, "definition": definition or None,
                      "aliases": aliases, "status": row["status"], "used_in_submitted_search": row["id"] in used}
             entries.append(entry)
-            # UTF-8 byte count is a conservative token upper bound; the complete
-            # request is still checked by the configured model tokenizer.
-            if len(dumps(result).encode("utf-8")) > meta["token_budget"]:
-                entries.pop(); continue
             if len(entries) >= meta["limit"]: break
-        # Validate only selected records. Render from canonical bytes, so the
-        # disposable cache can never replace their content in a prompt.
-        for entry in entries:
+        # Validate at most limit candidates, then budget the final projection.
+        # Cached short definitions cannot estimate citation/scope overhead or
+        # cause a later small relevant record to be lost behind a large one.
+        selected = entries
+        entries = []; result['entries'] = entries
+        if len(dumps(result).encode('utf-8')) > meta['token_budget']:
+            result.pop('selection_policy')
+        for entry in selected:
             record = self._read(entry["id"], candidates[entry["id"]]["sha"])
             entry["term"] = r1.clean_text(record["term"], 160)[0]
             scope = definitions.context(context['question'], node_id,
                 [n for n in record['node_ids'] if n in [node_id, *r1.tree.ancestors(state,node_id)]])
             preferred = definitions.preferred(record, scope)[:1]
-            definition, omitted = r1.clean_text(" | ".join(d['text'] for d in preferred[:2]), 240)
+            # Preserve complete G1 definitions (maximum 600 characters), including
+            # late scientific conditions. The final shared byte cap still applies.
+            definition, omitted = r1.clean_text(" | ".join(d['text'] for d in preferred[:2]), 600)
             entry['definition'] = definition or None
-            entry['aliases'] = [clean for alias in record['aliases'][:8] if (clean := r1.clean_text(alias, 100)[0])]
+            # Prefer aliases useful to this question; long authority synonym
+            # lists must not crowd other explicitly requested concepts out.
+            aliases = sorted(record['aliases'], key=lambda a:
+                (-int(present(a, context['question'])), -len(r1.tokens(a) & assigned), len(a), a))[:2]
+            entry['aliases'] = [clean for alias in aliases if (clean := r1.clean_text(alias, 100)[0])]
             entry['status'] = record['status']
-            entry['definition_eligible'] = not preferred
-            if preferred and (definitions.provisional(preferred[0]) or 'authority' in preferred[0]):
+            entry['definition_eligible'] = definitions.eligible(record, scope)
+            if (record.get('enrichment') or [{}])[-1].get('status') == 'clarification' and not preferred:
+                entry['requires_clarification'] = True
+            if preferred:
                 entry['definition_sources'] = [{'origin':'llm_generated','verification':'provisional',
                         'scope':r1.clean_text(d['scope'],160)[0], 'ambiguity':r1.clean_text(d['ambiguity'],160)[0]}
                     if definitions.provisional(d) else {'provider': d['authority']['provider'],
                         'concept_id':d['authority']['concept_id'],'type':d['type'],
                         'preferred_name':r1.clean_text(d['authority']['preferred_name'],160)[0]}
-                    if 'authority' in d else {'source_id':d['evidence']['source_id'],'type':'research_source'}
+                    if 'authority' in d else {'source_id':d['evidence']['source_id'],'type':'research_source',
+                        'evidence_ref':d['evidence']['evidence_ref'],
+                        **({'qualification': r1.clean_text(d['qualification'],160)[0]} if d['qualification'] else {})}
                     for d in preferred[:2]]
                 entry['terminology_only'] = True
-                entry['definition_omitted_or_truncated'] = omitted or any(
+                truncated = omitted or any(
                     r1.clean_text(d['scope'],160)[1] or r1.clean_text(d['ambiguity'],160)[1]
                     for d in preferred if definitions.provisional(d))
+                truncated = truncated or any(r1.clean_text(d['qualification'],160)[1]
+                    for d in preferred if not definitions.provisional(d) and 'authority' not in d)
+                if truncated: entry['definition_omitted_or_truncated'] = True
             if record["relationships"]:
                 entry["relationships"] = [{"target": link["target"], "type": link["type"]} for link in record["relationships"][:3]]
-        while entries and len(dumps(result).encode("utf-8")) > meta["token_budget"]:
-            entries.pop()
-        result['omitted_count'] = meta['next_id'] - 1 - len(entries)
+            entries.append(entry)
+            result['omitted_count'] = meta['next_id'] - 1 - len(entries)
+            # UTF-8 bytes conservatively bound tokens; the complete request is
+            # also checked by the configured model tokenizer before dispatch.
+            if len(dumps(result).encode('utf-8')) > meta['token_budget']:
+                entries.pop()
+                result['omitted_count'] = meta['next_id'] - 1 - len(entries)
         return result
 
     def all(self, state):

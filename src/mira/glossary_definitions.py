@@ -84,7 +84,8 @@ def applicable(row, record, current):
     names=words(' '.join([record['term'],*record['aliases']]))
     query=words(current['question'])-names
     if 'authority' not in row:
-        return row['evidence']['node_id']==current['node_id'] or bool((words(row['text'])-names) & query)
+        return row['evidence']['node_id']==current['node_id'] or bool(
+            (words(row['text']+' '+row['qualification'])-names) & query)
     scope=normalize(row.get('scope',''))
     if scope and scope not in GENERIC_SCOPE:
         return bool((words(scope+' '+row['text'])-names) & query)
@@ -112,7 +113,10 @@ def preferred(record, current=None):
 
 
 def eligible(record, current):
-    return not preferred(record,current)
+    # The legacy optional R1 fallback must not override an explicit unresolved
+    # meaning. Independent enrichment reopens it when source context changes.
+    last = (record.get('enrichment') or [{}])[-1]
+    return not preferred(record,current) and last.get('status') != 'clarification'
 
 
 def proposals(values, supplied, current):

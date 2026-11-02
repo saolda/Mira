@@ -166,8 +166,9 @@ class Completion:
             return {'root': str(self.store.root), 'revision': glossary.metadata(state)['revision'],
                     **coverage(records, state)}
 
-    def reject_definitions(self, rejections, *, reviewer):
+    def reject_definitions(self, rejections, *, reviewer, requires_clarification=False):
         """Explicit scientific review; preserve original generated text/receipt."""
+        require(type(requires_clarification) is bool, 'Invalid clarification disposition.')
         with self.trace.execution(self.log_dir, command='glossary-definition-review'), self.store.lock():
             self.store.read(); state = self._state(); records = self.directory.all(state)
             by_id = {r['id']: r for r in records}; changed = []
@@ -178,7 +179,7 @@ class Completion:
                 if any(r['definition_sha256'] == sha for r in record.get('definition_reviews', [])): continue
                 record.setdefault('definition_reviews', []).append({'definition_sha256': sha,
                     'reason': rejection['reason'], 'reviewer': reviewer, 'reviewed_at': now()})
-                self._progress(record, state, by_id, 'invalidated', rejection['reason'])
+                self._progress(record, state, by_id, 'clarification' if requires_clarification else 'invalidated', rejection['reason'])
                 changed.append(record)
             self._save(changed, {'event_id': uuid.uuid4().hex, 'action_committed': 'glossary-definition-review'})
             return coverage(records, state)
@@ -285,7 +286,11 @@ class Completion:
                     if source.get('id') != evidence['source_id']: continue
                     content = source.get('content', '')
                     if not isinstance(content, str): continue
-                    at = content.casefold().find(record['term'].casefold())
+                    # The admitted passage identifies the relevant location even
+                    # when the source uses a heading/alias rather than our label.
+                    # Falling back to page zero would supply unrelated front matter.
+                    at = content.find(evidence['passage'])
+                    if at < 0: at = content.casefold().find(record['term'].casefold())
                     start = max(0, at-300) if at >= 0 else 0
                     source_context.append({'source_id': source['id'], 'reference': ref,
                         'title': source.get('title', '')[:300], 'verbatim_excerpt': content[start:start+1800]})

@@ -88,6 +88,14 @@ evidence. Ambiguous terms remain visible with a reason; coverage never hides the
 The standard views show preferred and alternative definitions, attribution,
 coverage, generation time and source glossary revision.
 
+Reviewed literal definitions can be admitted with `mira.glossary_sources.admit`;
+the reviewer supplies the source document identity/hash, exact passage and concept
+mapping. This uses the existing journal and recovery gates, preserves attribution,
+and rejects changed or ambiguous source identities. Scientific review can exclude
+an incorrect definition or explicitly retain an unresolved meaning using
+`Completion.reject_definitions(..., requires_clarification=True)`; unchanged
+clarification cases are not automatically regenerated.
+
 ```bash
 PYTHONPATH=src python3 -m mira glossary-enrich --status  # coverage and all unresolved reasons; no service calls
 PYTHONPATH=src python3 -m mira glossary-enrich --limit 10 --batch-size 4

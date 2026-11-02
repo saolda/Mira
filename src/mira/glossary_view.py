@@ -9,6 +9,7 @@ import uuid
 
 from .store import durable_write, sync_dir
 from . import glossary_definitions as definitions
+from .glossary_sources import source_url
 
 
 ASSETS = Path(__file__).with_name('glossary_assets')
@@ -227,7 +228,10 @@ def html(records, current_scope=None, metadata=None):
                 '<br><strong>Node:</strong> ' + escape(evidence['node_id']) + '</p>']
             title, url = source_label(evidence, metadata)
             if title: parts += ['<p class="reference prose"><strong>Source title:</strong> ' + escape(title) + '</p>']
-            if url: parts += ['<p class="reference prose"><strong>Source reference:</strong> ' + escape(url) + '</p>']
+            if url:
+                safe = source_url(url)
+                reference = ('<a href="' + escape(safe, quote=True) + '" rel="noreferrer noopener">' + escape(url) + '</a>') if safe else escape(url)
+                parts += ['<p class="reference prose"><strong>Source reference:</strong> ' + reference + '</p>']
             if evidence['qualification']:
                 parts += ['<p class="qualification prose"><strong>Qualification:</strong> ' + escape(evidence['qualification']) + '</p>']
             parts += ['</section>']
