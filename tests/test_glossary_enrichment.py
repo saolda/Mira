@@ -405,6 +405,41 @@ class EnrichmentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'vocabulary'): validate_generated(value, rec)
         self.assertEqual(validate_generated(value, rec, {'question': 'Which pulmonary lesions recur?'}), value)
 
+    def test_scientific_review_can_preserve_unresolved_meaning_without_regeneration(self):
+        self.add(['Alpha pulmonary sign']);op=self.operation();op.run()
+        old=self.get()['definitions'][0]
+        result=op.reject_definitions({'g1':{'definition_sha256':digest(dumps(old)),
+            'reason':'Source defines only the generic sign; the specific modifier is unresolved.'}},
+            reviewer='Test source reviewer',requires_clarification=True)
+        self.assertEqual(result['requiring_clarification'],1)
+        self.assertEqual(result['without_usable_definitions'],1)
+        self.assertEqual(self.get()['definitions'],[old])
+        token=self.r.store.read()[0];again=op.run()
+        self.assertEqual(again['model_calls'],0);self.assertEqual(again['processed'],0)
+        self.assertEqual(token,self.r.store.read()[0]);self.assertEqual(len(self.model.requests),1)
+        self.assertFalse(gd.eligible(self.get(),gd.context('Which pulmonary features are relevant?','q1')))
+        from mira import r1
+        with self.r.store.lock():
+            state=self.state();ctx=r1.retrieval_context(state,[],self.r.store._files(),'q1')
+            entry=self.r.glossary.retrieve(state,ctx,'q1')['entries'][0]
+        self.assertFalse(entry['definition_eligible']);self.assertTrue(entry['requires_clarification'])
+
+    def test_source_window_uses_admitted_passage_when_canonical_label_is_absent(self):
+        from mira.glossary_sources import admit
+        from mira.interactions import now
+        self.add(['Alpha pulmonary sign'])
+        passage='A late source heading describes pulmonary air-filled structures.'
+        source=dict(id='fixture:headed-source',title='Synthetic source',url='https://example.org/headed',
+            retrieved_at=now(),document_sha256=digest('synthetic original'),
+            content=('Unrelated front matter. '*200)+passage+' Pulmonary morphology follows.')
+        admit(self.r.store,'g1',source,passage=passage,qualification='Pulmonary morphology.',
+            reviewer='Test reviewer',mapping_reason='The source heading maps to the existing sign.',log_dir=self.home/'log')
+        record=self.get();op=self.operation();state=self.state()
+        request,data,_,_=op._request([record],state,{'g1':record})
+        window=data[0]['retained_source_context'][0]['verbatim_excerpt']
+        self.assertIn(passage,window);self.assertLessEqual(len(window),1800)
+        self.assertEqual(self.model.requests,[])  # Tokenization only, no generation.
+
     def test_cohort_measurements_are_not_generated_definitions(self):
         self.add(['Alpha pulmonary sign'])
         row = {'term_id': 'g1', 'status': 'defined', 'reason': 'Cohort observation.', 'definitions': [{
