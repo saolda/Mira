@@ -61,17 +61,16 @@ class GlossaryViewTests(unittest.TestCase):
         first=record(1,'Zeta');second=record(2,'alpha')
         second['aliases']=['First alias'];second['relationships']=[{'type':'RELATED_TO','target':'g1','evidence':second['evidence'][0]}]
         self.seed([first,second]);self.export()
-        expected='''# Research glossary
-
-Source-derived terminology; definitions are not independently verified.
-
-## alpha (g2)
+        expected='''## alpha (g2)
 
 Status: source_defined
 
 Aliases: First alias
 
+Preferred definition: alpha is a synthetic benchmark term.
+
 - alpha is a synthetic benchmark term. — Synthetic.
+  Source: Source-supported research passage · synthetic · research/results/synthetic.json
 
 > alpha is a synthetic benchmark term.
 
@@ -85,7 +84,10 @@ RELATED_TO: g1
 
 Status: source_defined
 
+Preferred definition: Zeta is a synthetic benchmark term.
+
 - Zeta is a synthetic benchmark term. — Synthetic.
+  Source: Source-supported research passage · synthetic · research/results/synthetic.json
 
 > Zeta is a synthetic benchmark term.
 
@@ -93,7 +95,11 @@ Source: synthetic; evidence: research/results/synthetic.json; node: q1
 
 Qualification: Synthetic fixture.
 '''
-        self.assertEqual(self.md.read_text(),expected)
+        md = self.md.read_text()
+        self.assertEqual('## ' + md.split('## ', 1)[1], expected)
+        self.assertIn('Total glossary terms: 2', md)
+        self.assertIn('Research-source definitions: 2', md)
+        self.assertRegex(md, r'Generated: [0-9T:.+-]+; glossary revision: 1')
         html=self.html.read_text();self.assertLess(html.index('id="g2"'),html.index('id="g1"'))
         self.assertIn('href="#g1">Zeta (g1)</a>',html)
         self.assertIn('href="#g2-e1">Evidence 1</a>',html)

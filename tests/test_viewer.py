@@ -70,6 +70,25 @@ class ViewerTests(unittest.TestCase):
         status = int(head.split()[1])
         return status, content, head
 
+    def test_standard_glossary_link_serves_current_export_without_writes(self):
+        status, body, _ = self.request('GET', '/')
+        self.assertEqual(status, 200); self.assertIn(b'href="/glossary"', body)
+        self.assertEqual(self.request('GET', '/glossary')[0], 404)
+        with self.research.store.lock():
+            state = loads((self.root/'research/state.json').read_text())
+            self.research.glossary.export(state)
+        before = file_hashes(self.root)
+        status, body, headers = self.request('GET', '/glossary')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, (self.root/'research/glossary.html').read_bytes())
+        self.assertIn(b"default-src 'none'", headers); self.assertIn(b"script-src 'sha256-", headers)
+        self.assertEqual(file_hashes(self.root), before)
+        # An obsolete derived view is never silently presented as current.
+        target = self.root/'research/glossary.html'
+        target.write_text(target.read_text().replace(state['glossary']['commitment'], '0'*64))
+        status, body, _ = self.request('GET', '/glossary')
+        self.assertEqual(status, 409); self.assertIn(b'stale', body)
+
     def test_persistent_default_cli_storage_and_phase1_default_unchanged(self):
         env = {**os.environ, "MIRA_MEMORY_DIR": str(self.home)}
         script=Path(self.temp.name)/'script.json'; script.write_text(dumps({'responses':[]}))
