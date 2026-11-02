@@ -50,10 +50,11 @@ class PromptTests(unittest.TestCase):
             if record["action"] == "R4": self.assertIsNone(data["inputs"]["search_evidence"])
             self.assertEqual(file_hashes(root), before)
             seen.add(record["action"])
-        self.assertEqual(seen, set(ACTIONS) - {"R0", "R5", "S3"})
+        self.assertEqual(seen, set(ACTIONS) - {"R0", "R5", "S3", "G1"})
 
     def test_source_hashes_and_literal_context_not_recursively_templated(self):
         for action in ACTIONS:
+            if action == 'G1': continue  # Dedicated immutable instructions plus separate data turn.
             context = dict.fromkeys(SLOTS[action], None)
             context["question"] = 'Literal {{ unknown }} ${name} "quoted" \n Unicode 温度'
             messages, metadata = PromptTemplates().render(action, context)
@@ -76,6 +77,7 @@ class PromptTests(unittest.TestCase):
 
     def test_every_action_has_an_independent_plain_text_prompt(self):
         for action in ACTIONS:
+            if action == 'G1': continue
             context = {key: {"marker": key} for key in SLOTS[action]}
             messages, snapshot = PromptTemplates().render(action, context)
             self.assertEqual(len(messages), 1)

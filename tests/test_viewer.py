@@ -242,7 +242,7 @@ class ViewerTests(unittest.TestCase):
         status, content, _ = self.request("GET", "/api/prompt-templates")
         self.assertEqual(status, 200)
         data = json.loads(content)
-        self.assertEqual({entry["action"] for entry in data}, {"R0", "R1", "R3", "R4", "R5", "S2", "S3"})
+        self.assertEqual({entry["action"] for entry in data}, {"R0", "R1", "R3", "R4", "R5", "S2", "S3", "G1"})
         self.assertEqual(len(data[0]["files"]), 1)
         status, content, _ = self.request("GET", f"/api/experiments/run-a/decisions/{self.r4}")
         self.assertTrue(json.loads(content)["template_verification"]["matches_recorded_request"])

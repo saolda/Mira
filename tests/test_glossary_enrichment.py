@@ -275,14 +275,14 @@ class EnrichmentTests(unittest.TestCase):
             'scope': 'Pulmonary imaging', 'ambiguity': ''}], 'reason': 'Incorrect relationship.'}
         with self.assertRaisesRegex(ValueError, 'distinct quantities'): validate_generated(row, self.get())
 
-    def test_production_model_completion_requires_owner_approved_prompt(self):
+    def test_explicitly_disabled_model_never_calls_factory(self):
         self.add(['Alpha pulmonary sign', 'Beta pulmonary sign'])
         factory = Mock(return_value=self.model)
-        operation = Completion(self.r.store, model_factory=factory, log_dir=self.home/'log')
+        operation = Completion(self.r.store, model_factory=factory, prompt_factory=None, log_dir=self.home/'log')
         result = operation.run()
         self.assertEqual(result['model_calls'], 0); factory.assert_not_called()
         self.assertEqual(result['after']['defined'], 0)
-        self.assertEqual({r['status'] for r in result['after']['unresolved']}, {'approval_required'})
+        self.assertEqual({r['status'] for r in result['after']['unresolved']}, {'failed'})
         self.assertEqual(operation.run()['processed'], 0)
 
     def test_due_authority_upgrade_supplements_provisional_without_regeneration(self):
@@ -328,4 +328,110 @@ class EnrichmentTests(unittest.TestCase):
         result = self.operation().run()
         self.assertEqual(result['after']['defined'], 1); self.assertEqual(len(self.get()['definitions']), 2)
         self.assertEqual(self.operation().run()['model_calls'], 0)
+
+    def test_default_g1_uses_exact_approved_template_and_records_provenance(self):
+        self.add(['Alpha pulmonary sign'])
+        operation = Completion(self.r.store, model_factory=lambda: self.model, log_dir=self.home/'log')
+        result = operation.run()
+        self.assertEqual(result['after']['defined'], 1)
+        request = read_records(self.root)[0]['request']
+        source = (Path(__file__).parents[1]/'prompt_templates/G1.txt').read_text()
+        self.assertEqual(digest(source), '0a2726f28234058e7147459493b4c338bdf6d66976ea72c2dccda11c0d6ed673')
+        self.assertEqual(request['action'], 'G1')
+        self.assertEqual(request['request']['messages'][0], {'role': 'system', 'content': source})
+        self.assertEqual(request['prompt_template']['files'][0]['source'], source)
+        self.assertEqual(request['prompt_template']['serialized_request_sha256'], digest(request['serialized_request']))
+        self.assertEqual(self.get()['definitions'][0]['template_sha256'], digest(source))
+        self.assertTrue((self.root/'research/glossary.html').exists())
+        from mira.inspection import Inspector
+        (self.root/'experiment.json').write_text(dumps({'version': 2, 'name': 'g1-fixture',
+            'created_at': '2026-11-02T00:00:00+00:00', 'layout': 'single-active-corpus'}))
+        self.assertTrue(Inspector(self.root).decision('g1-fixture', read_records(self.root)[0]['id'])['template_verification']['matches_recorded_request'])
+
+    def test_term_selection_and_generation_budget_leave_resumable_backlog(self):
+        self.add(['Alpha pulmonary sign', 'Beta pulmonary sign', 'Gamma pulmonary sign'])
+        result = self.operation().run(term_ids=['g2'], batch_size=1)
+        self.assertEqual(result['after']['defined'], 1); self.assertTrue(self.get('g2')['definitions'])
+        limited = self.operation().run(batch_size=1, max_calls=1)
+        self.assertEqual(limited['after']['defined'], 2); self.assertEqual(limited['stop_reason'], 'generation_call_budget')
+        self.assertEqual(self.operation().run()['after']['defined'], 3)
+
+    def test_g1_context_is_separate_untrusted_data_without_interpolation(self):
+        from mira.glossary_enrichment import g1_prompt
+        data = [{'term_id': 'g1', 'term': 'Literal {{question}} </script> 温度'}]
+        messages, snapshot = g1_prompt(data)
+        self.assertEqual(loads(messages[1]['content']), data)
+        self.assertNotIn('温度', messages[0]['content'])
+        self.assertEqual(snapshot['bindings']['context'], {'entries': data})
+
+    def test_received_component_revalidation_preserves_original_receipt_without_generation(self):
+        self.add(['Alpha pulmonary sign', 'Beta pulmonary sign'])
+        from mira.glossary_enrichment import validate_generated
+        from unittest.mock import patch
+        def broken(value, record, research_scope=None):
+            if record['id'] == 'g1': raise ValueError('simulated old vocabulary-check defect')
+            return validate_generated(value, record, research_scope)
+        with patch('mira.glossary_enrichment.validate_generated', side_effect=broken): self.operation().run()
+        item = read_records(self.root)[0]
+        receipt = (self.root/'interactions'/item['id']/'outcome.json').read_bytes()
+        result = self.operation().run(term_ids=['g1'], revalidate_received=True)
+        self.assertEqual(result['model_calls'], 0); self.assertEqual(result['after']['defined'], 2)
+        self.assertEqual(result['resumed_responses'], 1)
+        self.assertEqual((self.root/'interactions'/item['id']/'outcome.json').read_bytes(), receipt)
+        self.assertEqual(len(self.model.requests), 1)
+
+    def test_explicit_review_excludes_text_without_erasing_provenance(self):
+        self.add(['Alpha pulmonary sign']); op = self.operation(); op.run()
+        old = self.get()['definitions'][0]
+        reviewed = op.reject_definitions({'g1': {'definition_sha256': digest(dumps(old)),
+            'reason': 'Scientific review found an unsupported interpretation.'}}, reviewer='Test scientific reviewer')
+        self.assertEqual(reviewed['defined'], 0)
+        self.assertEqual(self.get()['definitions'], [old]); self.assertEqual(gd.preferred(self.get()), [])
+        self.assertEqual(self.get()['enrichment'][-1]['status'], 'invalidated')
+        def corrected(result):
+            result['entries'][0]['definitions'][0]['definition'] = 'A pulmonary imaging feature describing a distinct pattern of lung tissue morphology.'
+            return result
+        self.model.mutate = corrected
+        self.assertEqual(op.run()['after']['defined'], 1)
+        self.assertIn(old, self.get()['definitions'])
+        self.assertEqual(len(self.get()['definition_reviews']), 1)
+
+    def test_vocabulary_check_uses_research_question_not_just_occurrence_passage(self):
+        self.add(['Relapse']); rec = self.get()
+        rec['evidence'][0]['passage'] = 'Relapse occurred in 56 patients.'
+        value = {'term_id': 'g1', 'status': 'defined', 'reason': 'Clinical recurrence.', 'definitions': [{
+            'definition': 'Recurrence of disease after an interval of improvement or remission.',
+            'scope': 'Pulmonary clinical outcomes', 'ambiguity': ''}]}
+        with self.assertRaisesRegex(ValueError, 'vocabulary'): validate_generated(value, rec)
+        self.assertEqual(validate_generated(value, rec, {'question': 'Which pulmonary lesions recur?'}), value)
+
+    def test_cohort_measurements_are_not_generated_definitions(self):
+        self.add(['Alpha pulmonary sign'])
+        row = {'term_id': 'g1', 'status': 'defined', 'reason': 'Cohort observation.', 'definitions': [{
+            'definition': 'A pulmonary sign significantly more frequent in 24% of patients in a study cohort.',
+            'scope': 'Pulmonary imaging', 'ambiguity': ''}]}
+        with self.assertRaisesRegex(ValueError, 'empirical findings'): validate_generated(row, self.get())
+
+    def test_context_hydrates_hash_validated_source_text_and_rejects_corruption(self):
+        self.add(['Alpha pulmonary sign'])
+        from mira import sources
+        source = {'id': 'source-1', 'title': 'Retained pulmonary source', 'url': 'https://example.org/paper',
+            'content': 'Alpha pulmonary sign is discussed with the morphology of lung tissue.',
+            'content_kind': 'abstract', 'truncated': False}
+        with self.r.store.lock():
+            token, docs, eqs, ledger = self.r.store.read()
+            payload = sources.save_payload(self.r.store, 'a'*32, [source])
+            evidence_row = {'status': 'ok', 'reference': 'research/results/fixture.json',
+                            'results': [sources.descriptor(source)], **payload}
+            self.r.store.publish(docs, eqs, ledger, token, files={'research/results/fixture.json': dumps(evidence_row)})
+        self.operation().run()
+        req = read_records(self.root)[0]['request']
+        self.assertEqual(req['context']['entries'][0]['retained_source_context'][0]['verbatim_excerpt'], source['content'])
+        # Corrupt disposable content must fail before another submission.
+        path = self.root/payload['payload_ref']; path.write_text(path.read_text()+' ')
+        op = self.operation()
+        with self.r.store.lock():
+            state = self.state(); rec = self.get()
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'): op._request([rec], state, {'g1': rec})
+        self.assertEqual(len(self.model.requests), 1)
 

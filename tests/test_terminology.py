@@ -86,6 +86,32 @@ class TerminologyTests(unittest.TestCase):
         self.assertEqual(audit['concept_cache_hits'], 1)
         self.assertEqual(refreshed['g1']['concepts'][0]['retrieved_at'], concept['retrieved_at'])
 
+    def test_supplementary_record_is_not_misread_as_descriptor_or_concept(self):
+        rows = responses('Reverse halo sign', preferred='Atoll sign', note='A radiological pulmonary imaging pattern.')
+        for row in rows[1]['results']['bindings']:
+            row['descriptor']['value'] = 'http://id.nlm.nih.gov/mesh/C000721353'
+        result, _, _ = self.lookup('Reverse halo sign', rows)
+        self.assertEqual(result['status'], 'matched')
+        concept = result['concepts'][0]
+        self.assertEqual(concept['concept_id'], 'M123')
+        self.assertEqual(concept['descriptor_ids'], [])
+        self.assertEqual(concept['supplemental_ids'], ['C000721353'])
+        malformed = deepcopy(rows)
+        malformed[1]['results']['bindings'][0]['concept']['value'] = 'http://id.nlm.nih.gov/mesh/C000721353'
+        # A C record is valid only in the record binding, never as M identity.
+        provider = terminology.MeSH(); transport = Mock(side_effect=malformed)
+        with self.assertRaisesRegex(ValueError, 'concept link'):
+            provider.lookup('Reverse halo sign', transport)
+
+    def test_name_match_without_description_is_not_displayed_as_a_definition(self):
+        from test_glossary import record
+        result, _, _ = self.lookup(TERM, responses(note=None))
+        rec = record(1, TERM); rec['definitions'] = []; rec['status'] = 'candidate'; rec['terminology'] = [result]
+        label = 'Authoritative name match; no descriptive definition supplied'
+        self.assertIn(label, glossary_view.html([rec])); self.assertIn(label, glossary_view.markdown([rec]))
+        from mira.glossary_enrichment import coverage
+        self.assertEqual(coverage([rec])['defined'], 0)
+
     def test_historical_entry_term_uses_its_concept_not_related_descriptor(self):
         term = 'Bronchiolitis obliterans organizing pneumonia'
         result, _, _ = self.lookup(term, responses(term, preferred='Cryptogenic Organizing Pneumonia'))
