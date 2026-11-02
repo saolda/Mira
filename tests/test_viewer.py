@@ -223,11 +223,31 @@ class ViewerTests(unittest.TestCase):
         status, content, _ = self.request("GET", "/api/prompt-templates")
         self.assertEqual(status, 200)
         data = json.loads(content)
-        self.assertEqual({entry["action"] for entry in data}, {"R0", "R1", "R3", "R4", "R5", "S1", "S2"})
+        self.assertEqual({entry["action"] for entry in data}, {"R0", "R1", "R3", "R4", "R5", "S2", "S3"})
         self.assertEqual(len(data[0]["files"]), 1)
         status, content, _ = self.request("GET", f"/api/experiments/run-a/decisions/{self.r4}")
         self.assertTrue(json.loads(content)["template_verification"]["matches_recorded_request"])
         self.assertEqual(file_hashes(self.root), before)
+
+    def test_unit_synthesis_inspection_preserves_partial_input_scope(self):
+        from test_gardener import seed
+        from test_synthesis import FixtureModel
+        from mira.interactions import read_records
+        from mira.inspection import Inspector
+        home=self.home.parent/'unit-synthesis-memory';catalog=Experiments(home)
+        root=catalog.create('synthesis');r=Research(root,FixtureModel(publish=True),{})
+        r.initialize('Compare qualified measurements?', ['fixture'],context_budget=200000)
+        seed(r,own=2,child=0,leaf=0)
+        for action in ['S1','S2','S3']:self.assertEqual(r.step()['action'],action)
+        records=read_records(root);before=file_hashes(root)
+        data=Inspector(home).decision('synthesis',records[-1]['id'])
+        self.assertIsNone(data['inputs']['existing_memories'])
+        self.assertEqual({u['id'] for u in data['inputs']['knowledge_units']},{'r1#f1','r2#f1'})
+        self.assertEqual(data['inputs']['knowledge_units'],records[-1]['request']['context']['knowledge_units'])
+        for m in data['historical_corpus']:
+            if m['id'] in {'r1','r2'}:
+                self.assertFalse(m['included_in_request']);self.assertEqual(m['supplied_unit_ids'],[m['id']+'#f1'])
+        self.assertEqual(file_hashes(root),before)
 
     def test_default_server_binding_is_localhost(self):
         with patch("mira.viewer.ThreadingHTTPServer.__init__", return_value=None) as parent:

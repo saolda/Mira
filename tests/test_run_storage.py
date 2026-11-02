@@ -100,10 +100,10 @@ class RunStorageTests(unittest.TestCase):
             ticks = itertools.count(1000)
             r.clock = lambda: next(ticks)
             r.sleep = lambda delay: None
-            result = r.run(50)
+            result = r.run(150)
         rows = self.rows(log.path)
         actions = {row.get("action") for row in rows if row["kind"] in {"interaction_request", "action_outcome"}}
-        self.assertTrue({"R0", "R1", "R2", "R3", "R4", "R5", "S1", "S2"} <= actions, actions)
+        self.assertTrue({"R0", "R1", "R2", "R3", "R4", "R5", "S1", "S2", "S3"} <= actions, actions)
         self.assertNotEqual(result["status"], "rejected")
         self.assertEqual(len(list(self.logs.glob("*.jsonl"))), 1)
 

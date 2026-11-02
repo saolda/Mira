@@ -44,126 +44,49 @@ def seed(r, *, own=2, child=2, leaf=2, killed=False, living=()):
 
 
 class GardenerTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.llm = DemoLLM(); self.r = Research(self.root, self.llm, {})
-        self.r.initialize("Synthetic research?", ["fixture"], context_budget=12000)
-
-    def state(self): return loads((self.root / "research/state.json").read_text())
-
-    def test_terminal_bonus_killed_material_and_completed_exclusion(self):
-        seed(self.r, killed=True)
-        state = self.state()
-        self.assertEqual(state["nodes"]["q1"]["synthesis_score"], 1004)
-        self.assertEqual(state["nodes"]["q2"]["synthesis_score"], 1002)
-        self.assertEqual(state["nodes"]["q3"]["synthesis_score"], 0)
-        with tempfile.TemporaryDirectory() as logs:
-            out = self.r.run(20, log_directory=logs)
-        self.assertEqual(out["status"], "finished")
-        state = self.state(); self.assertEqual(state["nodes"]["q3"]["status"], "killed")
-        self.assertEqual(state["nodes"]["q1"]["status"], "answered")
-        self.assertTrue(state["nodes"]["q1"]["synthesis_complete"])
-        self.assertEqual(state["nodes"]["q2"]["unsynthesized_memory_count"], 0)
-        self.assertEqual(state["synthesis_candidate_order"], [])
-        self.assertIsNone(self.r.knowledge.document("r5").metadata["synthesized_by"])
-        calls = len(self.llm.requests); self.assertEqual(self.r.step()["status"], "finished")
-        self.assertEqual(calls, len(self.llm.requests))
-
     def test_zero_and_one_inputs_complete_without_llm(self):
-        seed(self.r, own=0, child=0, leaf=1)
-        state = self.state()
-        self.assertTrue(all(n["synthesis_complete"] for n in state["nodes"].values()))
-        self.assertEqual(state["nodes"]["q1"]["unsynthesized_memory_count"], 1)
-        self.assertEqual(self.r.step()["status"], "finished"); self.assertFalse(self.llm.requests)
-
-    def test_no_fitting_collection_without_research_is_explicit_and_does_not_consume(self):
-        seed(self.r)
-        with self.r.store.lock():
-            token, memories, equations, ledger = self.r.store.read()
-            state = self.state(); state["context_budget"] = 2100; state["research_capacity_tokens"] = 2000
-            self.r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
-        event = self.r.step()
-        self.assertEqual(event["status"], "rejected")
-        self.assertIn("blocked_context_budget", event["error"])
-        self.assertFalse(self.llm.requests)
-        self.assertEqual(self.state()["nodes"]["q1"]["unsynthesized_memory_count"], 6)
-        self.assertEqual(self.r.knowledge.validate()["documents"], 6)
-
-    def test_bounded_batches_and_three_level_upward_demo(self):
-        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as logs:
-            result = demonstrate(directory, log_directory=logs)
-            self.assertEqual(result["status"], "finished")
-            state = loads(Path(directory, "research/state.json").read_text())
-            self.assertEqual(state["research_cycles"], 28)
-            self.assertTrue(all(n["synthesis_complete"] for n in state["nodes"].values()))
-            records = read_records(directory)
-            syntheses = [r for r in records if r["request"]["action"] == "S2"]
-            self.assertIn("q1", {r["request"]["node_id"] for r in syntheses})
-            self.assertTrue(any(len(r["request"]["context"]["input_memories"]) > 2 for r in syntheses))
-            for record in syntheses:
-                request = record["request"]["serialized_request"]
-                self.assertLessEqual(len(request.encode()) + 2048, state["context_budget"])
-                self.assertGreaterEqual(len(record["request"]["context"]["input_memories"]), 2)
-                self.assertTrue(record["validation"]["accepted"])
-            self.assertTrue(any(any(m["id"].startswith("s") for m in r["request"]["context"]["input_memories"]) for r in syntheses))
-            text = transcript(directory, full=True)
-            for term in ("S2", "source_memories", "source_findings", "Fictional barrier measurements", "selection"):
-                self.assertIn(term, text)
-
-    def test_five_research_actions_then_one_synthesis_same_process(self):
-        with tempfile.TemporaryDirectory() as directory:
-            llm = ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["heat", "transfer"]}, {"summary": "Scoped summary of all extracted results and their limitations.", "results": [draft(), draft("B")]},
-                decision('unresolved'), {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts": ["thermal", "conductivity"]}])
-            r = Research(directory, llm, {"fixture": FixtureSearch([evidence(), evidence()])})
-            r.initialize("Q?", ["fixture"], context_budget=12000)
-            actions = [r.step()["action"] for _ in range(5)]
-            self.assertEqual(actions, ["R1", "R2", "R3", "R4", "R1"])
+        with tempfile.TemporaryDirectory() as root:
+            llm=ScriptedLLM([]);r=Research(root,llm,{})
+            r.initialize('Question?', ['fixture']);seed(r,own=1,child=0,leaf=0)
+            self.assertEqual(r.step()['status'],'finished');self.assertFalse(llm.requests)
+            self.assertEqual(r.inspect()['nodes']['q1']['unsynthesized_memory_count'],1)
+    def test_killed_material_retained_and_originals_available(self):
+        with tempfile.TemporaryDirectory() as root,tempfile.TemporaryDirectory() as logs:
+            r=Research(root,DemoLLM(),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,killed=True);out=r.run(100,log_directory=logs)
+            self.assertEqual(out['status'],'finished')
+            s=r.inspect();self.assertEqual(s['nodes']['q3']['status'],'killed')
+            self.assertTrue(s['nodes']['q1']['synthesis_complete'])
+            self.assertEqual(s['nodes']['q1']['unsynthesized_memory_count'],4)
+            self.assertEqual(r.knowledge.validate()['documents'],6)
+            self.assertTrue(all(r.knowledge.document('r'+str(i)).metadata['synthesized_by'] is None for i in range(1,7)))
+    def test_demo_records_three_stages_and_at_most_one_call_per_action(self):
+        with tempfile.TemporaryDirectory() as root,tempfile.TemporaryDirectory() as logs:
+            out=demonstrate(root,max_cycles=250,log_directory=logs)
+            self.assertEqual(out['status'],'finished')
+            records=read_records(root);self.assertNotIn('S1',{r['request']['action'] for r in records})
+            self.assertTrue({'S2','S3'}<={r['request']['action'] for r in records})
+            for r in records:
+                if r['request']['action'] in {'S2','S3'}:
+                    self.assertTrue(r['validation']['accepted']);self.assertGreaterEqual(len(r['request']['context']['knowledge_units']),2)
+            self.assertIn('no_synthesis',transcript(root,full=True))
+    def test_five_research_actions_then_deterministic_s1_without_aging(self):
+        from test_synthesis import FixtureModel
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,FixtureModel(),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=2,child=0,leaf=0,living=('q3',))
             with r.store.lock():
-                token, memories, equations, ledger = r.store.read()
-                state = loads(r.store._files()["research/state.json"])
-                from mira import r3
-                r3.create_memory(state, memories, equations, ledger, "q1", [draft("C")], {**evidence(), "reference": "synthetic-existing-batch"}, summary="Scoped summary of all extracted results and their limitations.")
-                tree.refresh(state, memories)
-                r.store.publish(memories, equations, ledger, token, files={"research/state.json": dumps(state)})
-            r.llm = DemoLLM()
-            self.assertEqual(r.step()["action"], "S1")
-            self.assertEqual(r.step()["action"], "S2")
-            state = loads(Path(directory, "research/state.json").read_text())
-            self.assertEqual(state["research_cycles"], 5); self.assertEqual(state["synthesis_cycles"], 2)
-            self.assertEqual(state["research_cycles_since_synthesis"], 0)
-            self.assertEqual(state["nodes"]["q1"]["priority"], 5)
-
-    def test_rejected_synthesis_records_failure_without_consuming_or_research_aging(self):
-        seed(self.r)
-        self.assertEqual(self.r.step()["action"], "S1")
-        self.r.llm = ScriptedLLM([{"disposition": "synthesis", "title": "Invalid", "summary": "No traceability.", "findings": []}])
-        before = self.state()
-        event = self.r.step(); self.assertEqual(event["status"], "rejected")
-        self.assertEqual(self.state()["research_cycles"], before["research_cycles"])
-        self.assertEqual(self.state()["synthesis_attempts"][0]["status"], "failed")
-        self.assertIsNone(self.state()["pending_synthesis"])
-        self.assertEqual(self.r.knowledge.document("r1").metadata["synthesized_by"], None)
-        self.assertIn('"accepted": false', transcript(self.root, full=True))
-
-    def test_guard_against_partial_source_coverage(self):
-        seed(self.r)
-        memories = [self.r.knowledge.document("r1"), self.r.knowledge.document("r2")]
-        invalid = {"disposition": "synthesis", "title": "Invalid", "summary": "Drops second source.", "findings": [{"label": "Partial",
-            "proposition": "Only one input", "explanation": "Fixture", "provenance": "Fixture", "source_findings": ["r1#f1"]}]}
-        self.assertRaisesRegex(ValueError, "two distinct input memories", gardener.validate, invalid, memories)
-
-    def test_interrupted_gardener_repair_resolves_transcript_without_second_call(self):
-        seed(self.r, own=2, child=0, leaf=0)
-        self.assertEqual(self.r.step()["action"], "S1")
-        self.llm.requests.clear()
-        p = multiprocessing.get_context("fork").Process(target=crash_gardener, args=(str(self.root),))
-        p.start(); p.join(10); self.assertEqual(p.exitcode, 72)
-        report = self.r.store.recovery_status()["operations"][0]
-        self.assertEqual(report["assessment"], "safely_finishable")
-        self.assertIn("interrupted_or_unknown", transcript(self.root, full=True))
-        self.r.store.repair(report["id"], apply=True)
-        self.assertEqual(self.r.step()["status"], "finished")
-        self.assertFalse(self.llm.requests)
-        self.assertIn('"action_committed": "S2"', transcript(self.root, full=True))
-        self.assertEqual(self.state()["nodes"]["q1"]["unsynthesized_memory_count"], 1)
+                token,docs,eqs,ledger=r.store.read();s=loads(r.store._files()['research/state.json']);s['research_cycles_since_synthesis']=5
+                r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(s)})
+            before=r.inspect()['nodes']['q3']['priority'];self.assertEqual(r.step()['action'],'S1');self.assertFalse(r.llm.requests)
+            self.assertEqual(r.step()['action'],'S2');self.assertEqual(r.step()['action'],'S3')
+            self.assertEqual(r.inspect()['nodes']['q3']['priority'],before)
+    def test_legacy_synthesis_references_and_compact_format_remain_valid(self):
+        from test_synthesis import synthesis
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,ScriptedLLM([]),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=2,child=0,leaf=0)
+            with r.store.lock():_,docs,_,_=r.store.read()
+            self.assertEqual(gardener.validate(synthesis(),docs),['r1','r2'])
+            bad=synthesis(('r1#f1','r99#f1'))
+            with self.assertRaises(ValueError):gardener.validate(bad,docs)

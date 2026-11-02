@@ -200,12 +200,12 @@ class BranchingTests(unittest.TestCase):
         self.r.adapters = {'fixture':FixtureSearch([demo_evidence('fixture-'+str(i)) for i in range(1,11)])}
         self.change(lambda s, *_: s.update(research_capacity_tokens=6000, synthesis_interval=3))
         actions = set()
-        for _ in range(35):
+        for _ in range(100):
             before = len(self.r.llm.requests); e = self.r.step()
             self.assertLessEqual(len(self.r.llm.requests) - before, 1)
             if e['status'] == 'finished': break
             self.assertEqual(e['status'], 'committed', e.get('error')); actions.add(e['action'])
-        self.assertTrue({'R1', 'R2', 'R3', 'R4', 'R5', 'S1', 'S2'} <= actions, actions)
+        self.assertTrue({'R1', 'R2', 'R3', 'R4', 'R5', 'S1', 'S2', 'S3'} <= actions, actions)
 
     def test_malformed_r4_r5_and_child_limit_preserve_state(self):
         for value in ({'decision': 'exhaust', 'reason': 'old'}, {'decision': 'unresolved', 'reason': 'ok', 'keywords': ['bad']},
@@ -330,7 +330,7 @@ class BranchingTests(unittest.TestCase):
             s['nodes']['q2']['status'] = 'killed'
         self.change(seed)
         s = self.state()
-        self.assertEqual(s['nodes']['q1']['unsynthesized_memory_count'], 0)
+        self.assertEqual(s['nodes']['q1']['unsynthesized_memory_count'], 1)
         self.assertEqual(s['synthesis_candidate_order'], [])
         self.assertEqual(self.r.knowledge.validate()['documents'], 3)
 

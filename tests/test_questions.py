@@ -15,7 +15,8 @@ from mira.research import Research
 from mira.search import FixtureSearch
 from test_gardener import seed
 from test_research import evidence, draft, decision
-from test_synthesis import selection, synthesis
+from test_synthesis import FixtureModel
+from mira import synthesis as sy, synthesis_discovery as sd
 
 
 MARKDOWN = """# Research question
@@ -213,20 +214,18 @@ class QuestionTests(unittest.TestCase):
         self.assertEqual(state["nodes"]["q1"]["research_capacity"]["estimated_tokens"], len(wire.encode()) + 2048)
         self.assertEqual(supplied["research_brief"]["objectives"], questions.parse(MARKDOWN)["objectives"])
 
-    def test_s1_and_s2_prompt_context_persists_across_restart(self):
-        r = self.make([selection(), synthesis()])
-        seed(r, own=2, child=0, leaf=0)
-        self.assertEqual(r.step()["action"], "S1")
-        pending = self.state()["pending_synthesis"]["context"]
-        self.assertEqual(pending["research_brief"]["objectives"], questions.parse(MARKDOWN)["objectives"])
-        self.input.unlink()
-        r = Research(self.root, self.llm, {})
-        self.assertEqual(r.step()["action"], "S2")
-        for record in read_records(self.root):
-            self.assertEqual(record["request"]["context"]["research_brief"], pending["research_brief"])
-        self.assertEqual(self.state()["synthesis_attempts"][0]["status"], "completed")
-        self.assertEqual(r.knowledge.document("s1").metadata["source_memories"], ["r1", "r2"])
-        self.assertEqual(r.knowledge.validate()["documents"], 3)
+    def test_s1_s2_s3_context_persists_across_restart(self):
+        r=self.make();r.llm=FixtureModel(publish=True)
+        seed(r,own=2,child=0,leaf=0)
+        self.assertEqual(r.step()['action'],'S1')
+        register=self.state()['unit_synthesis'];pending=register['groups'][register['selected_group']]['context']
+        self.assertEqual(pending['research_brief']['objectives'],questions.parse(MARKDOWN)['objectives'])
+        self.input.unlink();r=Research(self.root,r.llm,{})
+        self.assertEqual(r.step()['action'],'S2');self.assertEqual(r.step()['action'],'S3')
+        for record in read_records(self.root):self.assertEqual(record['request']['context']['research_brief'],pending['research_brief'])
+        self.assertEqual(next(iter(self.state()['unit_synthesis']['objectives'].values()))['status'],'completed')
+        self.assertEqual(r.knowledge.document('s1').metadata['source_memories'],['r1','r2'])
+        self.assertEqual(r.knowledge.validate()['documents'],3)
 
     def test_oversized_question_or_objectives_block_without_loss_or_model_call(self):
         for section in ("question", "objectives"):
@@ -249,12 +248,10 @@ class QuestionTests(unittest.TestCase):
                 self.assertEqual(self.state()["question_document"], parsed)
 
     def test_s2_budget_never_drops_essential_objectives(self):
-        r = self.make()
-        seed(r, own=2, child=0, leaf=0)
-        with r.store.lock(): _, docs, eqs, _ = r.store.read()
-        state = self.state(); state["question_document"]["objectives"] = ["- " + "Essential " * 8000]
-        _, prepared, info = gardener.prepare(state, docs, eqs, docs, "Compare", self.llm.model, self.llm.settings)
-        self.assertIsNone(prepared)
-        supplied = gardener.context(state, docs, eqs, "q1", docs, objective="Compare", summarized=True)
-        self.assertEqual(supplied["research_brief"]["objectives"], state["question_document"]["objectives"])
-        self.assertTrue(info["usage"]["over_context_budget"])
+        r=self.make();seed(r,own=2,child=0,leaf=0)
+        with r.store.lock():_,docs,eqs,_=r.store.read()
+        state=self.state();state['question_document']['objectives']=['- '+'Essential '*8000]
+        units=sy.records(state,docs,eqs);groups,_=sd.Discovery(r.store).discover(units)
+        supplied=sy.context(state,groups[0],units,docs)
+        self.assertEqual(supplied['research_brief']['objectives'],state['question_document']['objectives'])
+        self.assertTrue(sy.usage(state,self.llm,'S2',supplied)['over_context_budget'])

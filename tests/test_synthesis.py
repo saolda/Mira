@@ -1,473 +1,434 @@
-"""Deterministic S1/S2 contracts, scheduling, versions and durable attempts."""
+"""Production knowledge-unit discovery, planning, synthesis and durable recovery."""
 from copy import deepcopy
+import json
 import multiprocessing
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
+from unittest.mock import Mock
 
-from mira import gardener, research_tree as tree
+from mira import synthesis as sy, synthesis_discovery as sd, research_tree as tree, gardener
 from mira.decisions import ScriptedLLM
-from mira.decisions import request
-from mira.format import Unit, dumps, loads, render
+from mira.embeddings import TestEmbedding
+from mira.format import Memory, Unit, Relationship, digest, dumps, loads, parse, render
 from mira.interactions import read_records
-from mira.live import LiveStore
+from mira.live import RecoveryRequired, validate_lineage
 from mira.research import Research
-from mira.search import FixtureSearch
 from test_gardener import seed
-from test_research import draft, evidence
 
 
-def selection(ids=('r1', 'r2'), **changes):
-    return {"disposition": "select", "memory_ids": list(ids),
-            "objective": "Compare attributed evidence, its complementarity and limitations.",
-            "scores": {"R": 5, "C": 4, "X": 1, "N": 3, "E": 3},
-            "reason": "These inputs support a focused comparison.", **changes}
+def selection(ids=('r1','r2'), **changes):
+    """Historical selection fixture used only in compatibility tests."""
+    return {'disposition':'select','memory_ids':list(ids),'objective':'Compare attributed evidence.',
+        'scores':dict.fromkeys('RCXNE',3),'reason':'Historical fixture.',**changes}
 
 
-def synthesis(refs=('r1#f1', 'r2#f1'), **changes):
-    return {"disposition": "synthesis", "title": "Qualified integration",
-            "summary": "An attributed comparison with unresolved uncertainty.",
-            "findings": [{"label": "Integrated evidence", "proposition": "The sources jointly support a scoped inference.",
-                          "explanation": "Complementary observations support comparison, with no independent replication.",
-                          "provenance": "Derived from the supplied knowledge units.", "source_findings": list(refs)}], **changes}
+def synthesis(refs=('r1#f1','r2#f1'), **changes):
+    """Historical synthesis fixture; canonical legacy parsing remains supported."""
+    return {'disposition':'synthesis','title':'Qualified integration','summary':'A comparison.',
+        'findings':[{'label':'Comparison','proposition':'A qualified integration.','explanation':'Fixture only.',
+        'provenance':'Supplied units.','source_findings':list(refs)}],**changes}
 
 
-class ExitDuringCall(ScriptedLLM):
-    def complete(self, wire): os._exit(79)
+def idea(ids=('r1#f1','r2#f1'), objective='Compare the qualified measurements.'):
+    return {'category':'comparison','objective':objective,'unit_ids':list(ids),
+        'potential_new_understanding':'An explicit cross-source methodological comparison.',
+        'limitations':['Source independence and conditions remain unverified.'],
+        'novelty':'Integrate the scoped relationship rather than paraphrase a single measurement.'}
 
 
-def crash_s1(root):
-    def fault(stage):
-        if stage == 'replaced:research/state.json': os._exit(78)
-    Research(root, ScriptedLLM([selection()]), {}).step(fault=fault)
+def plans(*ideas):
+    return {'disposition':'ideas' if ideas else 'no_candidate','ideas':list(ideas),'reason':'Review the supplied scientific context.'}
 
 
-def crash_s1_no_candidate(root):
-    def fault(stage):
-        if stage == 'replaced:research/state.json': os._exit(78)
-    Research(root, ScriptedLLM([{'disposition':'no_candidate', 'reason':'No coherent comparison yet.'}]), {}).step(fault=fault)
+def result(units, existing=(), proposition='A cross-memory comparison exposes shared measurement limitations.'):
+    return {'disposition':'synthesis','title':'Qualified comparison','summary':'A comparison with explicit uncertainty.',
+        'findings':[{'label':'Comparison','proposition':proposition,
+        'explanation':'The attributed statements support comparison, not independent replication.',
+        'qualification':'No real-world conclusion follows from these fixtures.','epistemic_type':'inference',
+        'source_findings':[u['id'] for u in units],
+        'evidence_checks':[{'unit_id':u['id'],'quote':u['fields'].get('Proposition',u['fields'].get('Question','')),
+            'use':'The attributed premise for this comparison.'} for u in units],
+        'quantitative_checks':[],'novelty':'An explicit relationship between qualified premises.',
+        'novelty_comparisons':[{'unit_id':u['id'],'assessment':'distinct','reason':'A qualified comparison, not an individual premise.'} for u in existing]}]}
 
 
-def crash_dispatch(root): Research(root, ExitDuringCall([]), {}).step()
+class FixtureModel(ScriptedLLM):
+    """One prewritten objective then abstention; never scientific inference."""
+    def __init__(self, *, publish=False, objectives=1):
+        super().__init__([]);self.publish=publish;self.objectives=objectives;self.planned=False
+    def complete(self, wire):
+        self.requests.append(wire);text=loads(wire)['messages'][0]['content'];decoder=json.JSONDecoder()
+        units=decoder.raw_decode(text.split('SELECTED KNOWLEDGE UNITS\n',1)[1])[0]
+        if text.startswith('Identify scientific'):
+            value=plans() if self.planned else plans(*(idea([u['id'] for u in units],f'Compare qualified measurements, objective {i}.') for i in range(self.objectives)))
+            self.planned=True
+        elif self.publish:
+            existing=decoder.raw_decode(text.split('EXISTING KNOWLEDGE FOR NOVELTY COMPARISON\n',1)[1])[0]
+            value=result(units,existing)
+        else:value={'disposition':'no_synthesis','reason':'No defensible new conclusion is established.'}
+        return dumps({'model':self.model,'choices':[{'finish_reason':'stop','message':{'content':dumps(value)}}],'usage':None})
 
 
-def crash_partial(root, stage):
+class ExitModel(ScriptedLLM):
+    def complete(self,wire):os._exit(79)
+
+
+def crash(root, stage, publish=False):
     def fault(point):
-        if point == stage: os._exit(77)
-    Research(root, ScriptedLLM([synthesis()]), {}).step(fault=fault)
+        if point==stage:os._exit(78)
+    Research(root,FixtureModel(publish=publish),{}).step(fault=fault)
+
+
+def dispatch_crash(root):Research(root,ExitModel([]),{}).step()
 
 
 class SynthesisTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-
-    def make(self, responses=(), *, own=3, child=0, leaf=0, living=()):
-        self.llm = ScriptedLLM(responses)
-        self.r = Research(self.root, self.llm, {})
-        self.r.initialize('How can evidence support sustained scientific research?', ['fixture'], context_budget=200000)
-        seed(self.r, own=own, child=child, leaf=leaf, living=living)
-        return self.r
-
-    def state(self): return loads((self.root / 'research/state.json').read_text())
-
-    def change(self, callback):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name)/'memory'
+        self.llm=FixtureModel()
+        self.r=Research(self.root,self.llm,{})
+        self.r.initialize('How do qualified measurements compare?', ['fixture'],context_budget=200000)
+        seed(self.r,own=2,child=0,leaf=0)
+    def state(self):return loads((self.root/'research/state.json').read_text())
+    def change(self,callback):
         with self.r.store.lock():
-            token, memories, equations, ledger = self.r.store.read()
-            state = self.state(); callback(state, memories, equations, ledger)
-            tree.refresh(state, memories)
-            self.r.store.publish(memories, equations, ledger, token, files={'research/state.json': dumps(state)})
-
-    def test_same_question_selection_scores_and_separate_cycles(self):
-        r = self.make([selection(), synthesis()])
-        before = self.state()
-        e = r.step(); self.assertEqual((e['action'], e['status']), ('S1', 'committed'))
-        self.assertEqual(len(self.llm.requests), 1)
-        pending = self.state()['pending_synthesis']; self.assertIsNotNone(pending)
-        a = self.state()['synthesis_attempts'][0]
-        self.assertEqual(a['status'], 'pending'); self.assertEqual(a['score'], 16)
-        self.assertEqual(a['node_id'], 'q1'); self.assertEqual(a['scores'], selection()['scores'])
-        self.assertEqual(r.knowledge.validate()['documents'], 3)
-        catalogue = read_records(self.root)[0]['request']['context']['memory_catalogue']
-        for entry in catalogue:
-            self.assertEqual(entry['content_hash'], tree.memory_versions([r.knowledge.document(entry['id'])])[0]['content_hash'])
-            self.assertTrue(entry['estimated_s2_tokens']); self.assertTrue(entry['ancestor_questions'])
-            self.assertEqual(entry['knowledge_unit_types'], {'claim': 1})
-        restarted = Research(self.root, self.llm, {})
-        e = restarted.step(); self.assertEqual((e['action'], e['status']), ('S2', 'committed'))
-        self.assertEqual(len(self.llm.requests), 2)
-        state = self.state(); self.assertIsNone(state['pending_synthesis'])
-        a = state['synthesis_attempts'][0]
-        self.assertEqual(a['status'], 'completed'); self.assertTrue(a['s2_interaction_id'])
-        self.assertEqual(a['result_memory_id'], 's1')
-        self.assertEqual(state['research_cycles'], before['research_cycles'])
-        self.assertEqual(state['nodes']['q1']['priority'], before['nodes']['q1']['priority'])
-
-    def test_cross_branch_selection_uses_common_ancestor(self):
-        r = self.make([selection(['r1','r2']), synthesis()], own=0, child=1, leaf=1)
-        def siblings(s, *_):
-            s['nodes']['q1']['child_ids'] = ['q2','q3']; s['nodes']['q2']['child_ids'] = []
-            s['nodes']['q3']['parent_id'] = 'q1'
-        self.change(siblings)
-        self.assertEqual(r.step()['status'], 'committed')
-        self.assertEqual(self.state()['synthesis_attempts'][0]['node_id'], 'q1')
-        self.assertEqual(r.step()['status'], 'committed')
-        self.assertEqual(r.knowledge.document('s1').metadata['node_id'], 'q1')
-        self.assertEqual(r.knowledge.document('s1').metadata['source_memories'], ['r1','r2'])
-
-    def test_invalid_s1_selections_and_scores_do_not_persist(self):
-        r = self.make()
-        bad = [selection([]), selection(['r1']), selection(['r1','r1']), selection(['r1','unknown']),
-               selection(objective=' '), selection(reason=''), selection(disposition='invent'),
-               selection(scores={**selection()['scores'], 'R': True}),
-               selection(scores={**selection()['scores'], 'R': 5.5}),
-               selection(scores={**selection()['scores'], 'E': 6}),
-               selection(scores={'R': 5}), selection(extra='unexpected'),
-               {'disposition':'no_candidate', 'reason':''}, {'disposition':'no_candidate', 'reason':'None', 'memory_ids':[]}]
-        for proposal in bad:
-            with self.subTest(proposal=proposal):
-                r.llm = ScriptedLLM([proposal]); before = self.state()
-                e = r.step(); self.assertEqual(e['status'], 'rejected', e)
-                self.assertEqual(self.state(), before)
-                self.assertIsNone(self.state()['synthesis_evaluated_catalogue'])
-                self.assertEqual(len(r.llm.requests), 1)
-        self.assertIsNone(r.knowledge.document('r1').metadata['synthesized_by'])
-
-    def test_killed_and_consumed_memories_are_not_selectable(self):
-        r = self.make([selection(), synthesis()], own=2, child=0, leaf=1, living=('q3',))
-        self.change(lambda s, *_: s['nodes']['q3'].update(status='killed'))
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        with self.assertRaisesRegex(ValueError, 'eligible'):
-            gardener.validate_selection(selection(['r1','r3']), self.state(), docs)
-        self.assertEqual(r.step()['status'],'committed'); self.assertEqual(r.step()['status'],'committed')
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        with self.assertRaisesRegex(ValueError, 'eligible'):
-            gardener.validate_selection(selection(), self.state(), docs)
-
-    def test_partial_synthesis_consumes_contributors_only_and_updates_frontier(self):
-        r = self.make([selection(['r1','r2','r3']), synthesis()])
-        self.assertEqual(r.step()['action'], 'S1')
-        e = r.step(); self.assertEqual(e['status'], 'committed')
-        self.assertEqual(e['contributing_memory_ids'], ['r1','r2']); self.assertEqual(e['unused_memory_ids'], ['r3'])
-        self.assertIsNone(r.knowledge.document('r3').metadata['synthesized_by'])
-        self.assertEqual(r.knowledge.document('r1').metadata['synthesized_by'],'s1')
-        output = r.knowledge.document('s1')
-        self.assertEqual(output.metadata['source_memories'], ['r1','r2'])
-        self.assertEqual(len(output.metadata['synthesis_inputs']), 3)
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        self.assertEqual([m.id for m in tree.frontier(self.state(), docs, 'q1')], ['r3','s1'])
-        self.assertFalse(self.state()['nodes']['q1']['synthesis_complete'])
-        self.assertTrue(tree.permitted(self.state(), [r.knowledge.document(i) for i in ('r3','s1')]))
-
-    def test_no_synthesis_excludes_exact_subsets_but_allows_new_combinations(self):
-        r = self.make([selection(['r1','r2','r3']), {'disposition':'no_synthesis','reason':'The evidence is insufficient.'}], own=4)
-        r.step(); e = r.step(); self.assertEqual(e['status'],'committed')
-        self.assertEqual(e['memory_ids'], []); self.assertEqual(r.knowledge.validate()['documents'],4)
-        a = self.state()['synthesis_attempts'][0]
-        self.assertEqual(a['unused_memory_ids'], ['r1','r2','r3']); self.assertFalse(a['contributing_memory_ids'])
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        for ids in (['r1','r2'], ['r3','r1'], ['r1','r2','r3']):
-            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'previously attempted'):
-                gardener.validate_selection(selection(ids), self.state(), docs)
-        self.assertEqual([m.id for m in gardener.validate_selection(selection(['r1','r2','r4']),self.state(),docs)], ['r1','r2','r4'])
-
-    def test_exhausted_combinations_complete_with_multiple_frontier_memories(self):
-        r = self.make([selection(), {'disposition':'no_synthesis','reason':'No defensible integration.'}], own=2)
-        r.step(); r.step(); state = self.state()
-        self.assertTrue(state['nodes']['q1']['synthesis_complete'])
-        self.assertEqual(state['nodes']['q1']['unsynthesized_memory_count'],2)
-        self.assertFalse(state['synthesis_candidate_order']); self.assertTrue(state['terminal_event'])
-        self.assertEqual(r.step()['status'], 'finished'); self.assertEqual(len(self.llm.requests),2)
-
-    def test_changed_memory_hash_reopens_excluded_combination(self):
-        r = self.make([selection(), {'disposition':'no_synthesis','reason':'No defensible integration.'}], own=2)
-        r.step(); r.step(); old = self.state()['synthesis_attempts'][0]['memory_versions']
-        def revise(s, docs, *_):
-            docs[0].units.append(Unit(docs[0].allocate('f'), 'New evidence', {**docs[0].units[0].fields, 'Explanation': 'New methodological qualification.'})); docs[0].revision += 1
-        self.change(revise)
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-        self.assertFalse(self.state()['nodes']['q1']['synthesis_complete'])
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        self.assertNotEqual(tree.memory_versions(docs),old)
-        self.assertEqual(len(gardener.validate_selection(selection(),self.state(),docs)),2)
-
-    def test_terminal_no_candidate_guard_and_revision_invalidation(self):
-        r = self.make([{'disposition':'no_candidate','reason':'The sources do not form a coherent analysis.'}])
-        r.step(); state = self.state()
-        self.assertTrue(state['synthesis_evaluated_catalogue']); self.assertTrue(state['terminal_event'])
-        self.assertTrue(state['nodes']['q1']['synthesis_complete'])
-        for _ in range(2): self.assertEqual(r.step()['status'],'finished')
-        self.assertEqual(len(self.llm.requests),1)
-        def revise(s, docs, *_): docs[0].summary += ' Revised evidence.'; docs[0].revision += 1
-        self.change(revise)
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-        r.llm = ScriptedLLM([selection()]); self.assertEqual(r.step()['action'],'S1')
-        self.assertEqual(len(r.llm.requests),1)
-
-    def test_active_no_candidate_skips_unchanged_catalogue_across_restart(self):
-        responses = [{'disposition':'no_candidate','reason':'No coherent comparison yet.'},
-                     {"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}]
-        r = self.make(responses, own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        self.assertEqual(r.step()['reason'],'no_candidate')
-        receipt = self.state()['synthesis_evaluated_catalogue']
-        self.assertTrue(receipt); self.assertFalse(self.state()['synthesis_candidate_order'])
-        self.assertIsNone(self.state()['terminal_event'])
-        r = Research(self.root, self.llm, {'fixture': FixtureSearch([evidence()])})
-        self.r = r
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        self.assertEqual(r.step()['action'],'R1')
-        self.assertEqual(r.step()['action'],'R2')
-        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
-        self.assertFalse(self.state()['synthesis_candidate_order'])
-        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['S1','R1'])
-        self.assertEqual(len(self.llm.requests),2)
-
-    def test_active_no_candidate_reassesses_new_eligible_memory(self):
-        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        r.step(); receipt = self.state()['synthesis_evaluated_catalogue']
-        def append(s, docs, equations, ledger):
-            memory = deepcopy(docs[0]); memory.id = 'r3'
-            memory.summary = 'New independently extracted evidence.'
-            memory.metadata.update(node_id='q3', created_order=3)
-            docs.append(memory); s['nodes']['q3']['memory_ids'].append(memory.id); ledger['r'] = 4
-            s['research_cycles_since_synthesis'] = 5
-        self.change(append)
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
-        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
-
-    def test_active_no_candidate_reassesses_changed_question_scope(self):
-        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        r.step()
-        def scope(s, *_):
-            s['nodes']['q3']['question'] = 'How do the methods affect measurement uncertainty?'
-            s['research_cycles_since_synthesis'] = 5
-        self.change(scope)
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
-
-    def test_no_candidate_guard_ignores_bookkeeping_but_new_scope_reopens(self):
-        r = self.make([{'disposition':'no_candidate','reason':'No coherent comparison yet.'}, selection()], own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        r.step(); receipt = self.state()['synthesis_evaluated_catalogue']
-        def bookkeeping(s, *_):
-            s['nodes']['q3']['priority'] = 7
-            s['research_cycles_since_synthesis'] = 5
-            s['provider_availability']['fixture'] = {'next_request_at':123, 'consecutive_rate_limits':1}
-        self.change(bookkeeping)
-        self.assertFalse(self.state()['synthesis_candidate_order'])
-        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
-        def new_scope(s, *_):
-            s['nodes']['q4'] = tree.node('q4', 'Can calibration uncertainty explain the discrepancy?', 'q1')
-            s['nodes']['q1']['child_ids'].append('q4'); s['next_node'] = 5
-        self.change(new_scope)
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-        self.assertEqual(r.step()['action'],'S1'); self.assertEqual(len(self.llm.requests),2)
-
-    def test_pending_r3_precedes_redundant_s1_and_new_memory_reopens_selection(self):
-        responses = [{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']},
-                     {'disposition':'no_candidate','reason':'No coherent comparison yet.'},
-                     {'summary':'A source-supported research extraction.', 'results':[draft()]}, selection()]
-        r = self.make(responses, own=2, living=('q3',))
-        r.adapters = {'fixture':FixtureSearch([evidence()])}
-        self.assertEqual(r.step()['action'],'R1'); self.assertEqual(r.step()['action'],'R2')
-        self.assertTrue(self.state()['nodes']['q3']['pending_results'])
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        self.assertEqual(r.step()['reason'],'no_candidate')
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        event = r.step(); self.assertEqual((event['action'],event['status']),('R3','committed'))
-        self.assertEqual(event['memory_ids'],['r3'])
-        self.assertEqual(r.step()['action'],'S1')
-        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['R1','S1','R3','S1'])
-        self.assertEqual(len(self.llm.requests),4)
-
-    def test_pending_s2_precedes_research_and_branching(self):
-        r = self.make([selection(), synthesis()], own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        self.assertEqual(r.step()['action'],'S1')
-        self.change(lambda s, *_: s['nodes']['q3'].update(status='exhausted'))
-        self.assertEqual(r.step()['action'],'S2')
-        self.assertIsNone(self.state()['terminal_event'])
-        self.assertEqual(self.state()['ripeness_order'],['q3'])
-
-    def test_one_cross_memory_finding_is_required_not_separate_source_summaries(self):
-        r = self.make(own=2)
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        single = synthesis(['r1#f1']); separate = deepcopy(single)
-        separate['findings'].extend(synthesis(['r2#f1'])['findings'])
-        for value in (single, separate):
-            with self.assertRaisesRegex(ValueError,'integrated finding'):
-                gardener.validate(value,docs)
-        self.assertEqual(gardener.validate(synthesis(), docs), ['r1','r2'])
-
-    def test_invalid_references_dispositions_and_empty_findings(self):
-        r = self.make(own=2)
-        with r.store.lock(): _, docs, _, _ = r.store.read()
-        bad = [synthesis(['r1#f1','r2#f999']), synthesis(['r1#f1','r1#f1','r2#f1']),
-               synthesis(['r1#f1','r2#f1','r9#f1']), synthesis(findings=[]), synthesis(disposition='invent'),
-               {'disposition':'no_synthesis','reason':''}, {'disposition':'no_synthesis','reason':'None','findings':[]}]
-        for value in bad:
-            with self.subTest(value=value), self.assertRaises(ValueError): gardener.validate(value,docs)
-        self.assertEqual(gardener.validate({'disposition':'no_synthesis','reason':'Evidence is insufficient.'},docs), [])
-
-    def test_failed_s2_retains_audit_and_is_retryable_without_consumption(self):
-        r = self.make([selection(), synthesis(['r1#f1','r2#invented']), selection()])
-        r.step(); before = {i:render(r.knowledge.document(i)) for i in ('r1','r2','r3')}
-        e = r.step(); self.assertEqual(e['status'],'rejected')
-        state = self.state(); a = state['synthesis_attempts'][0]
-        self.assertEqual(a['status'],'failed'); self.assertTrue(a['s2_interaction_id'])
-        self.assertIsNone(state['pending_synthesis']); self.assertTrue(state['synthesis_candidate_order'])
-        self.assertIsNone(state['synthesis_evaluated_catalogue'])
-        for i, text in before.items(): self.assertEqual(render(r.knowledge.document(i)),text)
-        self.assertEqual(r.step()['status'],'committed'); self.assertEqual(len(self.state()['synthesis_attempts']),2)
-        self.assertFalse(read_records(self.root)[1]['validation']['accepted'])
-
-    def test_transport_failure_is_recorded_and_does_not_exclude(self):
-        r = self.make([selection(), RuntimeError('Temporary transport failure.')])
-        r.step(); self.assertEqual(r.step()['status'],'rejected')
-        self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'failed')
-        self.assertTrue(self.state()['synthesis_candidate_order'])
-
-    def test_pending_input_revision_fails_before_dispatch(self):
-        r = self.make([selection()]); r.step()
-        def revise(s, docs, *_): docs[0].summary += ' New information.'; docs[0].revision += 1
-        self.change(revise)
-        e = r.step(); self.assertEqual(e['status'],'rejected'); self.assertIn('versions changed',e['error'])
-        self.assertEqual(len(self.llm.requests),1)
-        self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'failed')
-
-    def test_exact_s2_budget_and_oversized_collection_never_drops_selected_inputs(self):
-        r = self.make([selection(['r1','r2','r3'])])
-        # The catalogue fits, but full S2 and its lossless projection cannot fit.
-        def counter(wire):
-            content = loads(wire)['messages'][0]['content']
-            return {'prompt_tokens': 500 if 'Eligible memory catalogue:' in content else 10000}
-        self.llm.count_tokens = counter
-        self.change(lambda s, *_: s.update(context_budget=8192,research_capacity_tokens=7000))
-        e = r.step(); self.assertEqual(e['status'],'blocked_synthesis')
-        self.assertEqual(e['selection']['input_ids'],['r1','r2','r3'])
-        self.assertEqual(len(self.llm.requests),1); self.assertFalse(self.state()['synthesis_attempts'])
-        self.assertIsNone(self.state()['pending_synthesis'])
-        self.assertIsNone(self.state()['terminal_event'])
-
-    def test_s1_catalogue_budget_rejected_before_model_dispatch(self):
-        r = self.make()
-        self.llm.count_tokens = lambda _: {'prompt_tokens': 200000}
-        e = r.step(); self.assertEqual(e['status'],'rejected')
-        self.assertIn('blocked_context_budget',e['error']); self.assertFalse(self.llm.requests)
-        self.assertFalse(self.state()['synthesis_attempts'])
-
-    def test_changed_s2_budget_fails_without_dispatch_and_consumption(self):
-        r = self.make([selection()]); r.step()
-        self.llm.count_tokens = lambda _: {'prompt_tokens': 200000}
-        e = r.step(); self.assertEqual(e['status'],'rejected')
-        self.assertIn('blocked_context_budget',e['error']); self.assertEqual(len(self.llm.requests),1)
-        self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'failed')
-        self.assertIsNone(r.knowledge.document('r1').metadata['synthesized_by'])
-
-    def test_s1_journal_recovery_restores_pending_selection_once(self):
-        r = self.make(own=2)
-        p=multiprocessing.get_context('fork').Process(target=crash_s1,args=(str(self.root),))
-        p.start();p.join(10);self.assertEqual(p.exitcode,78)
-        operation=r.store.recovery_status()['operations'][0]
-        r.store.repair(operation['id'],apply=True);r.store.repair(operation['id'],apply=True)
-        self.assertEqual(len(self.state()['synthesis_attempts']),1)
-        r.llm=ScriptedLLM([synthesis()]);self.assertEqual(r.step()['action'],'S2')
-        self.assertEqual(len(r.llm.requests),1)
-        self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'completed')
-        self.assertFalse(r.store.recovery_status()['blocked'])
-
-    def test_active_no_candidate_fingerprint_recovers_atomically(self):
-        r = self.make(own=2, living=('q3',))
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        p=multiprocessing.get_context('fork').Process(target=crash_s1_no_candidate,args=(str(self.root),))
-        p.start();p.join(10);self.assertEqual(p.exitcode,78)
-        operation=r.store.recovery_status()['operations'][0]
-        r.store.repair(operation['id'],apply=True);r.store.repair(operation['id'],apply=True)
-        receipt = self.state()['synthesis_evaluated_catalogue']
-        self.assertTrue(receipt); self.assertFalse(self.state()['synthesis_candidate_order'])
-        self.assertIsNone(self.state()['terminal_event'])
-        self.change(lambda s, *_: s.update(research_cycles_since_synthesis=5))
-        r.llm=ScriptedLLM([{"new_concepts": [], "reason": "Fixture search plan.", "search_concepts":['methods', 'measurement']}])
-        self.assertEqual(r.step()['action'],'R1');self.assertEqual(len(r.llm.requests),1)
-        self.assertEqual(self.state()['synthesis_evaluated_catalogue'],receipt)
-        self.assertEqual([record['request']['action'] for record in read_records(self.root)], ['S1','R1'])
-        self.assertEqual(r.knowledge.validate()['documents'],2)
-        self.assertFalse(r.store.recovery_status()['blocked'])
-
-    def test_unknown_s2_dispatch_requires_explicit_acknowledgement(self):
-        r=self.make([selection()],own=2);r.step()
-        p=multiprocessing.get_context('fork').Process(target=crash_dispatch,args=(str(self.root),))
-        p.start();p.join(10);self.assertEqual(p.exitcode,79)
-        self.assertEqual(self.state()['synthesis_attempts'][0]['status'],'pending')
-        with self.assertRaisesRegex(ValueError,'interrupted/unknown'):r.step()
-        self.assertEqual(len(r.acknowledge_interrupted()),1)
-        r.llm=ScriptedLLM([synthesis()]);self.assertEqual(r.step()['status'],'committed')
-        self.assertEqual(len(self.state()['synthesis_attempts']),1)
-        self.assertEqual(r.knowledge.validate()['documents'],3)
-
-    def test_partial_synthesis_and_attempt_recover_atomically(self):
-        r=self.make([selection(['r1','r2','r3'])]);r.step()
-        p=multiprocessing.get_context('fork').Process(target=crash_partial,
-            args=(str(self.root),'replaced:memories/s1.md'))
-        p.start();p.join(10);self.assertEqual(p.exitcode,77)
-        operation=r.store.recovery_status()['operations'][0]
-        r.store.repair(operation['id'],apply=True);r.store.repair(operation['id'],apply=True)
-        state=self.state();a=state['synthesis_attempts'][0]
-        self.assertEqual(a['status'],'completed');self.assertEqual(a['contributing_memory_ids'],['r1','r2'])
-        self.assertEqual(a['unused_memory_ids'],['r3']);self.assertIsNone(state['pending_synthesis'])
-        self.assertIsNone(r.knowledge.document('r3').metadata['synthesized_by'])
-        self.assertEqual(r.knowledge.document('r1').metadata['synthesized_by'],'s1')
-        self.assertEqual(r.knowledge.validate()['documents'],4)
-        self.assertEqual(len(read_records(self.root)),2)
-        self.assertFalse(r.store.recovery_status()['blocked'])
-
-    def test_s2_exact_budget_boundary_includes_objective_and_reserve(self):
-        r=self.make(own=2)
-        with r.store.lock():_,docs,eqs,_=r.store.read()
-        objective='Compare qualifications and independently supported evidence.'
-        state=self.state();wire=request(
-            self.llm.model,self.llm.settings,'S2',gardener.context(state,docs,eqs,'q1',docs,objective=objective))
-        exact=len(wire.encode())+state['output_reserve']
-        state['context_budget']=exact
-        identity,supplied,info=gardener.prepare(state,docs,eqs,docs,objective,self.llm.model,self.llm.settings)
-        self.assertEqual(identity,'q1');self.assertIsNotNone(supplied)
-        self.assertEqual(supplied['objective'],objective);self.assertEqual(info['estimated_total'],exact)
-        self.assertEqual(info['representation'],'complete_memory')
-        state['context_budget']=exact-1
-        _,supplied,info=gardener.prepare(state,docs,eqs,docs,objective,self.llm.model,self.llm.settings)
-        self.assertTrue(supplied is None or info['representation']=='structured_summary')
-        self.assertEqual(info['input_ids'],['r1','r2'])
-
-    def test_completed_register_is_immutable(self):
-        r=self.make([selection(),{'disposition':'no_synthesis','reason':'Insufficient evidence.'}],own=2)
-        r.step();r.step()
-        for change in (lambda s,*_:s['synthesis_attempts'].clear(),
-                       lambda s,*_:s['synthesis_attempts'][0].update(reason='Rewrite history.')):
-            with self.assertRaisesRegex(ValueError,'forget|immutable'):self.change(change)
-        self.assertEqual(self.state()['synthesis_attempts'][0]['reason'],'Insufficient evidence.')
-
-    def test_old_v2_experiment_remains_readable_and_upgrades_on_action(self):
-        r=self.make(own=2)
-        with r.store.lock(): _, docs, eqs, ledger=r.store.read()
-        state=self.state()
-        for key in ('synthesis_attempts','pending_synthesis','synthesis_evaluated_catalogue'):state.pop(key)
-        tree.refresh(state,docs)
-        with tempfile.TemporaryDirectory() as directory:
-            old=LiveStore(directory)
-            with old.lock():
-                token,*_=old.read();old.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(state)})
-            before={m.id:render(m) for m in docs};raw=Path(directory,'research/state.json').read_bytes()
-            restarted=Research(directory,ScriptedLLM([selection()]),{})
-            restarted.inspect();self.assertEqual(Path(directory,'research/state.json').read_bytes(),raw)
-            self.assertEqual(restarted.step()['status'],'committed')
-            upgraded=loads(Path(directory,'research/state.json').read_text())
-            self.assertEqual(len(upgraded['synthesis_attempts']),1)
-            for identity,text in before.items():self.assertEqual(render(restarted.knowledge.document(identity)),text)
+            token,docs,eqs,ledger=self.r.store.read();state=self.state();callback(state,docs,eqs,ledger)
+            tree.refresh(state,docs);self.r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(state)})
+    def units(self):
+        with self.r.store.lock():
+            _,docs,eqs,_=self.r.store.read();return sy.records(self.state(),docs,eqs)
+    def advance(self):
+        self.assertEqual(self.r.step()['action'],'S1');self.assertEqual(self.r.step()['action'],'S2')
+    def test_three_stages_zero_one_one_calls_and_no_consumption(self):
+        self.r.llm=FixtureModel(publish=True);before={i:(self.root/'memories'/f'{i}.md').read_bytes() for i in ['r1','r2']}
+        for action,calls in [('S1',0),('S2',1),('S3',2)]:
+            e=self.r.step();self.assertEqual((e['action'],e['status']),(action,'committed'),e);self.assertEqual(len(self.r.llm.requests),calls)
+        for i,raw in before.items():self.assertEqual((self.root/'memories'/f'{i}.md').read_bytes(),raw)
+        output=self.r.knowledge.document('s1');self.assertEqual(output.metadata['lineage_mode'],'knowledge_units')
+        self.assertEqual({e.target for e in output.relationships},{'r1#f1','r2#f1'})
+        self.assertEqual(parse(render(output)),output);self.assertEqual(self.r.knowledge.validate()['documents'],3)
+        objective=next(iter(self.state()['unit_synthesis']['objectives'].values()))
+        self.assertEqual(objective['contributing_unit_ids'],['r1#f1','r2#f1'])
+    def test_no_synthesis_is_completed_without_memory_or_repeat(self):
+        self.advance();self.assertEqual(self.r.step()['disposition'],'no_synthesis')
+        self.r.step();calls=len(self.llm.requests);self.assertEqual(self.r.step()['status'],'finished');self.assertEqual(len(self.llm.requests),calls)
+        self.assertEqual(self.r.knowledge.validate()['documents'],2)
+    def test_configured_semantic_backend_reopens_discovery_without_s2_replay(self):
+        self.advance();self.r.step();self.r.step();self.assertEqual(self.r.step()['status'],'finished')
+        backend=Mock(identity='real-fixture:new-artifact',embed=Mock(return_value=[[1.,.5,.25]]))
+        reopened=Research(self.root,ScriptedLLM([]),{},embedding_backend=backend)
+        event=reopened.step();self.assertEqual(event['action'],'S1');self.assertTrue(event['embedding_capability']['semantic'])
+        self.assertEqual(backend.embed.call_count,2);self.assertFalse(reopened.llm.requests)
+        self.assertEqual(reopened.step()['status'],'finished')
+    def test_only_actual_s3_subset_establishes_participation(self):
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,ScriptedLLM([]),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=3,child=0,leaf=0)
+            with r.store.lock():_,docs,eqs,_=r.store.read();state=loads(r.store._files()['research/state.json'])
+            units=sy.records(state,docs,eqs);groups,capability=r.synthesis_discovery.discover(units)
+            full=next(g for g in groups if len(g['unit_ids'])==3)
+            r.synthesis_discovery.discover=Mock(return_value=([full],capability))
+            self.assertEqual(r.step()['action'],'S1')
+            r.llm=ScriptedLLM([plans(idea([u['id'] for u in units])),result(units[:2],units)])
+            self.assertEqual(r.step()['action'],'S2');self.assertEqual(r.step()['action'],'S3')
+            output=r.knowledge.document('s1')
+            self.assertEqual(output.metadata['source_memories'],['r1','r2'])
+            self.assertEqual({e.target for e in output.relationships},{'r1#f1','r2#f1'})
+            self.assertTrue(all(r.knowledge.document(i).metadata['synthesized_by'] is None for i in ['r1','r2','r3']))
+    def test_multiple_distinct_objectives_survive_restart(self):
+        self.r.llm=FixtureModel(objectives=3);self.advance()
+        self.assertEqual(len(self.state()['unit_synthesis']['objectives']),3)
+        for _ in range(3):
+            self.r=Research(self.root,ScriptedLLM([{'disposition':'no_synthesis','reason':'Insufficient support.'}]),{})
+            self.assertEqual(self.r.step()['action'],'S3')
+        self.assertTrue(all(o['status']=='completed' for o in self.state()['unit_synthesis']['objectives'].values()))
+    def test_independent_s2_proposal_validation(self):
+        self.r.step();self.r.llm=ScriptedLLM([plans(idea(),idea(['r1#f1','unknown']),idea(objective='Compare a different methodological feature.'))])
+        e=self.r.step();self.assertEqual(e['status'],'committed');self.assertEqual(len(e['accepted_objectives']),2);self.assertEqual(len(e['rejected_components']),1)
+    def test_all_invalid_s2_is_failed_not_scientific_rejection(self):
+        self.r.step();self.r.llm=ScriptedLLM([plans(idea(['r1#f1','unknown']))]);e=self.r.step()
+        self.assertEqual(e['status'],'rejected');self.assertEqual(next(iter(self.state()['unit_synthesis']['groups'].values()))['status'],'failed')
+        self.assertFalse(self.state()['unit_synthesis']['objectives'])
+        self.r.step();self.assertEqual(self.r.step()['status'],'blocked_synthesis')
+    def test_s2_duplicate_and_limit_validation(self):
+        accepted,rejected=sy.validate_s2(plans(idea(),idea(),idea(objective='A different comparison.'),idea(objective='Fourth objective.')),self.units())
+        self.assertEqual(len(accepted),2);self.assertEqual(len(rejected),2)
+    def test_only_supplied_eligible_references_may_reach_s3(self):
+        units=self.units();bad=result(units);bad['findings'][0]['source_findings'].append('r99#f1')
+        with self.assertRaisesRegex(ValueError,'references'):sy.validate_s3(bad,units,[])
+        bad=result(units[:1])
+        with self.assertRaises(ValueError):sy.validate_s3(bad,units,[])
+    def test_misattributed_evidence_rejected(self):
+        units=self.units();bad=result(units);bad['findings'][0]['evidence_checks'][0]['quote']='Not in the attributed source.'
+        with self.assertRaisesRegex(ValueError,'misattributed'):sy.validate_s3(bad,units,[])
+    def test_quantitative_arithmetic_and_incorrect_inequality(self):
+        units=self.units()
+        for u,n in zip(units,['4','8']):u['fields']['Proposition']=f'The matched quantity is {n} units.'
+        operands=[{'unit_id':u['id'],'quote':u['fields']['Proposition'],'value':n} for u,n in zip(units,['4','8'])]
+        lookup={u['id']:u for u in units}
+        check={'operation':'ratio','operands':operands,'result':'0.5','assumptions':'Matched conditions and units.'}
+        sy.numeric_checks([check],lookup)
+        for change in [{'result':'2'},{'operation':'greater_than','result':True}]:
+            with self.subTest(change=change),self.assertRaisesRegex(ValueError,'incorrect numerical'):sy.numeric_checks([{**check,**change}],lookup)
+        sy.numeric_checks([{**check,'operation':'less_than','result':True}],lookup)
+    def test_numeric_operand_source_attribution_required(self):
+        units=self.units();u=units[0];u['fields']['Proposition']='Measured quantity 4.'
+        operand={'unit_id':u['id'],'value':'5','quote':'Measured quantity 4.'}
+        with self.assertRaisesRegex(ValueError,'operand not in quote'):sy.numeric_checks([{'operation':'sum','operands':[operand,operand],'result':'10','assumptions':'Fixture.'}],{u['id']:u})
+    def test_numeric_sign_and_small_quantity_errors_not_hidden_by_tolerance(self):
+        u=self.units()[0];lookup={u['id']:u}
+        u['fields']['Proposition']='The signed quantity is −4.'
+        operand={'unit_id':u['id'],'value':'4','quote':u['fields']['Proposition']}
+        with self.assertRaisesRegex(ValueError,'operand not in quote'):
+            sy.numeric_checks([{'operation':'sum','operands':[operand,operand],'result':'8','assumptions':'Matched quantities.'}],lookup)
+        signed={**operand,'value':'-4'}
+        sy.numeric_checks([{'operation':'sum','operands':[signed,signed],'result':'-8','assumptions':'Matched signed quantities.'}],lookup)
+        u['fields']['Proposition']='The quantity is 0.0000000000000000001.'
+        operand={'unit_id':u['id'],'value':'0.0000000000000000001','quote':u['fields']['Proposition']}
+        with self.assertRaisesRegex(ValueError,'incorrect numerical'):
+            sy.numeric_checks([{'operation':'sum','operands':[operand,operand],'result':'0.0000000000000000003','assumptions':'Matched quantities.'}],lookup)
+    def test_questions_are_context_not_independent_evidence(self):
+        units=self.units()
+        for u in units:u['structural_type']='question';u['fields']={'Question':'What remains unresolved?'}
+        with self.assertRaisesRegex(ValueError,'questions alone'):sy.validate_s3(result(units),units,[])
+    def test_every_finding_must_integrate_two_memories(self):
+        units=self.units();bad=result(units);f=deepcopy(bad['findings'][0]);f['source_findings']=['r1#f1'];bad['findings'].append(f)
+        with self.assertRaises(ValueError):sy.validate_s3(bad,units,[])
+    def test_hypotheses_explicit_and_unsupported_assertions_not_verified(self):
+        units=self.units();value=result(units);value['findings'][0]['epistemic_type']='hypothesis';sy.validate_s3(value,units,[])
+        value['findings'][0]['epistemic_type']='established_empirical_fact'
+        with self.assertRaises(ValueError):sy.validate_s3(value,units,[])
+    def test_novelty_exact_prior_synthesis_rejected_but_new_evidence_retained(self):
+        units=self.units();finding=result(units)['findings'][0]
+        existing=deepcopy(units[0]);existing['id']='s1#f1';existing['fields']['Proposition']=finding['proposition'];existing['fields']['Qualification']=finding['qualification'];existing['leaf_units']=['r1#f1','r2#f1']
+        accepted,audit=sy.novelty([finding],units,[existing]);self.assertEqual(accepted,[]);self.assertEqual(audit[0]['existing_unit_ids'],['s1#f1'])
+        existing['leaf_units']=['r1#f1'];self.assertEqual(len(sy.novelty([finding],units,[existing])[0]),1)
+    def test_uncertain_semantic_equivalence_does_not_veto(self):
+        units=self.units();f=result(units)['findings'][0];f['novelty_comparisons']=[{'unit_id':'s1#f1','assessment':'uncertain','reason':'Different endpoints.'}]
+        existing=deepcopy(units[0]);existing['id']='s1#f1';existing['leaf_units']=['r1#f1','r2#f1']
+        self.assertEqual(len(sy.novelty([f],units,[existing])[0]),1)
+    def test_changed_and_additional_evidence_not_blanket_suppressed(self):
+        self.r.step();key=self.state()['unit_synthesis']['selected_group'];first=self.units()
+        self.assertEqual(sd.fingerprint(first),sd.fingerprint(list(reversed(first))))
+        self.change(lambda s,docs,*_: (docs[0].metadata.update(sources=[{'id':'fixture-new-source','url':'https://example.org/new-source'}]),setattr(docs[0],'revision',2)))
+        self.assertNotEqual(sd.fingerprint(self.units()),key)
+        accepted,_=sy.validate_s2(plans(idea()),self.units());self.assertEqual(len(accepted),1)
+        self.assertNotEqual(sy.objective_id(idea(),first),sy.objective_id(idea(objective='A new objective.'),first))
+    def test_selected_version_change_fails_before_dispatch(self):
+        self.r.step();self.change(lambda s,docs,*_: (docs[0].metadata.update(sources=[{'id':'fixture-new-source','url':'https://example.org/new-source'}]),setattr(docs[0],'revision',2)))
+        e=self.r.step();self.assertEqual(e['status'],'rejected');self.assertIn('versions changed',e['error']);self.assertFalse(self.llm.requests)
+    def test_s3_selected_version_change_fails_before_dispatch(self):
+        self.advance();self.change(lambda s,docs,*_: (docs[0].metadata.update(sources=[{'id':'fixture-new-source','url':'https://example.org/new-source'}]),setattr(docs[0],'revision',2)))
+        e=self.r.step();self.assertEqual(e['status'],'rejected');self.assertEqual(len(self.llm.requests),1)
+    def test_failure_durable_and_no_automatic_model_retry(self):
+        self.advance();self.r.llm=ScriptedLLM([RuntimeError('Transport unavailable')]);e=self.r.step()
+        self.assertEqual(e['status'],'rejected');self.assertEqual(len(self.r.llm.requests),1)
+        self.r.step();self.assertEqual(self.r.step()['status'],'blocked_synthesis');self.assertEqual(len(self.r.llm.requests),1)
+    def test_late_failure_rolls_back_publication_and_ids(self):
+        self.r.llm=FixtureModel(publish=True);self.advance()
+        from unittest.mock import patch
+        with patch('mira.research.branching.assess',side_effect=[[],RuntimeError('late failure')]):e=self.r.step()
+        self.assertEqual(e['status'],'rejected');self.assertFalse((self.root/'memories/s1.md').exists());self.assertEqual(loads((self.root/'identity.json').read_text())['s'],1)
+    def test_completed_register_immutable(self):
+        self.advance();self.r.step()
+        with self.assertRaisesRegex(ValueError,'immutable'):
+            self.change(lambda s,*_:next(iter(s['unit_synthesis']['objectives'].values())).update(reason='Altered history.'))
+    def test_context_block_is_durable_and_not_finished(self):
+        self.change(lambda s,*_:s.update(context_budget=2100,research_capacity_tokens=2000))
+        e=self.r.step();self.assertEqual(e['reason'],'no_fitting_candidate');self.assertFalse(self.llm.requests)
+        self.assertEqual(self.r.step()['status'],'blocked_synthesis')
+    def test_cross_branch_owner_and_killed_exclusion(self):
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,FixtureModel(),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=1,child=1,leaf=1,killed=True)
+            with r.store.lock():
+                _,docs,eqs,_=r.store.read();s=loads(r.store._files()['research/state.json']);units=sy.records(s,docs,eqs)
+            self.assertEqual({u['memory_id'] for u in units},{'r1','r2'})
+            self.assertEqual(sy.owner(s,units),'q1')
+            self.assertEqual(r.step()['selection']['memory_ids'],['r1','r2'])
+    def test_fairness_yields_after_pipeline_with_more_objectives_pending(self):
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,FixtureModel(objectives=3),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=2,child=0,leaf=0,living=('q3',))
+            with r.store.lock():
+                token,docs,eqs,ledger=r.store.read();s=loads(r.store._files()['research/state.json']);s['research_cycles_since_synthesis']=5
+                r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(s)})
+            for action in ['S1','S2','S3']:self.assertEqual(r.step()['action'],action)
+            r.llm=ScriptedLLM([{'new_concepts':[],'search_concepts':['measurement','uncertainty'],'reason':'Research continues.'}])
+            self.assertEqual(r.step()['action'],'R1')
+            s=loads(Path(root,'research/state.json').read_text());self.assertEqual(sum(o['status']=='pending' for o in s['unit_synthesis']['objectives'].values()),2)
+    def test_restart_at_each_stage_preserves_pending_work(self):
+        for action in ['S1','S2','S3']:
+            self.r=Research(self.root,self.llm,{})
+            self.assertEqual(self.r.step()['action'],action)
+    def test_recovery_at_selection_planning_and_publication_boundaries(self):
+        for action,stages in [('S1',['prepared','replaced:research/state.json']),('S2',['prepared','before_commit']),('S3',['prepared','replaced:memories/s1.md','replaced:research/state.json','before_commit'])]:
+            for stage in stages:
+                with self.subTest(action=action,stage=stage),tempfile.TemporaryDirectory() as d:
+                    root=Path(d)/'memory';shutil.copytree(self.root,root)
+                    r=Research(root,FixtureModel(publish=True),{})
+                    for _ in range({'S1':0,'S2':1,'S3':2}[action]):self.assertEqual(r.step()['status'],'committed')
+                    proc=multiprocessing.get_context('fork').Process(target=crash,args=(root,stage,True));proc.start();proc.join(15);self.assertEqual(proc.exitcode,78)
+                    with self.assertRaises(RecoveryRequired),r.store.lock():r.store.read()
+                    recovery=r.store.recovery_status()['operations'][0];r.store.repair(recovery['id'],apply=True);r.store.repair(recovery['id'],apply=True)
+                    r=Research(root,ScriptedLLM([]),{});r._recover_outcomes()
+                    with r.store.lock():r.store.read()
+                    state=loads((root/'research/state.json').read_text())
+                    self.assertEqual(len(read_records(root)),{'S1':0,'S2':1,'S3':2}[action])
+                    if action=='S1':self.assertIsNotNone(state['unit_synthesis']['selected_group'])
+                    elif action=='S2':self.assertEqual(len(state['unit_synthesis']['objectives']),1)
+                    else:
+                        self.assertEqual(next(iter(state['unit_synthesis']['objectives'].values()))['result_memory_id'],'s1')
+                        self.assertEqual(len(list((root/'memories').glob('s*.md'))),1)
+                    self.assertFalse(r.llm.requests)
+    def test_unknown_dispatch_s2_and_s3_never_retried(self):
+        for stage in ['S2','S3']:
+            with self.subTest(stage=stage),tempfile.TemporaryDirectory() as d:
+                root=Path(d)/'memory';shutil.copytree(self.root,root);r=Research(root,self.llm,{})
+                r.step()
+                if stage=='S3':r.step()
+                proc=multiprocessing.get_context('fork').Process(target=dispatch_crash,args=(root,));proc.start();proc.join(15);self.assertEqual(proc.exitcode,79)
+                restarted=Research(root,ScriptedLLM([]),{})
+                self.assertEqual(restarted.inspect()['pending_model_submissions'][0]['status'],'uncertain_submission')
+                with self.assertRaisesRegex(ValueError,'unknown model call'):restarted.step()
+                self.assertFalse(restarted.llm.requests)
+    def test_historical_consumption_remains_readable_and_not_a_new_exclusion(self):
+        self.change(lambda s,docs,eqs,ledger:gardener.apply(s,docs,ledger,'q1',list(docs),synthesis()))
+        units=self.units();self.assertTrue({'r1#f1','r2#f1','s1#f1'}<={u['id'] for u in units})
+        self.assertEqual(self.r.knowledge.document('r1').metadata['synthesized_by'],'s1')
+        self.assertEqual(self.r.knowledge.validate()['documents'],3)
+    def test_circular_ancestry_rejected(self):
+        with self.r.store.lock():_,docs,_,_=self.r.store.read()
+        for number,targets in [(1,['r1#f1','s2#f1']),(2,['r2#f1','s1#f1'])]:
+            m=Memory('s'+str(number),'Cyclic fixture','Must be rejected.',metadata={'node_id':'q1','kind':'synthesis',
+                'synthesized_by':None,'source_memories':[t.split('#')[0] for t in targets],
+                'lineage_mode':'knowledge_units','created_order':number+2,
+                'synthesis_unit_versions':[{'id':t,'version':'0'*64} for t in targets]})
+            m.units.append(Unit(m.allocate('f'),'Invalid cycle',{'Kind':'synthesis','Evidence status':'unverified',
+                'Proposition':'Invalid cyclic inference.','Explanation':'Cycle fixture.','Qualification':'Invalid.',
+                'Epistemic type':'inference','Provenance':'Cycle fixture.'}))
+            m.relationships=[Relationship('f1','SYNTHESIZES',t,'unverified') for t in targets];docs.append(m)
+        with self.assertRaisesRegex(ValueError,'cyclic synthesis ancestry'):validate_lineage(docs)
+        with self.assertRaisesRegex(ValueError,'cyclic knowledge-unit ancestry'):sd.project(docs)
+    def test_killed_pending_evidence_is_not_dispatched(self):
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,FixtureModel(),{});r.initialize('Question?', ['fixture'],context_budget=200000)
+            seed(r,own=1,child=0,leaf=1,living=('q3',))
+            with r.store.lock():
+                token,docs,eqs,ledger=r.store.read();state=loads(r.store._files()['research/state.json'])
+                state['research_cycles_since_synthesis']=5;r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(state)})
+            self.assertEqual(r.step()['action'],'S1')
+            with r.store.lock():
+                token,docs,eqs,ledger=r.store.read();state=loads(r.store._files()['research/state.json'])
+                state['nodes']['q3']['status']='killed';tree.refresh(state,docs)
+                r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(state)})
+            event=r.step();self.assertEqual(event['status'],'rejected');self.assertIn('ineligible',event['error']);self.assertFalse(r.llm.requests)
+    def test_historical_pending_execution_is_preserved_and_blocked(self):
+        with tempfile.TemporaryDirectory() as root:
+            r=Research(root,ScriptedLLM([]),{});state=tree.initial('Legacy?', ['fixture'],context_budget=200000)
+            del state['unit_synthesis']
+            with self.r.store.lock():_,docs,eqs,ledger=self.r.store.read()
+            state['nodes']['q1'].update(status='answered',memory_ids=['r1','r2'])
+            versions=tree.memory_versions(docs)
+            state['synthesis_attempts']=[{'id':'historical-selection','node_id':'q1','selected_memory_ids':['r1','r2'],
+                'memory_versions':versions,'objective':'Historical execution.','scores':dict.fromkeys('RCXNE',1),'score':5,
+                'selection_reason':'Historical selection.','s1_interaction_id':'old-selection','s2_interaction_id':None,
+                'status':'pending','disposition':None,'contributing_memory_ids':[],'unused_memory_ids':['r1','r2'],
+                'result_memory_id':None,'reason':''}]
+            pending={'attempt_id':'historical-selection','selection':{},'context':{'node':{'id':'q1'},
+                'objective':'Historical execution.','input_memories':[{'id':v['memory_id'],'memory_sha256':v['content_hash']} for v in versions]}}
+            state['pending_synthesis']=pending;tree.refresh(state,docs)
+            with r.store.lock():
+                token,_,_,_=r.store.read();r.store.publish(docs,eqs,ledger,token,files={'research/state.json':dumps(state)})
+            before=(Path(root)/'research/state.json').read_bytes()
+            self.assertEqual(r.step()['status'],'blocked_legacy_synthesis')
+            self.assertEqual((Path(root)/'research/state.json').read_bytes(),before);self.assertFalse(r.llm.requests)
+    def test_population_endpoint_and_causal_limits_are_explicit_in_prompts(self):
+        from mira.prompts import PromptTemplates
+        for stage in ['S2','S3']:
+            text=PromptTemplates().sources(stage)[0]['source']
+            for distinction in ['populations','endpoints','causal','independent','<=400','28','uncertainty']:
+                self.assertIn(distinction,text)
+        text=PromptTemplates().sources('S3')[0]['source']
+        self.assertIn('AUC',text);self.assertIn('no_synthesis',text)
+    def test_unit_version_ignores_consumption_and_memory_bookkeeping(self):
+        with self.r.store.lock():_,docs,eqs,_=self.r.store.read()
+        first=sd.project(docs,eqs)
+        docs[0].revision+=1;docs[0].metadata['synthesized_by']='s99'
+        self.assertEqual(first,sd.project(docs,eqs))
+        docs[0].units[0].fields['Explanation']='Changed qualification.'
+        self.assertNotEqual(sd.project(docs,eqs)[0]['version'],first[0]['version'])
 
 
-if __name__ == '__main__': unittest.main()
+class DiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.r=Research(self.tmp.name,ScriptedLLM([]),{});self.r.initialize('Question?', ['fixture'],context_budget=200000)
+        seed(self.r,own=3,child=1,leaf=1)
+        with self.r.store.lock():_,self.docs,self.eqs,_=self.r.store.read()
+        self.units=sd.project(self.docs,self.eqs)
+    def test_bounded_groups_order_and_exact_set_identity(self):
+        discovery=sd.Discovery(self.r.store)
+        groups,capability=discovery.discover(self.units);reverse,_=discovery.discover(list(reversed(self.units)))
+        self.assertEqual(groups,reverse);self.assertFalse(capability['semantic'])
+        self.assertTrue(groups);self.assertTrue(all(2<=len(g['unit_ids'])<=5 for g in groups))
+        self.assertEqual(len({g['id'] for g in groups}),len(groups))
+        a,b=groups[0],groups[-1];self.assertNotEqual(a['id'],b['id'])
+    def test_real_backend_cache_identity_representation_and_changed_content(self):
+        backend=Mock(identity='nomic-http:fixture-artifact-sha256:prefix-v1')
+        backend.embed.side_effect=lambda texts,query=False:[[1.,.5,.25] for _ in texts]
+        d=sd.Discovery(self.r.store,backend);_,first=d.discover(self.units);self.assertTrue(first['semantic']);self.assertEqual(first['generated'],5)
+        _,second=d.discover(self.units);self.assertEqual(second['cache_hits'],5);self.assertEqual(backend.embed.call_count,5)
+        changed=deepcopy(self.units);changed[0]['version']=digest('changed scientific content')
+        _,third=d.discover(changed);self.assertEqual(third['generated'],1)
+        backend.identity+='-different-model';_,fourth=d.discover(self.units);self.assertEqual(fourth['generated'],5)
+    def test_test_double_and_unavailable_service_explicitly_degraded(self):
+        for backend in [TestEmbedding(),Mock(identity='real-model',embed=Mock(side_effect=OSError('offline')))]:
+            groups,status=sd.Discovery(self.r.store,backend).discover(self.units)
+            self.assertTrue(groups);self.assertEqual(status['mode'],'lexical_only');self.assertFalse(status['semantic'])
+    def test_question_only_groups_not_dispatched_as_evidence(self):
+        units=deepcopy(self.units)
+        for unit in units:unit.update(type='question',structural_type='question')
+        groups,_=sd.Discovery(self.r.store).discover(units)
+        self.assertEqual(groups,[])
+    def test_bad_vectors_are_not_semantic_success(self):
+        for vectors in [[[float('nan')]],[[0.,0.]],[]]:
+            backend=Mock(identity='real-fixture',embed=Mock(return_value=vectors))
+            _,status=sd.Discovery(self.r.store,backend).discover(self.units)
+            self.assertFalse(status['semantic'])
+    def test_same_paper_exact_duplicates_and_distinct_corroboration(self):
+        a,b=deepcopy(self.units[:2]);a['source_ids']=b['source_ids']=['one-paper'];a['leaf_units']=['r1#f1'];b['leaf_units']=['r2#f1']
+        self.assertEqual(sd.annotate(a,b,1.,1.)['category'],'exact_duplicate')
+        b['source_ids']=['different-paper'];self.assertEqual(sd.annotate(a,b,1.,1.)['category'],'potential_corroboration')
+    def test_population_endpoint_numbers_and_conflicting_qualifications_preserved(self):
+        a,b=deepcopy(self.units[:2]);a['fields']['Proposition']='In pediatric solid lesions AUC 0.8 estimates malignancy; volume doubling time <=400 days.'
+        b['fields']['Proposition']='In adults with nonsolid lesions AUC 0.8 estimates invasiveness; volume doubling time 28 days.'
+        a['fields']['Qualification']='Retrospective, no infection comparison.';b['fields']['Qualification']='Prospective, no causal mechanism.'
+        row=sd.annotate(a,b,.9,.99)
+        self.assertNotEqual(row['category'],'exact_duplicate');self.assertFalse(row['automatic_equivalence'])
+        self.assertTrue({'conditions','numbers_and_comparators','qualification'}<=set(row['distinctions']))
+    def test_explicit_complementarity_and_contradiction_are_not_duplicates(self):
+        a,b=deepcopy(self.units[:2]);b['fields']['Proposition']='The complementary partition of the same study.'
+        for relation,category in [('CONTRADICTS','apparent_contradiction'),('QUALIFIES','complementary_findings')]:
+            a['relationships']=[{'type':relation,'to':b['id']}]
+            self.assertEqual(sd.annotate(a,b,.1,.1)['category'],category)
+    def test_cache_symlink_rejected_without_writing_target(self):
+        target=Path(self.tmp.name)/'target';target.write_text('private')
+        (Path(self.tmp.name)/'synthesis.sqlite3').symlink_to(target)
+        backend=Mock(identity='real-fixture',embed=Mock(return_value=[[1.]]))
+        _,status=sd.Discovery(self.r.store,backend).discover(self.units)
+        self.assertFalse(status['semantic']);self.assertEqual(target.read_text(),'private')
+    def test_defined_validation_premises_are_canonical_before_model_dispatch(self):
+        import runpy
+        script=runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/validate_unit_synthesis.py'))
+        model=ScriptedLLM([]);model.context_window=16384
+        root=Path(self.tmp.name)/'mathematical-fixture'
+        snapshot=script['mathematical_fixture'](root,model,None,matched=True)
+        r=Research(root,model,{})
+        with r.store.lock():token,docs,_,_=r.store.read()
+        self.assertEqual(snapshot['revision'],token);self.assertEqual(len(docs),2)
+        self.assertTrue(all(parse(render(m))==m for m in docs));self.assertFalse(model.requests)
