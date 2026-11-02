@@ -6,7 +6,7 @@ import sys
 
 from .format import digest, dumps, require
 
-ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S2", "S3")
+ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S2", "S3", "G1")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
                 "children", "strategy", "next_database", "search_history", "equations")
 SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "search_outcomes"), "R3": ("question", "question_context", "research"),
@@ -22,6 +22,7 @@ SLOTS['S2'] = ('root_question','question','research_brief','candidate',
     'knowledge_units','parent_memories','existing_knowledge')
 SLOTS['S3'] = ('root_question','question','research_brief','candidate',
     'knowledge_units','parent_memories','objective','existing_knowledge')
+SLOTS['G1'] = ('entries',)
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 
 
@@ -43,6 +44,15 @@ class PromptTemplates:
         return [{"path": "prompt_templates/" + name, "sha256": digest(source), "source": source}]
 
     def render(self, action, context):
+        if action == 'G1':
+            # The owner-approved G1 source has no interpolation slots. Its exact
+            # bytes remain the instructions; scientific data is a separate turn.
+            require(isinstance(context, dict) and set(context) == {'entries'}, 'G1 requires only entries context')
+            sources = self.sources(action)
+            messages = [{'role': 'system', 'content': sources[0]['source']},
+                        {'role': 'user', 'content': dumps(context['entries']).rstrip('\n')}]
+            return messages, {'version': 2, 'format': 'text', 'action': action, 'files': sources,
+                'bindings': {'context': context}, 'filled_messages': messages}
         # Existing callers and durable pending S2 contexts predate question files.
         context = context if action in {"R1", "R4"} else {"research_brief": None, **context}
         sources = self.sources(action)

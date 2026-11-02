@@ -64,6 +64,9 @@ def validate_transaction(old, proposed):
                 history = previous.get('enrichment', [])
                 require(record.get('enrichment', [])[:len(history)] == history,
                         'enrichment history cannot be removed or rewritten')
+                history = previous.get('definition_reviews', [])
+                require(record.get('definition_reviews', [])[:len(history)] == history,
+                        'definition reviews cannot be removed or rewritten')
             else:
                 new_ids.append(int(record["id"][1:]))
             previous_definitions=loads(old[path])['definitions'] if path in old else []
@@ -97,7 +100,7 @@ def string(value, limit=1000):
 
 def validate_record(record):
     fields = {"id", "key", "term", "aliases", "definitions", "evidence", "relationships", "node_ids", "status"}
-    require(isinstance(record, dict) and fields <= set(record) <= fields | {'terminology', 'enrichment'}, "invalid glossary record")
+    require(isinstance(record, dict) and fields <= set(record) <= fields | {'terminology', 'enrichment', 'definition_reviews'}, "invalid glossary record")
     require(isinstance(record["id"], str) and TERM_ID.fullmatch(record["id"]), "invalid glossary ID")
     string(record["term"], 160); string(record["key"], 1200)
     for key in ("aliases", "definitions", "evidence", "relationships", "node_ids"):
@@ -130,7 +133,15 @@ def validate_record(record):
                 TERM_ID.fullmatch(row["target"]) and row["target"] != record["id"] and
                 row["type"] in RELATIONS, "invalid glossary relationship")
         require(row["evidence"] in record["evidence"], "relationship evidence missing")
-    expected = definitions.status(record["definitions"])
+    reviews = record.get('definition_reviews', [])
+    require(isinstance(reviews, list), 'invalid definition review history')
+    for row in reviews:
+        from datetime import datetime
+        require(isinstance(row, dict) and set(row) == {'definition_sha256', 'reason', 'reviewer', 'reviewed_at'} and
+                row['definition_sha256'] in {digest(dumps(d)) for d in record['definitions']}, 'invalid reviewed definition identity')
+        string(row['reason'], 2000); string(row['reviewer'], 200)
+        require(datetime.fromisoformat(row['reviewed_at']).tzinfo is not None, 'invalid definition review timestamp')
+    expected = definitions.status(record["definitions"], reviews)
     require(record["status"] == expected, "incorrect definition status")
     from .terminology import validate_result
     require(isinstance(record.get('terminology', []), list), 'invalid terminology lookup history')
@@ -383,7 +394,7 @@ class Directory:
             if value["definition"]:
                 definition = {"text": value["definition"], "qualification": value["qualification"], "evidence": support}
                 if definition not in record["definitions"]: record["definitions"].append(definition)
-            record["status"] = definitions.status(record["definitions"])
+            record["status"] = definitions.status(record["definitions"], record.get("definition_reviews", []))
         for value in accepted:
             record = by_key[key_for(value)]
             for relation in value["relationships"]:
@@ -458,7 +469,7 @@ class Directory:
                             d.get('authority', {}).get('concept_id') == authority['concept_id'] and
                             d.get('type') == description['type'] and d['text'] == description['text']
                             for d in record['definitions']): record['definitions'].append(definition)
-                    record['status'] = definitions.status(record['definitions'])
+                    record['status'] = definitions.status(record['definitions'], record.get('definition_reviews', []))
         files = {}
         for record in records.values():
             validate_record(record)
@@ -496,7 +507,7 @@ class Directory:
                 'template_sha256':template,'request_sha256':digest(request['serialized_request']),
                 'context':{'node_id':event['node_id'],'question':context['question']}}
             definitions.validate(generated,record['id'])
-            record['definitions'].append(generated);record['status']=definitions.status(record['definitions'])
+            record['definitions'].append(generated);record['status']=definitions.status(record['definitions'], record.get('definition_reviews', []))
             validate_record(record)
             files['glossary/'+record['id']+'.json']=dumps(record);admitted.append(value)
         if files:

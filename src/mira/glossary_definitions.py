@@ -27,7 +27,9 @@ def provisional(row):
     return row.get('origin') == 'llm_generated'
 
 
-def status(definitions):
+def status(definitions, reviews=()):
+    rejected = {r['definition_sha256'] for r in reviews}
+    definitions = [d for d in definitions if digest(dumps(d)) not in rejected]
     sourced = [d for d in definitions if not provisional(d)]
     if not sourced: return 'provisional' if definitions else 'candidate'
     return 'source_defined' if len({normalize(d['text']) for d in sourced}) == 1 else 'multiple_definitions'
@@ -103,7 +105,8 @@ def applicable(row, record, current):
 
 
 def preferred(record, current=None):
-    rows=[d for d in record['definitions'] if applicable(d,record,current)]
+    rejected = {r['definition_sha256'] for r in record.get('definition_reviews', [])}
+    rows=[d for d in record['definitions'] if digest(dumps(d)) not in rejected and applicable(d,record,current)]
     def rank(d): return (0 if 'authority' in d else 2 if provisional(d) else 1, normalize(d['text']), dumps(d))
     return sorted(rows,key=rank)
 

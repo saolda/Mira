@@ -23,6 +23,8 @@ def lookup_status(record):
     labels = {'matched': 'Authoritative match', 'not_found': 'No authoritative match',
         'ambiguous': 'Ambiguous match; no definition attached', 'unavailable': 'Lookup unavailable',
         'error': 'Lookup error', 'not_attempted': 'Lookup not yet attempted'}
+    if row['status'] == 'matched' and not any(c['descriptions'] for c in row['concepts']):
+        return 'Authoritative name match; no descriptive definition supplied: ' + row['reason']
     return labels[row['status']] + ': ' + row['reason']
 
 
@@ -93,6 +95,8 @@ def markdown(records, current_scope=None, metadata=None):
         if record.get('enrichment'):
             last = record['enrichment'][-1]
             lines += ['Enrichment: ' + prose(last['status']) + ' · ' + prose(last['updated_at']) + ' · ' + prose(last['reason']), '']
+        for review in record.get('definition_reviews', []):
+            lines += ['Excluded earlier definition: ' + prose(review['reason']) + ' · reviewed by ' + prose(review['reviewer']), '']
         for definition in ordered:
             if definitions.provisional(definition):
                 lines += ['- Definition: ' + prose(definition['text']),
@@ -178,6 +182,9 @@ def html(records, current_scope=None, metadata=None):
             last=record['enrichment'][-1]
             parts += ['<p class="reference prose">Enrichment: ' + escape(last['status']) + ' · ' + escape(last['updated_at']) +
                 '<br>' + escape(last['reason']) + '</p>']
+        for review in record.get('definition_reviews', []):
+            parts += ['<p class="qualification prose"><strong>Excluded earlier definition:</strong> ' +
+                escape(review['reason']) + '<br>Reviewed by ' + escape(review['reviewer']) + '</p>']
         if any(definitions.provisional(d) for d in record['definitions']):
             parts += ['<p class="qualification prose">Supporting passages document term occurrence; they do not verify model-generated definitions.</p>']
         if record['definitions']:

@@ -183,9 +183,15 @@ class Inspector:
                 try:
                     raw = files[0]["source"]
                     reproduced = PLACEHOLDER.sub(lambda m: dumps(bindings[m[1]]).rstrip("\n"), raw)
-                    matches = (matches and len(files) == 1 and digest(raw) == files[0]["sha256"]
-                               and bindings == req.get("context")
-                               and messages == [{"role": "user", "content": reproduced}])
+                    if template.get('action') == 'G1':
+                        matches = (matches and len(files) == 1 and digest(raw) == files[0]['sha256']
+                            and bindings == {'entries': req.get('context', {}).get('entries')}
+                            and messages == [{'role': 'system', 'content': raw},
+                                             {'role': 'user', 'content': dumps(bindings['entries']).rstrip('\n')}])
+                    else:
+                        matches = (matches and len(files) == 1 and digest(raw) == files[0]["sha256"]
+                                   and bindings == req.get("context")
+                                   and messages == [{"role": "user", "content": reproduced}])
                 except (KeyError, IndexError, TypeError):
                     matches = False
             template_check.update(matches_recorded_request=matches,

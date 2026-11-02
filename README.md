@@ -78,11 +78,10 @@ Exports are derived views; canonical research and glossary records stay unchange
 `glossary-enrich` maintains canonical terminology independently of research cycles.
 It visits the entire outstanding backlog in deterministic alphabetical order,
 tries the existing rate-limited MeSH service and retains explicit source definitions.
-Dedicated model completion currently requires owner approval of a new glossary
-prompt. It is **disabled**: remaining entries report `approval_required`, and no
-model is called. The proposal is in
-[`test-results/glossary-completion-approval-proposals.md`](test-results/glossary-completion-approval-proposals.md).
-Existing model-generated
+Missing definitions are generated with the owner-approved
+[`prompt_templates/G1.txt`](prompt_templates/G1.txt), independently of research
+scheduling. Its exact instruction text and hash, scientific context, actual model
+request and response are retained in each interaction. Model-generated
 definitions show the actual model identity, scope, timestamp and interaction
 provenance and remain **provisional**. They are terminology guidance, not research
 evidence. Ambiguous terms remain visible with a reason; coverage never hides them.
@@ -98,18 +97,25 @@ PYTHONPATH=src python3 -m mira glossary-enrich --llm-url http://127.0.0.1:8090 -
 ```
 
 The model configuration supports discovery from `MIRA_LLM_URL` (default
-localhost:8090); `--model` or `MIRA_LLM_MODEL` selects it explicitly. These options
-do not enable generation while prompt approval is pending. The tested generation
-transport uses temperature 0, JSON output and thinking disabled, with bounded
-batches and native model token-budget checks. Completed unchanged entries are not regenerated.
+localhost:8090); `--model` or `MIRA_LLM_MODEL` selects it explicitly. G1 uses
+temperature 0, JSON output and thinking disabled, with bounded batches and native
+model token-budget checks. Completed unchanged entries are not regenerated.
+`--term-id g11 --term-id g2` selects existing entries for a small validation run;
+`--max-calls 10` bounds generation calls without limiting the normal backlog to
+one batch. Successful maintenance refreshes both standard views automatically.
 New research context reopens inspection; `--upgrade-provisional` explicitly seeks
 authority supplementation without replacing accepted definitions. Failed entries
 need `--retry-failed` after their cooldown. Received but unpublished responses
 resume without another generation. Unknown submissions require transcript
 inspection and explicit acknowledgement through the existing recovery tools;
-the command never acknowledges them automatically. Journal recovery must finish
+the command never acknowledges them automatically. A safely received component
+rejected by a corrected validator can be reconsidered with
+`--term-id g14 --revalidate-received --max-calls 0`, preserving the original
+request/response and outcome receipt. Explicit scientific review can exclude an
+incorrect definition without erasing its text or generation provenance; excluded
+definitions are omitted from preferred meanings and coverage. Journal recovery must finish
 before maintenance. `--no-model` and `--no-authority` disable individual services.
-Run `glossary-view` after maintenance to refresh the displayed revision.
+`glossary-view` can also regenerate both views explicitly at any time.
 The browser decision viewer links to the same export through **Glossary**. It
 reports a stale export instead of silently displaying an older glossary revision.
 

@@ -21,7 +21,7 @@ from .clients import NoRedirect
 from .format import digest, dumps, loads, require
 
 BASE = 'https://id.nlm.nih.gov/mesh/'
-URI = re.compile(r'https?://id\.nlm\.nih\.gov/mesh/([MTD][0-9]+)\Z')
+URI = re.compile(r'https?://id\.nlm\.nih\.gov/mesh/([MTDC][0-9]+)\Z')
 STATUSES = {'matched', 'not_found', 'ambiguous', 'unavailable', 'error', 'not_attempted'}
 FAILURE_COOLDOWN = 900
 RESULT_TTL = 86400
@@ -57,9 +57,10 @@ def text(value, limit=16000):
 
 
 def validate_concept(value):
-    require(isinstance(value, dict) and set(value) == {'provider', 'concept_id', 'url',
+    fields = {'provider', 'concept_id', 'url',
         'preferred_name', 'aliases', 'matched_name', 'matched_term_ids', 'descriptor_ids',
-        'match_type', 'retrieved_at', 'descriptions'}, 'invalid terminology concept')
+        'match_type', 'retrieved_at', 'descriptions'}
+    require(isinstance(value, dict) and fields <= set(value) <= fields | {'supplemental_ids'}, 'invalid terminology concept')
     require(value['provider'] == 'mesh' and re.fullmatch(r'M[0-9]+', value['concept_id']),
             'unsupported terminology authority or concept ID')
     require(value['url'] == BASE + value['concept_id'], 'invalid terminology citation URL')
@@ -69,9 +70,10 @@ def validate_concept(value):
     require(normalize(value['matched_name']) in {normalize(n) for n in
         [value['preferred_name'], *value['aliases']]}, 'matched name absent from concept synonyms')
     require(value['match_type'] in {'exact', 'entry_term'}, 'invalid terminology match type')
-    for field, prefix in (('matched_term_ids', 'T'), ('descriptor_ids', 'D')):
-        require(isinstance(value[field], list) and len(value[field]) <= 128 and
-            all(isinstance(i, str) and re.fullmatch(prefix + '[0-9]+', i) for i in value[field]),
+    for field, prefix in (('matched_term_ids', 'T'), ('descriptor_ids', 'D'), ('supplemental_ids', 'C')):
+        links = value.get(field, [])
+        require(isinstance(links, list) and len(links) <= 128 and
+            all(isinstance(i, str) and re.fullmatch(prefix + '[0-9]+', i) for i in links),
             'invalid terminology identity links')
     require(value['matched_term_ids'], 'missing verified term identity')
     require(isinstance(value['retrieved_at'], str) and
@@ -148,7 +150,7 @@ OPTIONAL { ?descriptor meshv:preferredConcept ?concept }
             item = row.get(key)
             require(isinstance(item, dict) and item.get('type') == 'uri', 'invalid MeSH identity binding')
             match = URI.fullmatch(item.get('value', ''))
-            require(match and match[1].startswith(prefix), 'invalid MeSH concept link')
+            require(match and match[1][0] in prefix, 'invalid MeSH concept link')
             return match[1]
         for row in bindings:
             require(isinstance(row, dict), 'invalid MeSH RDF row')
@@ -166,8 +168,12 @@ OPTIONAL { ?descriptor meshv:preferredConcept ?concept }
             if name not in c['aliases']: c['aliases'].append(name)
             if matched not in c['matched_term_ids']: c['matched_term_ids'].append(matched)
             if 'descriptor' in row:
-                d = identifier(row, 'descriptor', 'D')
-                if d not in c['descriptor_ids']: c['descriptor_ids'].append(d)
+                # preferredConcept also links Supplementary Concept Records
+                # (C IDs). These are not Descriptor Records (D IDs); keep the
+                # verified record kinds separate without changing M identity.
+                d = identifier(row, 'descriptor', 'DC')
+                links = c.setdefault('supplemental_ids', []) if d.startswith('C') else c['descriptor_ids']
+                if d not in links: links.append(d)
             if 'scope' in row:
                 description = {'type': 'scope_note', 'text': literal(row, 'scope'), 'scope': 'MeSH concept',
                     'qualification': 'NLM MeSH scope note; terminology information, not independent scientific evidence.'}
@@ -178,6 +184,7 @@ OPTIONAL { ?descriptor meshv:preferredConcept ?concept }
         c = next(iter(concepts.values()))
         c['aliases'].sort(key=lambda n: (normalize(n), n))
         c['matched_term_ids'].sort(); c['descriptor_ids'].sort()
+        if 'supplemental_ids' in c: c['supplemental_ids'].sort()
         c['descriptions'].sort(key=lambda d: (d['type'], d['text']))
         validate_concept(c)
         if re.fullmatch('[A-Z][A-Z0-9-]{1,11}', term) and c['match_type'] != 'exact':

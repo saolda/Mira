@@ -64,6 +64,9 @@ def register(sub):
     glossary_enrich = sub.add_parser('glossary-enrich', help='complete or inspect the durable glossary definition backlog')
     glossary_enrich.add_argument('--limit', type=int, help='maximum outstanding terms to process; omit for the entire backlog')
     glossary_enrich.add_argument('--batch-size', type=int, default=4, help='maximum terms per model request (1..12)')
+    glossary_enrich.add_argument('--term-id', action='append', default=[], help='restrict maintenance to an existing term ID; repeat for a validation batch')
+    glossary_enrich.add_argument('--max-calls', type=int, default=60, help='maximum generation calls in this invocation (0..60)')
+    glossary_enrich.add_argument('--revalidate-received', action='store_true', help='revalidate a safely received response for explicit --term-id selections without another generation')
     glossary_enrich.add_argument('--status', action='store_true', help='inspect coverage and unresolved reasons without model or authority calls')
     glossary_enrich.add_argument('--undefined', action='store_true', help='alias for --status, including every unresolved term')
     glossary_enrich.add_argument('--retry-failed', action='store_true', help='retry failed entries after their cooldown; never acknowledge uncertain submissions')
@@ -162,7 +165,8 @@ def _execute(args, catalog, managed, trace=None):
             authority=None if args.no_authority else Enricher(catalog.log_home / 'terminology-cache', max_terms=1,
                 action_timeout=args.terminology_timeout), log_dir=catalog.log_home)
         if args.status or args.undefined: return operation.inspect()
-        return operation.run(limit=args.limit, batch_size=args.batch_size, retry_failed=args.retry_failed,
+        return operation.run(limit=args.limit, term_ids=args.term_id, batch_size=args.batch_size, max_calls=args.max_calls, retry_failed=args.retry_failed,
+            revalidate_received=args.revalidate_received,
             upgrade_provisional=args.upgrade_provisional,
             progress=lambda report: print('Glossary: ' + str(report['defined']) + '/' + str(report['total']) +
                 ' defined; ' + str(report['processed']) + '/' + str(report['selected']) + ' processed', file=sys.stderr))

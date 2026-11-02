@@ -19,11 +19,12 @@ from .interactions import Interactions, now, read_records
 
 
 PROGRESS_FIELDS = {'status', 'updated_at', 'input_sha256', 'reason', 'retry_after', 'interaction_id'}
-STATUSES = {'complete', 'clarification', 'failed', 'pending', 'uncertain', 'approval_required'}
+STATUSES = {'complete', 'clarification', 'failed', 'pending', 'uncertain', 'approval_required', 'invalidated'}
 
 
-class PromptApprovalRequired(ValueError):
-    pass
+def g1_prompt(data):
+    from .prompts import PromptTemplates
+    return PromptTemplates().render('G1', {'entries': data})
 
 
 def validate_progress(rows):
@@ -61,6 +62,7 @@ def input_hash(record, state, by_id):
     # Detect new research context even beyond the bounded model projection.
     return digest(dumps({'term': record['term'], 'aliases': record['aliases'],
         'evidence': record['evidence'], 'relationships': record['relationships'],
+        'definition_reviews': record.get('definition_reviews', []),
         'questions': [state['nodes'][i]['question'] for i in record['node_ids']],
         'related_terms': [by_id[r['target']]['term'] for r in record['relationships']]}))
 
@@ -90,7 +92,7 @@ def coverage(records, state=None):
             'unresolved': unresolved}
 
 
-def validate_generated(value, record):
+def validate_generated(value, record, research_scope=None):
     require(isinstance(value, dict) and set(value) == {'term_id', 'status', 'definitions', 'reason'} and
             value['term_id'] == record['id'] and value['status'] in {'defined', 'ambiguous'},
             'invalid definition entry identity/status')
@@ -118,8 +120,12 @@ def validate_generated(value, record):
         seen.add(normalized)
         # Contextual plausibility is deliberately conservative, not verification.
         grounding = ' '.join([record['term'], *record['aliases'], *[e['passage'] for e in record['evidence']]])
+        if research_scope: grounding += ' ' + research_scope['question']
         require(bool(definitions.words(text + ' ' + row['scope']) & definitions.words(grounding)),
                 'Definition has no scientific vocabulary in common with the supplied context.')
+        require(not (re.search(r'\d+(?:\.\d+)?\s*%', text) and
+                     re.search(r'\b(?:more frequent|less frequent|patients|cohort)\b', text, re.I)),
+                'Cohort frequencies are empirical findings, not a terminology definition.')
         names = definitions.normalize(' '.join([record['term'], *record['aliases']]))
         if 'doubling' in names and ('volume' in names or 'diameter' in names):
             require(not re.search(r'(?:volume.{0,25}(?:equals|equal to|same as|equivalent to).{0,25}diameter|diameter.{0,25}(?:equals|equal to|same as|equivalent to).{0,25}volume)', text, re.I),
@@ -141,12 +147,10 @@ def model_identity(model):
 
 
 class Completion:
-    def __init__(self, store, *, model_factory=None, prompt_factory=None, authority=None, log_dir=None, clock=time.time):
+    def __init__(self, store, *, model_factory=None, prompt_factory=g1_prompt, authority=None, log_dir=None, clock=time.time):
         self.store, self.directory = store, glossary.Directory(store)
         self.model_factory, self.authority, self.log_dir, self.clock = model_factory, authority, log_dir, clock
-        # No dedicated definition prompt has been owner-approved. The normal
-        # CLI deliberately supplies no factory. Tests inject synthetic messages
-        # to exercise transport/recovery without enabling an unapproved prompt.
+        # All production instruction text comes from the approved G1 file.
         self.prompt_factory = prompt_factory
         self.trace = Interactions(store)
         self.model = self.identity = None
@@ -162,11 +166,28 @@ class Completion:
             return {'root': str(self.store.root), 'revision': glossary.metadata(state)['revision'],
                     **coverage(records, state)}
 
+    def reject_definitions(self, rejections, *, reviewer):
+        """Explicit scientific review; preserve original generated text/receipt."""
+        with self.trace.execution(self.log_dir, command='glossary-definition-review'), self.store.lock():
+            self.store.read(); state = self._state(); records = self.directory.all(state)
+            by_id = {r['id']: r for r in records}; changed = []
+            for identity, rejection in rejections.items():
+                require(identity in by_id, 'Unknown reviewed term')
+                record = by_id[identity]; sha = rejection['definition_sha256']
+                require(any(digest(dumps(d)) == sha for d in record['definitions']), 'Unknown reviewed definition')
+                if any(r['definition_sha256'] == sha for r in record.get('definition_reviews', [])): continue
+                record.setdefault('definition_reviews', []).append({'definition_sha256': sha,
+                    'reason': rejection['reason'], 'reviewer': reviewer, 'reviewed_at': now()})
+                self._progress(record, state, by_id, 'invalidated', rejection['reason'])
+                changed.append(record)
+            self._save(changed, {'event_id': uuid.uuid4().hex, 'action_committed': 'glossary-definition-review'})
+            return coverage(records, state)
+
     def _save(self, records, event, *, fault=None):
         token, docs, eqs, ledger = self.store.read(); state = self._state()
         files = {}
         for record in records:
-            record['status'] = definitions.status(record['definitions'])
+            record['status'] = definitions.status(record['definitions'], record.get('definition_reviews', []))
             glossary.validate_record(record)
             path = 'glossary/' + record['id'] + '.json'; raw = dumps(record)
             if self.store.path(path).read_text(encoding='utf-8') != raw: files[path] = raw
@@ -239,11 +260,42 @@ class Completion:
 
     def _request(self, batch, state, by_id):
         if self.prompt_factory is None:
-            raise PromptApprovalRequired('Owner-approved glossary-definition prompt required; provisional model generation is disabled.')
+            raise ValueError('Glossary model generation is explicitly disabled.')
         model = self._get_model()
         data = [context(r, state, by_id) for r in batch]
+        # Original occurrence excerpts can contain only cohort statistics. Add a
+        # bounded, verbatim window from the retained source and its title so a
+        # definition is grounded in the document's actual scientific subject.
+        for entry, record in zip(data, batch):
+            source_context = []
+            for evidence in record['evidence'][:3]:
+                ref = evidence['evidence_ref']
+                if not re.fullmatch(r'research/results/[A-Za-z0-9_-]+\.json', ref): continue
+                path = self.store.path(ref)
+                if not path.is_file(): continue
+                retained = loads(path.read_text(encoding='utf-8'))
+                if retained.get('payload_ref'):
+                    # Payloads carry source text; canonical result rows are only
+                    # descriptors. Use the existing hash/metadata-validated path.
+                    payload = self.store.path(retained['payload_ref'])
+                    if payload.exists():
+                        from .sources import hydrate
+                        retained = hydrate(self.store, retained)
+                for source in retained.get('results', []):
+                    if source.get('id') != evidence['source_id']: continue
+                    content = source.get('content', '')
+                    if not isinstance(content, str): continue
+                    at = content.casefold().find(record['term'].casefold())
+                    start = max(0, at-300) if at >= 0 else 0
+                    source_context.append({'source_id': source['id'], 'reference': ref,
+                        'title': source.get('title', '')[:300], 'verbatim_excerpt': content[start:start+1800]})
+            if source_context: entry['retained_source_context'] = source_context
         messages, template = self.prompt_factory(data)
-        request = self.trace.clean(dumps({'model': model.model, **model.settings, 'messages': messages}))
+        unredacted = dumps({'model': model.model, **model.settings, 'messages': messages})
+        request = self.trace.clean(unredacted)
+        template = deepcopy(template)
+        template.update(serialized_request_sha256=digest(request), redaction_applied=request != unredacted,
+                        filled_messages=loads(request)['messages'])
         if hasattr(model, 'count_tokens'):
             usage = model.count_tokens(request)
         else:
@@ -253,7 +305,7 @@ class Completion:
                 'Glossary definition batch exceeds the model context window.')
         return request, data, usage, template
 
-    def _finish(self, batch, state, by_id, interaction, request_record, response, stats, fault=None):
+    def _finish(self, batch, state, by_id, interaction, request_record, response, stats, fault=None, *, write_outcome=True):
         event_id = uuid.uuid4().hex
         generated = {}; errors = []; values = {}
         try:
@@ -261,7 +313,8 @@ class Completion:
             require(info['model'] == request_record['request']['model'], 'Response model identity changed.')
             require(isinstance(result, dict) and set(result) == {'entries'} and isinstance(result['entries'], list), 'Invalid glossary completion envelope.')
             ids = [v.get('term_id') if isinstance(v, dict) else None for v in result['entries']]
-            require(len(ids) == len(set(ids)) and set(ids) == {r['id'] for r in batch}, 'Missing, extra or duplicate definition identities.')
+            expected = {r['term_id'] for r in request_record['context']['entries']}
+            require(len(ids) == len(set(ids)) and set(ids) == expected, 'Missing, extra or duplicate definition identities.')
             values = {v['term_id']: v for v in result['entries']}
             stats['usage'].append(info.get('usage'))
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -270,7 +323,7 @@ class Completion:
         for record in batch:
             try:
                 require(record['id'] in values, errors[0]['reason'] if errors else 'Missing definition response.')
-                value = validate_generated(values[record['id']], record)
+                value = validate_generated(values[record['id']], record, scope(record, state))
                 if value['status'] == 'ambiguous':
                     self._progress(record, state, by_id, 'clarification', value['reason'], interaction)
                     continue
@@ -302,12 +355,16 @@ class Completion:
                  'contexts': contexts, 'definitions': generated, 'errors': errors,
                  'usage': stats['usage'][-1] if values and stats['usage'] else None}
         self._save(batch, event, fault=fault)
-        self.trace.write(interaction, 'outcome', {'timestamp': now(), 'status': 'committed',
-                         'action_committed': 'glossary-enrich', 'event_ref': 'events/' + event_id + '.json'})
+        if write_outcome:
+            self.trace.write(interaction, 'outcome', {'timestamp': now(), 'status': 'committed',
+                             'action_committed': 'glossary-enrich', 'event_ref': 'events/' + event_id + '.json'})
 
-    def run(self, *, limit=None, batch_size=4, retry_failed=False, upgrade_provisional=False, progress=None, fault=None):
+    def run(self, *, limit=None, term_ids=(), batch_size=4, max_calls=60, retry_failed=False, revalidate_received=False, upgrade_provisional=False, progress=None, fault=None):
         require(limit is None or type(limit) is int and limit >= 0, 'Invalid glossary limit.')
         require(type(batch_size) is int and 1 <= batch_size <= 12, 'Glossary batch size must be 1..12.')
+        require(type(max_calls) is int and 0 <= max_calls <= 60, 'Glossary generation call limit must be 0..60.')
+        require(isinstance(term_ids, (list, tuple)) and all(isinstance(i, str) and glossary.TERM_ID.fullmatch(i)
+                for i in term_ids), 'Invalid glossary term selection.')
         start = time.monotonic()
         stats = dict(processed=0, model_calls=0, resumed_responses=0, authoritative_lookups=0,
                      authoritative_api_calls=0, authoritative_definitions=0, research_definitions=0,
@@ -315,6 +372,7 @@ class Completion:
         with self.trace.execution(self.log_dir, command='glossary-enrich'), self.store.lock():
             self.store.read(); state = self._state(); records = self.directory.all(state)
             by_id = {r['id']: r for r in records}
+            require(set(term_ids) <= set(by_id), 'Unknown glossary term ID.')
             stats['before'] = coverage(records, state)
             files = self.store._files()
             events = {loads(t).get('interaction_id'): loads(t) for p, t in files.items() if p.startswith('events/')}
@@ -325,7 +383,7 @@ class Completion:
                     self.trace.write(item['id'], 'outcome', {'timestamp': now(), 'status': 'committed',
                         'action_committed': events[item['id']].get('action_committed')})
                     continue
-                require(item.get('request', {}).get('action') == 'glossary-enrich',
+                require(item.get('request', {}).get('action') == 'G1',
                         'Unresolved research submission; inspect transcript before glossary maintenance.')
                 pending = [r for r in records if r.get('enrichment') and
                            r['enrichment'][-1]['interaction_id'] == item['id'] and
@@ -334,11 +392,24 @@ class Completion:
                         'Uncertain glossary submission; inspect transcript and explicitly acknowledge before retry.')
                 self._finish(pending, state, by_id, item['id'], item['request'], item['response'], stats, fault)
                 stats['resumed_responses'] += 1
+            if revalidate_received:
+                require(term_ids, 'Explicit term IDs are required to revalidate received definitions.')
+                for identity in term_ids:
+                    record = by_id[identity]
+                    if definitions.preferred(record, scope(record, state)): continue
+                    last = record.get('enrichment', [{}])[-1]
+                    item = next((i for i in interactions if i['id'] == last.get('interaction_id')), None)
+                    require(item and item.get('response', {}).get('status') == 'received' and
+                            item.get('outcome', {}).get('status') == 'committed', 'No safely received committed response to revalidate.')
+                    self._finish([record], state, by_id, item['id'], item['request'], item['response'], stats,
+                                 fault, write_outcome=False)
+                    stats['resumed_responses'] += 1
             from .retrieval import unresolved
             from types import SimpleNamespace
             require(not unresolved(SimpleNamespace(store=self.store), files), 'Uncertain provider submission; glossary maintenance blocked.')
             selected = []
             for record in records:
+                if term_ids and record['id'] not in term_ids: continue
                 last = record.get('enrichment', [{}])[-1]
                 unchanged = last.get('input_sha256') == input_hash(record, state, by_id)
                 rows = definitions.preferred(record, scope(record, state))
@@ -367,6 +438,9 @@ class Completion:
                     stats['processed'] += 1
                 else: waiting.append(record)
             while waiting:
+                if stats['model_calls'] >= max_calls:
+                    stats['stop_reason'] = 'generation_call_budget'
+                    break
                 batch = waiting[:batch_size]
                 try:
                     while True:
@@ -376,14 +450,13 @@ class Completion:
                             batch = batch[:max(1, len(batch)//2)]
                 except Exception as exc:
                     for record in batch:
-                        self._progress(record, state, by_id, 'approval_required' if isinstance(exc, PromptApprovalRequired) else 'failed',
-                                       terminology.failure_reason(exc))
+                        self._progress(record, state, by_id, 'failed', terminology.failure_reason(exc))
                         stats['errors'].append({'id': record['id'], 'phase': 'model_setup', 'reason': str(exc)})
                     self._save(batch, {'event_id': uuid.uuid4().hex, 'action_committed': 'glossary-enrich-unavailable'})
                     waiting = waiting[len(batch):]; stats['processed'] += len(batch)
                     continue
                 scopes = {r['id']: {k: v for k, v in scope(r, state).items() if k in {'question', 'node_id'}} for r in batch}
-                interaction = self.trace.start({'action': 'glossary-enrich'}, request,
+                interaction = self.trace.start({'action': 'G1'}, request,
                     {'entries': data, 'scopes': scopes, 'model_identity': self.identity, 'token_usage': usage},
                     template=template)
                 for record in batch: self._progress(record, state, by_id, 'pending', 'Model request durably prepared; submission may be in flight.', interaction)
@@ -409,5 +482,6 @@ class Completion:
             state = self._state()
             stats.update(after=coverage(records, state), elapsed_seconds=time.monotonic()-start,
                          revision=glossary.metadata(state)['revision'], root=str(self.store.root))
+            stats['exports'] = self.directory.export(state)
             self.trace.record('glossary_enrichment_summary', stats)
         return stats
