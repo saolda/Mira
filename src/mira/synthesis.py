@@ -9,7 +9,7 @@ import re
 
 from . import decisions, questions
 from .budget import measure
-from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
+from .format import Memory, Unit, Relationship, ValidationError, base36, digest, dumps, loads, render, require
 from .synthesis_discovery import Discovery, diversify, project, fingerprint, normal, tokens, representation
 
 
@@ -153,6 +153,13 @@ def references(ids, lookup):
     require(isinstance(ids,list) and len(ids)>=2 and all(isinstance(i,str) and i in lookup for i in ids)
         and len(set(ids))==len(ids),'invalid/unsupplied synthesis unit references')
     require(len({lookup[i]['memory_id'] for i in ids})>=2,'synthesis requires two distinct input memories')
+    # Questions and terminology are context, not a second scientific premise.
+    # Equations and qualified claims/hypotheses remain legitimate premises;
+    # this is a contribution check, never a claim of empirical independence.
+    substantive=[lookup[i] for i in ids if lookup[i]['structural_type'] in {'finding','equation','image'}
+        and lookup[i]['type'] not in {'question','definition','glossary'}]
+    require(len({r['memory_id'] for r in substantive})>=2,
+        'synthesis requires substantive premises from two distinct input memories; questions alone and contextual definitions cannot establish evidence')
 
 
 def objective_id(idea, selected):
@@ -257,7 +264,6 @@ def validate_s3(value, selected, existing):
         for k in ['label','proposition','explanation','qualification','novelty']:bounded_text(finding[k],3000)
         require(finding['epistemic_type'] in {'inference','hypothesis'},'synthesis conclusions must be labelled inference or hypothesis')
         references(finding['source_findings'],lookup)
-        require(any(lookup[i]['structural_type']=='finding' for i in finding['source_findings']), 'questions alone cannot establish synthesis evidence')
         checks=finding['evidence_checks'];require(isinstance(checks,list) and len(checks)==len(finding['source_findings']),'one attributed evidence check per contributing unit required')
         seen=set()
         for check in checks:
@@ -315,6 +321,14 @@ def apply(state, memories, ledger, selected, findings, value, objective):
             'Proposition':finding['proposition'],'Explanation':finding['explanation'],'Qualification':finding['qualification'],
             'Epistemic type':finding['epistemic_type'],'Provenance':'S3 objective '+objective['id']+'; '+finding['novelty']}))
         for target in finding['source_findings']:output.relationships.append(Relationship(anchor,'SYNTHESIZES',target,'unverified'))
+    try:render(output)
+    except ValidationError:
+        # Compact prose can resemble a field label ("The quantities differ:").
+        # Retain scientific text byte-for-byte using the existing expanded
+        # format, whose renderer still requires a validated lossless round trip.
+        output.metadata.pop('markdown_format')
+        output.metadata['storage_format']='expanded_lossless_fallback'
+        render(output)
     memories.append(output);state['nodes'][identity]['memory_ids'].append(output.id)
     return output
 
@@ -325,6 +339,9 @@ def execute(state, memories, equations, ledger, llm, event, model):
     event.update(action='S3',objective_id=objective['id'],group_id=group['id'],node_id=group['node_id'],question=state['nodes'][group['node_id']]['question'])
     require(all(v['id'] in lookup and lookup[v['id']]['version']==v['version'] for v in objective['unit_versions']), 'S3 evidence versions changed or ineligible')
     selected=[lookup[v['id']] for v in objective['unit_versions']]
+    # Older pending objectives may have passed the historical reference-only
+    # rule. Preserve their receipts, but reject unsafe new dispatch durably.
+    references(objective['proposal']['unit_ids'],lookup)
     existing=novelty_context(selected,all_records)
     supplied=context(state,group,selected,memories,objective=objective['proposal'],existing=existing)
     cost=usage(state,llm,'S3',supplied);event['context_requirements']=cost

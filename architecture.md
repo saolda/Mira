@@ -902,9 +902,17 @@ corroboration.
 A synthesis ordinarily integrates substantive knowledge from at least two
 distinct parent memories. Multiple units from one source may be important
 supporting context but do not alone establish cross-memory synthesis.
+Questions and terminology descriptions may guide interpretation but cannot
+satisfy the substantive contribution required from either parent memory.
+Qualified claims, hypotheses, equations and mathematical premises can support
+conditional reasoning without becoming independent empirical observations.
+S2 objectives and each S3 finding meet this substantive-parent requirement.
 All accepted findings identify their **actual contributing unit IDs**, not
 every S1/S2 candidate. Each finding contains a proposition, explanation,
 qualification, evidence status and traceable provenance.
+New synthesis memories use the compact layout when it is lossless. The existing
+expanded layout preserves literal scientific prose that compact field syntax
+cannot represent; formatting never repairs or changes scientific content.
 
 Python validates output structure, exact references, supported unit types,
 lineage, journal transitions and mechanically checkable constraints.
