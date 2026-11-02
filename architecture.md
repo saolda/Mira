@@ -1,21 +1,11 @@
 # Mira research architecture
 
-Implemented architecture, 27 October 2026. This document describes the controller
-in `src/mira/research.py`, tree contracts in `research_tree.py`, capacity/branching
-in `branching.py`, and the synthesis gardener.
-
-## Implementation status and scope (31 October 2026)
-
-The R1 discovery/selection contract, single-active-corpus storage,
-compact synthesis Markdown and R4 scientific-assessment contract have been
-implemented (R1/storage: `4c18972`, `89cc7e9`; R4: `fe684fd`).
-Each R1 plan serves the full provider round; R2 executes **one logical
-provider search per action**, and R3 extracts one source per action.
-The R4 decision set is `answered|kill|unresolved`, with Python-owned
-`search_blocked` exhaustion and a separate capacity-exhaustion path.
-Historical file formats and legacy corpora remain compatible for reading.
-**Research-stagnation detection/termination is a future proposal, not
-implemented by these changes.**
+This document specifies Mira's desired scientific research and knowledge-synthesis
+architecture, independently of implementation milestones. Mira investigates
+scientific questions through a research tree and develops understanding through
+a cross-branch network of source-grounded knowledge units. Scientific evidence,
+model-derived interpretations and unverified hypotheses retain distinct provenance
+and status.
 
 ## Purpose and canonical knowledge
 
@@ -158,16 +148,16 @@ Both source and parsed fields are immutable and validated together on reads,
 publication and journal recovery. Restart does not reread the external input.
 Experiments without a question document retain the positional/legacy interface.
 
-R0, R1, R3–R5 and S1/S2 receive a `research_brief` projection, alongside their
-existing exact question/root/ancestor slots. All objectives are retained;
-background paragraphs are ranked by selected-question word overlap, then bounded
-to 2048 UTF-8 bytes for R0/R1, 1536 for R3, 3072 for S1 and 4096 for R4/R5/S2.
-The projection identifies the source hash and explicitly flags excerpted context.
-The raw document is never repeated in prompts. R2 has no model prompt and uses
-R1's query. Existing exact rendered-request token validation includes the brief
-for research capacity, selection and synthesis; essential questions/objectives
-are never silently shortened to fit. A saved legacy S2 context defaults to no
-brief. `research-state` exposes the parsed fields separately.
+R0, R1, R3–R5, S2 and S3 receive an appropriate `research_brief` projection
+alongside the task-specific question, objective and evidence. All objectives
+are retained; background paragraphs are relevance-ranked and bounded (initially
+2048 UTF-8 bytes for R0/R1, 1536 for R3, and 4096 for R4/R5/S2/S3).
+S1 is deterministic and does not have an LLM prompt. The projection identifies
+the source hash and explicitly flags excerpted context. The raw document is not
+repeated in prompts. R2 has no model prompt and uses R1's query. Exact rendered-
+request token validation includes the brief and output reserve; essential
+questions, objectives and scientific evidence are never silently shortened.
+`research-state` exposes the parsed question-document fields separately.
 
 ## Persistent tree and action states
 
@@ -180,12 +170,12 @@ New experiments use `mira_research: 2` in `research/state.json`. Each node store
 - An optional immutable `split_attempt` receipt, including proposed and accepted
   questions, discarded duplicates and whether the committed attempt was empty.
 - Auditable `research_capacity`, structured ripeness counts and score.
-- Separate synthesis frontier count, living-descendant count and
-  `synthesis_complete` flag.
-- Experiment-wide synthesis-attempt register, pending S2 selection and
-  terminal catalogue-evaluation fingerprint.
+- Synthesizable knowledge-unit counts, living-descendant count and the
+  derived `synthesis_complete` flag.
+- An experiment-wide, unit-version-based synthesis-attempt register, deterministic
+  candidate frontier, pending S2 evaluations and pending S3 objectives.
 
-R1–R5 and S1–S2 are **actions**, selected for one controller cycle. They are not
+R1–R5 and S1–S3 are **actions**, selected for one controller cycle. They are not
 persistent node statuses. Research statuses are:
 
 | Status | Meaning | Further action |
@@ -374,12 +364,16 @@ that current retention already behaves this way.
 
 ### R1: discovery and search-term selection
 
-R1 performs exactly **one LLM call per research round** with two tasks:
-**discover** 0–6 useful genuinely new scientific concepts (zero is valid),
-and **select** up to `term_limit` ordered concepts for the shared search plan.
-Selection may reuse established or previously discovered concepts and need
-not use any newly discovered concept. It must not create subquestions; R5
-does that. Avoid inventing terms or varying synonyms solely to appear novel.
+R1 performs exactly **one LLM call per research round**, with three tasks
+in priority order: **discover** 0–6 genuinely new scientific concepts,
+**select** up to `term_limit` concepts for the shared search plan, and
+optionally **define** up to three relevant existing glossary terms that lack
+applicable independently sourced definitions. Definition generation is subordinate
+to search planning and does not require an additional LLM call. Zero discoveries,
+zero selected concepts or zero definitions are each permitted when justified.
+Selection may reuse established concepts and need not use newly discovered ones.
+R1 does not create subquestions; R5 does that. Do not invent terminology merely
+to appear novel.
 
 Python supplies **only the inputs that inform these tasks**:
 
@@ -392,16 +386,17 @@ Python supplies **only the inputs that inform these tasks**:
 | `term_limit` | The **single integer maximum** across the profiles of providers in the current strategy; order up to this many concepts by search value. No individual-provider profile list is supplied. |
 | `control_terms` | Exclude supplied prohibited terms/phrases. |
 
-The LLM returns **exactly**:
-`{"new_concepts":[],"search_concepts":[],"reason":"Brief explanation."}`.
-`new_concepts` contains 0–6 concepts; `search_concepts` contains
-0–`term_limit`. An empty selection is valid if R1 cannot identify a
-worthwhile distinct search. `reason` is one short sentence.
-Each concept is one meaningful term/phrase of at most five words without
-Boolean operators, provider names, field tags or query syntax. Python
-validates/filters without changing the scientific selection. The accepted
-`search_concepts` are persisted as the round's `keywords` for existing
-R2 state compatibility.
+The structured response contains `new_concepts`, `search_concepts`,
+optional `provisional_definitions` and `reason`. Definition proposals identify
+an existing supplied glossary ID and include `definition`, `scope` and
+`ambiguity`; the list is bounded to three and may be empty. Legacy responses
+without the optional field remain interpretable. New concepts number 0–6;
+selected concepts number 0–`term_limit`. An empty selection is valid when
+no worthwhile distinct search exists. Each concept is one meaningful term
+or phrase of at most five words, without Boolean operators, provider names,
+field tags or query syntax. Python validates individual components; malformed
+or unsupported optional definitions do not invalidate an otherwise valid
+search plan. Accepted `search_concepts` become the round's `keywords`.
 
 Python retains every newly proposed concept in a **durable per-node
 candidate register**, separate from the source-supported glossary.
@@ -460,8 +455,7 @@ empty memory or research-memory ID.
 Each independently identifiable source produces at most one research memory per
 experiment. A pending batch is processed one source per R3 action; its processed
 source index and memory commit together, allowing restart without duplicate
-extraction. Empty sources are also marked processed. R3 remains extractive; S2
-integrates across memories.
+extraction. Empty sources are also marked processed. R3 remains extractive; S3 integrates across knowledge units.
 
 Invalid received R3 output (decoding, schema or memory-format errors) is logged
 with the source ID and raw response. Python discards partial memory/equation/ID
@@ -488,12 +482,14 @@ structured synthesis projections retain the source and all substantive units.
 ### Research glossary
 
 Each experiment stores durable `glossary/g1.json`, `g2.json`, etc. IDs are decimal,
-monotonic and independent of memory IDs. Records retain the canonical spelling,
-aliases, multiple sourced definitions and qualifications, supporting passages,
-source IDs, immutable retrieval references, relevant node IDs and typed links to
-other terms. Status is `candidate`, `source_defined` or `multiple_definitions`;
-different definitions remain separate with their provenance rather than silently
-replacing one another. These are terminology records, not new knowledge-unit types.
+monotonic and independent of memory IDs. Records retain canonical spelling,
+aliases, source-supported and model-generated definitions and qualifications,
+supporting passages, source IDs, immutable retrieval references, node context
+and typed links to other terms. Status distinguishes `candidate`, `provisional`,
+`source_defined` and `multiple_definitions`; provisional availability must not
+be confused with independently sourced evidence. Definitions with different
+scope or provenance remain separate. Glossary entries are terminology records,
+not new scientific knowledge units.
 
 R3 may propose up to five terms per source in its existing call. Each proposal has
 exactly `term`, nullable `definition`, `aliases`, `relationships`, `source_id`,
@@ -515,6 +511,18 @@ Expanded names merge conservatively; shared abbreviations do not merge concepts,
 and bare acronym labels retain definition/source scope. Definition and relationship
 grounding is deliberately conservative textual validation, not semantic verification.
 
+Applicable definition precedence is: authoritative terminology description,
+source-extracted definition, then provisional LLM-generated definition. An
+authoritative match without an applicable descriptive definition does not count
+as a completed definition. All definitions and qualifications remain preserved
+when a preferred definition changes. Provisional definitions record the actual
+model identity, scope, ambiguity, generating interaction/event, template and
+request provenance, and `verification=provisional`; they are terminology guidance,
+not independent scientific evidence. Their presence does not suppress later
+MeSH enrichment. Previously accepted applicable provisional definitions are
+reused without routine same-scope regeneration. Contextual applicability uses
+conservative lexical signals and is not infallible scientific disambiguation.
+
 `glossary.sqlite3` is a disposable exact-name/alias, FTS5 and relationship directory.
 Normal retrieval and deduplication use indexed bounded lookup and deserialize only
 selected or touched records. An absent, stale or corrupt directory is rebuilt or
@@ -523,8 +531,10 @@ Rebuilds and explicit full integrity audits may scan all terms; ordinary R1 does
 not. The index is refreshed lazily after commitment, so a cache failure cannot
 partially publish terminology. `glossary-rebuild --experiment NAME` explicitly
 rebuilds it. `glossary-export --experiment NAME` atomically regenerates the derived,
-case-insensitive alphabetical `research/glossary.md`, including evidence and links.
-R3 never rewrites that whole export; it may be stale until explicitly regenerated.
+case-insensitive alphabetical `research/glossary.md` and searchable
+`research/glossary.html`, including definitions, provenance, evidence and links.
+R3 and R1 do not rewrite these whole exports; explicit regeneration produces
+consistent derived views. Model-defined entries are visually marked provisional.
 
 ### R4: assess research progress
 
@@ -548,7 +558,7 @@ R4 receives **no** provider configuration, search concepts, query histories
 or search scheduling state. Python retains these separately.
 
 The evidence projection deterministically includes eligible direct
-research **including consumed originals**, applicable synthesis findings
+research, applicable synthesis findings
 (including relevant descendant/related lineage), exact supporting
 finding anchors, source citations, relevant questions, equations,
 qualifications and relationships. Killed-branch evidence is excluded.
@@ -608,10 +618,9 @@ budget. UTF-8 byte estimates remain a labelled fallback for fixture transports.
 Before action selection and after successful actions, Python prepares the actual
 R5 template using the selected model/settings, distinct question context, every
 **direct research** memory in creation order and all referenced equation JSON.
-It estimates the full request plus reserve. Direct research remains included even
-when consumed by synthesis. Descendant research and every synthesis memory are
-excluded. Consumption marks and revision changes are normalized in this view so
-synthesis does not change capacity. No direct research is truncated or replaced
+It estimates the full request plus reserve. Direct research remains included regardless of subsequent synthesis participation.
+Descendant research and every synthesis memory are excluded. Synthesis
+participation metadata does not change research capacity. No direct research is truncated or replaced
 with summaries to make R5 fit.
 
 At or above the configured threshold, a living node becomes exhausted and leaves
@@ -638,7 +647,7 @@ bytes from today's templates.
 ## Ripeness queue
 
 Only nodes with `status=exhausted` enter `ripeness_order`. Two
-exhaustion causes are implemented:
+exhaustion causes are:
 
 1. **`research_capacity_reached`:** a living node crosses the
    deterministic R5 context-capacity threshold with direct research,
@@ -658,7 +667,7 @@ exhaustion cause and reviewed transition policy. The score starts as:
 F counts distinct structured `Kind: finding` propositions; H counts distinct
 hypothesis propositions; Q counts distinct open/partially answered question units;
 D is root-relative depth (root zero). Counts use direct research units produced by
-R3, including consumed research, not Markdown text-pattern guesses or syntheses.
+R3, not Markdown text-pattern guesses or syntheses.
 Distinctness uses case-folded, whitespace-normalized text. Claims/observations do
 not silently count as established findings. Q uses the stored question state;
 Mira does not guess that a question is resolved from free prose.
@@ -680,138 +689,265 @@ Rejected/transport-failed attempts commit no split receipt and can be retried.
 
 ## Research priorities and controller scheduling
 
-Each cycle performs one action and **at most one model call**. S1 and S2
-occupy separate cycles; a validated S1 selection persists for S2. There is no
-uninterrupted global R1–R4 sequence: a different living node can run between any
-two actions. After each successful direct research action, active priority loses
-one down to zero and other living nodes gain one up to `priority_max` (10).
-The active node keeps its turn until priority zero or ineligibility, when the
-highest-priority living node is chosen, breaking ties by oldest creation order.
-R5 and synthesis never age/reset another node's research progress.
+Each cycle performs exactly one controller action and at most one LLM call.
+S1 is deterministic and uses zero model calls. S2 and S3 each use at most one
+model call in separate cycles. Research, synthesis and branching actions may
+interleave; pending synthesis state survives intervening actions and restarts.
 
-Controller order is:
+After each successful direct research action, active research priority falls
+by one to a minimum of zero and other living nodes gain one to a maximum of
+`priority_max` (10). The active node retains its turn until priority zero
+or ineligibility; then the highest-priority living node is chosen, breaking
+ties by creation order. R5 and synthesis do not age or reset research nodes.
 
-1. Reassess capacity and refresh queues, including eligible deferred provider
-   searches and per-node `waiting_for_provider` times.
-2. If an S2 selection is pending, run S2. Otherwise, when synthesis is due
-   and a permitted candidate combination exists, run S1.
-3. Otherwise, if exhausted nodes exist and either no living nodes remain or
-   `research_cycles_since_branching >= branching_interval`, run R5 on the ripest.
-4. Otherwise run an eligible living node's next R1–R4 action. Nodes waiting
-   exclusively on provider cooldown do not block other ready living nodes.
-5. With no living or exhausted nodes, invoke S1 on unevaluated eligible
-   combinations, then finish when no pending S2 or permitted opportunity remains.
-   Living nodes awaiting deferred provider queries remain unfinished.
+Controller ordering is:
 
-When all otherwise eligible work is blocked solely by provider retry times,
-return `waiting_for_provider` and the earliest retry timestamp without
-advancing research-cycle counters.
+1. Reassess direct research, node-splitting eligibility, provider cooldowns,
+   pending model submissions, outstanding synthesis objectives and candidate
+   eligibility. An uncertain submitted LLM call requires recovery assessment;
+   it must not be silently repeated.
+2. Process eligible pending S3 objectives and pending S2 evaluations according
+   to the synthesis cadence and fair scheduling policy. The same unchanged
+   objective and evidence set is not submitted repeatedly.
+3. When synthesis is due and no earlier synthesis stage is pending, S1
+   deterministically selects one unevaluated eligible knowledge-unit group
+   and persists its selection for S2.
+4. When branching is due, run R5 on the highest-ripeness exhausted node.
+5. Otherwise, run the next eligible R1–R4 research action. Nodes awaiting
+   provider cooldown do not prevent other ready nodes from progressing.
+6. When direct research and R5 work are absent, continue eligible S1–S3
+   work, then finish only when no pending recoveries or eligible actions remain.
+   Living nodes waiting for a future provider retry remain unfinished.
 
-`branching_interval` defaults to five **direct research actions** between attempts
-while living nodes exist. Successful R5 resets this counter. Consequently R5 can
-run alongside living work, but repeated branching cannot starve available direct
-research. If only exhausted nodes remain, R5 creates fresh work without waiting
-for nonexistent research actions. Per-attempt child limits constrain the number
-of unresearched children added; there is intentionally no speculative global
-balancing algorithm or guarantee of bounded total tree size.
+When all otherwise eligible work is waiting only on provider retry times,
+return `waiting_for_provider` with the earliest retry time, without consuming
+research-cycle counters.
 
-The synthesis cadence defaults to five research/branching work actions; R5 counts
-as a work slot so branching cannot starve synthesis. S1 and S2 each consume one
-model call and run in separate cycles. Branching and synthesis never share a
-cycle with research. A terminal `no_candidate` must not trigger repeated S1
-calls against an unchanged catalogue. A terminal event is recorded only when
-neither living research, pending R5, pending S2 nor permitted synthesis work
-remains; zero living nodes alone is not completion.
+`branching_interval` defaults to five direct research actions between R5
+attempts while living nodes exist. An R5 action resets its branching cadence.
+When only exhausted nodes remain, R5 need not await nonexistent research work.
+The synthesis cadence defaults to five research/branching actions; an R5 action
+counts as a work slot. Synthesis does not starve research or R5.
 
-## Synthesis actions: S1 and S2
+A completed S2 `no_candidate` or S3 `no_synthesis` is a valid scientific
+outcome and must not trigger a loop on the same unchanged evidence.
+A changed knowledge-unit version, new relevant evidence or explicitly
+authorized reevaluation can reopen an opportunity. The controller records a
+terminal event only when direct research, splitting, pending/uncertain
+synthesis work and eligible candidate groups have all been resolved.
 
-### S1: model-assisted synthesis selection
+## Synthesis actions: S1, S2 and S3
 
-S1 is eligible whenever at least two frontier memories form a permitted,
-previously unattempted combination. Python schedules S1 after every five
-completed research or branching actions (configurable through
-`synthesis_interval`), or immediately when no research or branching work
-remains. A pending S2 action always takes precedence.
+Mira maintains a research question tree for investigations and a cross-branch
+knowledge-unit network for scientific synthesis. Candidate discovery is global
+across eligible scientific units, not confined to a selected research node.
+The same unit may support several scientifically distinct synthesis objectives.
+The word **ripeness** refers only to R5 node splitting.
 
-Python supplies a catalogue of eligible research and synthesis memories:
-ID, content hash, owning question and ancestor context, summary, knowledge-unit
-types, provenance, lineage and estimated S2 token cost. Killed branches and
-ineligible synthesis lineage are excluded. S1 makes **one fresh LLM call**
-to propose at least two memories and a specific analytical objective, or
-return `no_candidate`. Selections may cross research branches.
+### Scientific units and source independence
 
-S1 estimates *synthesizability* with five 0–5 scores: shared-question
-relevance (R), complementarity (C), contradictions worth examining (X),
-potential new understanding (N), and evidence adequacy (E). The initial
-score is R+C+X+N+E. Addressing the same question increases R, but is neither
-required nor sufficient. Prefer focused, coherent groups over large,
-weakly related collections. Record the component scores and rationale.
+Research memories retain stable source identities and individually addressed
+units such as `r1#f1`, `r1#q1` and `r1#e1`. A paper may contain several
+different findings and may also contain repetitive statements: neither shared
+paper origin nor high semantic similarity proves equivalence or non-equivalence.
+R3 seeks distinct, nonredundant extractive units while preserving scientifically
+meaningful distinctions. The synthesis system preserves original source
+propositions, their qualifications, unit types and their evidence status.
 
-Python rejects unknown, ineligible, previously attempted or oversized
-selections. Budget measurement includes the full S2 request, chat overhead
-and output reserve. Complete memories are preferred; deterministic structured
-projections may omit bookkeeping but must preserve substantive units,
-qualifications, sources and relationships. An oversized selection is rejected
-or deferred, never silently reduced. Each S1 invocation reassesses current
-evidence; model decisions are never cached or reused. `no_candidate`
-creates no memory and consumes nothing.
+Separate source records are not necessarily independent empirical studies.
+Reviews and republished analyses may share underlying primary evidence.
+Synthesis findings are derived knowledge, not independent empirical sources;
+their lineage must remain traceable to original sources.
 
-### S2: analytical synthesis
+### S1: Deterministic candidate discovery
 
-S2 receives S1's objective and selected memories and performs cross-memory
-analysis in **one LLM call**. It returns `synthesis` or `no_synthesis`.
-A valid synthesis requires at least one substantive finding integrating
-knowledge units from **two distinct input memories**. Findings cite stable
-anchors, preserve uncertainty and provenance, and distinguish reported
-claims from independently demonstrated results.
+S1 is a Python operation with **zero LLM calls**. It identifies bounded,
+overlapping groups of scientifically related knowledge units, retrieving
+the relevant parent memories for provenance and context. Groups can cross
+research branches and include existing synthesis findings when their complete
+source ancestry is available and acyclic. Open questions and hypotheses
+may guide opportunity discovery but do not independently establish evidence.
 
-Python validates references and derives contributing memory IDs from the
-accepted findings. Only contributing memories are consumed; unused inputs
-remain on the frontier. A partial synthesis is valid. `no_synthesis` creates
-no memory and consumes nothing. Both dispositions complete the attempt.
-Invalid output commits no synthesis or consumption. On success, Python
-atomically commits the synthesis memory, consumption marks and attempt record;
-original memories remain stored and traceable.
+S1 combines:
+
+- Lexical and terminology similarity.
+- Semantic embedding similarity using an actual scientific-text embedding
+  model, never a synthetic test hash represented as semantic evidence.
+- Explicit knowledge-unit relationships and scientific metadata.
+- Source identities, evidence qualifications, experimental conditions and
+  scientific type.
+
+Similarity is a discovery signal, not a scientific truth or duplication score.
+Candidate discovery preserves relationships that are complementary or
+methodologically important even when they are not nearest neighbours.
+
+Unit embeddings are keyed by representation, model identity and scientific
+content version and stored in rebuildable caches. Retrieval uses bounded
+neighbour structures and may update incrementally. A full quadratic
+similarity matrix is not required as durable production state. Unavailable
+semantic services are reported as degraded operation rather than silently
+substituted. Candidate ranking and tie-breaking are deterministic.
+
+A candidate contains the versioned selected unit IDs, parent memory and
+source identities, scientific content and qualifications, similarity and
+relationship evidence, candidate-duplicate annotations, rationale, priority,
+and estimated downstream input cost. Groups generally contain units from
+approximately three to five parent memories when coherent; useful smaller
+groups are valid. Context capacity and scientific coherence take precedence
+over an arbitrary group size.
+
+S1 distinguishes exact duplicates, possible semantic duplicates,
+informational redundancy, complementary findings, apparent contradictions
+and potential corroboration. Equivalence considers numerical values, units,
+negation, comparators, timeframes, populations, methods, endpoints and
+source dependence. An embedding threshold alone cannot establish it.
+Uncertain equivalence is recorded for review, without deleting,
+collapsing or automatically excluding scientific evidence.
+
+S1 selects a group not already *evaluated* in the same unchanged unit-version
+form. A completed S2 evaluation suppresses replay of that exact unordered
+set, but does not blanket-exclude overlapping, expanded or changed-version
+groups. Candidate discovery without evaluation does not mark a set completed.
+
+### S2: Synthesis opportunity planning
+
+S2 uses one LLM call to examine the selected group and identify **specific
+analytical objectives**, not to publish a conclusion. It may propose several
+distinct synthesis opportunities or return `no_candidate`.
+
+Each proposal includes:
+
+- An explicit synthesis objective and exact selected unit IDs.
+- The scientific relationship motivating the integration.
+- The new understanding or hypothesis that might result.
+- Evidence adequacy, source dependence, methodological or population
+  differences, quantitative assumptions and scientific limitations.
+- An explanation of why the proposed work is more than paraphrasing
+  existing knowledge or restating an evidence gap.
+
+S2 considers complementary observations, corroboration, contradictions,
+methodological comparisons, mechanisms and potential quantitative
+deductions. It does not infer a scientific relationship from shared
+terminology alone. A meaningful synthesis need not directly answer the
+original root question. Python independently validates every reference,
+response field and eligible objective against the selected input, then
+durably records accepted objectives for S3.
+
+One completed evaluation covers all objectives proposed from its selected
+set. The same unchanged set is not repeatedly sent to S2 merely to seek
+different wording. New evidence or an explicitly authorised reconsideration
+may reopen it.
+
+### S3: Evidence-grounded synthesis execution
+
+S3 uses one LLM call for one accepted S2 objective. It attempts a substantive,
+new integration of the supplied scientific units and their evidence. A valid
+result is either `synthesis` with one or more defensible new knowledge units,
+or `no_synthesis` with a reason why no useful synthesis is supported.
+Insufficient evidence does not oblige Mira to create a memory.
+
+Scientific reasoning distinguishes original observations and claims,
+derived conclusions, uncertainties and hypotheses. It considers populations,
+endpoints, timeframes, statistical and measurement units, quantitative
+relationships, contradictory evidence, source independence and limitations.
+A synthesis must not invent empirical measurements, citations, mechanisms
+or unsupported causal claims. Hypotheses remain identified as hypotheses.
+The same underlying primary study is not double-counted as independent
+corroboration.
+
+A synthesis ordinarily integrates substantive knowledge from at least two
+distinct parent memories. Multiple units from one source may be important
+supporting context but do not alone establish cross-memory synthesis.
+All accepted findings identify their **actual contributing unit IDs**, not
+every S1/S2 candidate. Each finding contains a proposition, explanation,
+qualification, evidence status and traceable provenance.
+
+Python validates output structure, exact references, supported unit types,
+lineage, journal transitions and mechanically checkable constraints.
+Structural validation is not scientific proof; the LLM's scientific
+reasoning remains inspectable and unverified unless separately corroborated.
+Partial syntheses may be accepted when only some proposed relationships
+justify defensible findings.
+
+### Novelty and scientific equivalence
+
+Before publication, candidate synthesis propositions are checked against
+relevant existing knowledge and prior syntheses. Exact repeated qualified
+conclusions are not republished. Potential semantic repetition is reviewed
+using scientific meaning, conditions, evidence and provenance rather than a
+cosine cutoff alone. A new independently sourced observation may add
+corroboration without providing a new synthesis conclusion.
+
+Meaningful synthesis includes defensible new inference, integration,
+explanation, reconciliation, methodological insight or evidence-grounded
+hypothesis. Merely concatenating or paraphrasing source findings is not
+synthesis. Uncertain equivalence cannot silently suppress scientifically
+distinct conclusions.
+
+### Knowledge-unit participation and lineage
+
+Synthesis participation is **unit-level**, not whole-memory consumption.
+Original research memories and their knowledge units remain available
+after contributing to a synthesis; a unit may support several distinct
+objectives. Selection by S1 or S2 does not itself constitute participation.
+Only S3's accepted output establishes contributing source-unit relationships.
+
+Each new synthesis finding has exact `SYNTHESIZES` edges to its contributing
+knowledge units, with parent/source lineage retained in compact synthesis
+metadata. Derived synthesis memories do not count as independent empirical
+sources. Transitive ancestry must be acyclic; repeated use of one primary
+source through multiple synthesis paths is not independent support.
+
+Historical memory-level `synthesized_by` metadata remains readable for
+compatibility, but it is not a consumption/exclusion mechanism for
+knowledge-unit-based synthesis.
 
 ### Synthesis-attempt register
 
-Persist each S2 attempt with selected memory IDs and content hashes, S1
-objective/scores, interaction IDs, S2 disposition, contributing/unused IDs,
-reasons and resulting synthesis ID (if any).
+A durable register distinguishes discovered, selected, submitted,
+uncertain, evaluated, rejected, failed and completed work. The identity
+of a candidate group is a fingerprint of the sorted pair set
+`(knowledge-unit ID, scientific-content version)`, independent of order.
+Objectives have stable identities associated with their exact evidence
+and a normalized scientific objective.
 
-For a **completed** attempt with memory-version set A, reject subsequent
-selections B whenever **B ⊆ A**. Thus attempting `{r1,r2,r3}` excludes
-`{r1,r2}`, but not `{r1,r2,r4}`. The rule applies to successful, partial
-and `no_synthesis` outcomes; changed memory hashes count as new versions.
-Pending and failed attempts do not permanently exclude combinations.
-Record pending dispatches for crash recovery; completed attempt registration,
-synthesis creation and consumption marks commit atomically.
+Records retain selected units and parents, provenance, S1 priority and
+reason, S2 interactions and proposals, S3 objectives and results,
+actual contributing units, scientific rejections and output memory IDs.
+Completion of S2 suppresses repeat evaluation of that unchanged unit set;
+completion of an S3 objective suppresses repeat execution of that unchanged
+objective with unchanged evidence. Overlap, changed versions or additional
+evidence can justify distinct attempts.
 
-## Synthesis integration
+Submission uncertainty is distinct from `no_candidate` or
+`no_synthesis`. Unknown LLM outcomes require explicit recovery handling;
+model calls must not be silently replayed. Evaluated or rejected attempts
+are durably committed, and successful synthesis publication, provenance,
+attempt outcome and state changes are atomic.
 
-The frontier contains eligible, unconsumed research and synthesis memories
-within a node's subtree. A synthesis replaces only contributing inputs in
-the frontier; unused inputs remain. Consumed originals are retained. Killed
-branches and syntheses with killed-branch lineage are excluded.
+## Synthesis integration and completion
 
-A node is `synthesis_complete` when no living/exhausted work remains in its
-eligible subtree and no permitted synthesis combination remains. Multiple
-frontier memories may remain after all combinations are attempted or S1
-returns `no_candidate`. To prevent repeated terminal S1 calls on unchanged
-evidence, record the evaluated catalogue fingerprint; this is a scheduling
-guard, **not reuse of an S1 decision**. New or revised memories invalidate
-the guard and reopen eligibility.
+Knowledge-unit synthesis does not replace contributing memories in a
+consumptive frontier. A node's `synthesis_complete` indication reflects
+the absence of eligible pending and unevaluated synthesis opportunities
+relevant to its research subtree, not the exhaustion of its memories.
+Cross-branch opportunities remain eligible independently of one node's
+state. Answered or split parents may remain incomplete while descendants
+are active. Exhausted nodes retain their separate R5 opportunity.
 
-Answered or split parents may remain incomplete while descendants work.
-Exhausted nodes retain their R5 opportunity. A final synthesis memory
-remains available to ancestors.
+The controller terminates only when no living research, eligible R5 work,
+pending S2/S3 objectives, uncertain submissions or unevaluated synthesis
+opportunities remain. An unchanged corpus with no eligible opportunities
+must not produce repeated S1/S2 calls; new scientific evidence or revised
+unit versions may reopen discovery.
 
 ## Tree health and inspection
 
 `research-state` exposes status totals (living, exhausted awaiting R5, answered,
-killed, split), maximum depth, all-node and living-node distributions by depth,
-active node, both queues, all per-node priorities/progress, synthesis accounting,
-ripeness counts/scores/weights, capacity snapshots and configuration. It includes
+killed, split), maximum depth, distributions by depth, active node, research and
+R5 queues, priorities/progress, synthesis candidate priorities, pending S2/S3
+objectives, versioned attempt accounting, R5-only ripeness counts/scores/weights,
+capacity snapshots and configuration. It includes
 branching/research/synthesis cycle totals, cadence counters and the last 20
 successful actions with node IDs and timestamps. These provide evidence for later
 policy tuning without an elaborate balancing mechanism now.
@@ -882,22 +1018,19 @@ separate from current scientific memory and clearly label old runs.
 Human-readable per-memory or per-question browsing should not require
 navigating logs, journals or old experiment directories.
 
-The single-active-corpus layout, explicit new-experiment reset and
-project `log/` execution directory are implemented. New research
-does not create `memory/research/<name>/` subfolders. Legacy
-corpora remain readable through explicit compatibility paths, and
-the dedicated cleanup operation can remove verified idle legacy
-experiment directories; **implementation does not prove that every
-old directory on a particular machine has been removed**. The former
-retain/disposable catalogue is not the default new-experiment layout.
+The single-active-corpus layout and project-level `log/` execution directory
+are the default. New research does not create `memory/research/<name>/`
+subfolders. Legacy corpora are readable through explicit compatibility
+paths. Idle legacy experiment directories may be cleaned up only through
+the separately authorized verified cleanup operation.
 
 Every multi-file operation uses the existing small journal: validated changed-file
 after-images are fsynced, a prepared manifest is published before canonical edits,
 individual atomic replacements are fsynced, and a committed marker appears only
 after complete validation. R5 commits its receipt, child IDs, allocator and event
 through this same protocol. A crash cannot silently grant a second committed split.
-Glossary edits use the same journal operation as the R3 memory, processed-source
-cursor and event. Only affected records are staged/replaced. State stores the term
+Glossary edits use the same journal operation as their generating R1 or R3
+research action, state and event. Only affected records are staged/replaced. State stores the term
 allocator, revision, budgets and a hash-chain commitment to changed term hashes;
 this binds sparse glossary updates into the canonical revision without reading
 the full glossary on each action. Recovery checks touched after-images and their
@@ -914,6 +1047,10 @@ Actual hashes determine progress. Ambiguous files are retained and rejected,
 never guessed away. Repeated repair recognizes the same operation without a model
 call or duplicate children/memories. Unknown calls without canonical commitment
 require transcript inspection and explicit interruption acknowledgement.
+Durable S1 selection, pending S2 evaluations, pending S3 objectives and exact
+unit-version attempt states use the same recovery and journal rules. A successful
+synthesis memory, its unit-level lineage, completed attempt and updated scheduler
+state are committed atomically, preventing duplicate publication on restart.
 
 Version-1 state remains readable and validated by a retained compatibility module.
 On the next successful controller action, an upgrade is journaled with that action.
@@ -929,8 +1066,10 @@ previous generated scientific corpus**, as separately authorized; this is
 not an in-place scientific migration. Historical R3 responses without
 glossary fields remain valid; the glossary initializes lazily when needed.
 
-The old Phase 1 snapshot store remains supported for compatible reads.
-New autonomous research uses live persistence in the single active corpus;
-no implicit import or accumulating per-experiment snapshot is introduced. Journal scans and full-tree refresh favor inspectability over extreme
+The historical Phase 1 snapshot store remains supported for compatible reads.
+Autonomous research uses live persistence in the single active corpus;
+no implicit import or accumulating per-experiment snapshot is introduced.
+Historical synthesis memories and memory-level consumption metadata remain
+parseable but do not make knowledge units unavailable for new synthesis. Journal scans and full-tree refresh favor inspectability over extreme
 scale. Backups, server management and automated research-quality evaluation remain
 outside this controller.
