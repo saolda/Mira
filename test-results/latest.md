@@ -1,22 +1,22 @@
 # Latest development test results
 
-Recorded: 2026-11-02T02:38:03.935821+00:00
+Recorded: 2026-11-02T05:31:11.529005+00:00
 
-Tested implementation commit: `2b782321891f629d9db064ecda4af2f9cbd36b0e (working tree under test)`.
+Tested implementation commit: `04f751d91c69034edda5e97c6b4d3a41bd9a6af1 (working tree under test)`.
 
-Tests: **500**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **516**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-S1 relatedness/opportunity neighbours, bounded scientific ranking and soft diversity; separate background-only S2 contract; disposable Qwen/Nomic evaluation; S3 prompt unchanged.
+Comprehensive scientific S3 evaluation; substantive two-parent admission, lossless storage fallback, explicit scientific oracles and no-generation recovery of completed critique.
 
 ## Regressions and limitations
 
-- Structural acceptance does not establish scientific validity; Qwen retains root-question bias, inequality errors and unsupported mechanisms. See s1-s2-planning-improvement-20261102.md.
+- Scientific correctness is not established by structural publication or same-model critique. See scientific-synthesis-evaluation-20261102.md.
 
 ## Execution logs
 
-- `log/s1-s2-improvement-20261102/live/result.json`
+- `log/scientific-synthesis-evaluation-20261102/generation-ledger.json`
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.
