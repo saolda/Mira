@@ -40,7 +40,7 @@ def text(value, limit, *, empty=False):
 
 
 def validate(row, term_id):
-    require(isinstance(row,dict) and set(row)==PROVISIONAL_FIELDS, 'invalid provisional definition fields')
+    require(isinstance(row,dict) and PROVISIONAL_FIELDS <= set(row) <= PROVISIONAL_FIELDS | {'generated_at', 'model_identity'}, 'invalid provisional definition fields')
     require(row['origin']=='llm_generated' and row['verification']=='provisional' and row['term_id']==term_id,
         'invalid provisional definition identity/status')
     text(row['text'],600);text(row['scope'],160);text(row['ambiguity'],400,empty=True);text(row['model'],1000)
@@ -51,6 +51,13 @@ def validate(row, term_id):
     require(isinstance(row['event_ref'],str) and re.fullmatch(r'events/[0-9a-f]{32}\.json',row['event_ref']), 'invalid definition event')
     for k in ['template_sha256','request_sha256']:
         require(isinstance(row[k],str) and re.fullmatch(r'[0-9a-f]{64}',row[k]), 'invalid definition prompt hash')
+    if 'generated_at' in row:
+        from datetime import datetime
+        require(datetime.fromisoformat(row['generated_at']).tzinfo is not None, 'invalid generation timestamp')
+    if 'model_identity' in row:
+        identity = row['model_identity']
+        require(isinstance(identity, dict) and identity.get('served_model') == row['model'] and
+                isinstance(identity.get('server_model_path'), str), 'invalid generating model identity')
 
 
 def context(question, node_id, node_ids=()):
@@ -84,6 +91,14 @@ def applicable(row, record, current):
     # passages. A bare acronym alone never establishes scientific equivalence.
     grounding=' '.join(e['passage'] for e in record['evidence'] if e['node_id']==current['node_id'] or
         e['node_id'] in current.get('node_ids',[]) and (words(e['passage'])-names) & query)
+    authority = row['authority']
+    # An exact expanded preferred name, quoted in the local evidence, is stronger
+    # identity support than incidental shared words in a research question. This
+    # avoids rejecting e.g. pulmonary infarction merely because its definition
+    # describes necrosis and blood supply rather than lesion growth.
+    if len(words(record['term'])) >= 2 and normalize(record['term']) == normalize(authority['preferred_name']) and \
+            normalize(record['term']) in normalize(grounding):
+        return True
     return bool((words(row['text'])-names) & (query | (words(grounding)-names)))
 
 

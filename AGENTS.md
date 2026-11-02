@@ -8,3 +8,11 @@
   completed work unpushed.
 - In the final response, provide the commit SHA, branch, push status,
   and test results.
+
+## Owner-controlled architecture and prompts
+
+- `architecture.md` and production LLM prompts are controlled by the project owner.
+- Never modify them without explicit approval of the proposed changes.
+- Discuss proposed changes in the completion report rather than implementing them.
+- This restriction overrides general instructions to update documentation or improve prompts.
+- Do not silently modify prompt wording while refactoring application code.

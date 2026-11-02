@@ -61,12 +61,23 @@ def validate_transaction(old, proposed):
                     require(all(row in record[key] for row in previous[key]), "glossary evidence cannot be removed")
                 require(all(row in record.get('terminology', []) for row in previous.get('terminology', [])),
                         'terminology lookup history cannot be removed')
+                history = previous.get('enrichment', [])
+                require(record.get('enrichment', [])[:len(history)] == history,
+                        'enrichment history cannot be removed or rewritten')
             else:
                 new_ids.append(int(record["id"][1:]))
             previous_definitions=loads(old[path])['definitions'] if path in old else []
             for definition in record['definitions']:
                 if not definitions.provisional(definition) or definition in previous_definitions: continue
                 event=loads(proposed.get(definition['event_ref'],'{}'))
+                if event.get('action_committed') == 'glossary-enrich':
+                    require(event.get('status') == 'committed' and
+                        definition in event.get('definitions', {}).get(record['id'], []) and
+                        definition['interaction_ref'] == 'interactions/' + event.get('interaction_id', '') + '/request.json' and
+                        definition['context'] == event.get('contexts', {}).get(record['id']) and
+                        'generated_at' in definition and 'model_identity' in definition,
+                        'definition lacks committed glossary enrichment provenance')
+                    continue
                 require(event.get('action_committed')=='R1' and event.get('status')=='committed' and
                     definition['interaction_ref']=='interactions/'+event.get('interaction_id','')+'/request.json' and
                     definition['context']=={'node_id':event.get('node_id'),'question':event.get('question')} and
@@ -86,7 +97,7 @@ def string(value, limit=1000):
 
 def validate_record(record):
     fields = {"id", "key", "term", "aliases", "definitions", "evidence", "relationships", "node_ids", "status"}
-    require(isinstance(record, dict) and fields <= set(record) <= fields | {'terminology'}, "invalid glossary record")
+    require(isinstance(record, dict) and fields <= set(record) <= fields | {'terminology', 'enrichment'}, "invalid glossary record")
     require(isinstance(record["id"], str) and TERM_ID.fullmatch(record["id"]), "invalid glossary ID")
     string(record["term"], 160); string(record["key"], 1200)
     for key in ("aliases", "definitions", "evidence", "relationships", "node_ids"):
@@ -124,6 +135,9 @@ def validate_record(record):
     from .terminology import validate_result
     require(isinstance(record.get('terminology', []), list), 'invalid terminology lookup history')
     for lookup in record.get('terminology', []): validate_result(lookup, record['term'])
+    if 'enrichment' in record:
+        from .glossary_enrichment import validate_progress
+        validate_progress(record['enrichment'])
 
 
 def present(term, passage):
@@ -573,9 +587,8 @@ class Directory:
         result['omitted_count'] = meta['next_id'] - 1 - len(entries)
         return result
 
-    def export(self, state):
-        """Export both views under the caller's live-store writer lock."""
-        from . import glossary_view
+    def all(self, state):
+        """Enumerate complete, hash-validated records in index alphabetical order."""
         self.store.read()  # Recovery/canonical gate also applies to direct API callers.
         self.ensure(state)
         # Export is an explicit full audit. Neither a stale index nor forged cache
@@ -601,11 +614,40 @@ class Directory:
             if valid: break
             require(attempt == 0, 'glossary index differs from committed records')
             self.ensure(state, rebuild=True)
+        return records
+
+    def export(self, state):
+        """Export both views under the caller's live-store writer lock."""
+        from . import glossary_view
+        records = self.all(state)
         identity=state.get('active_node_id') or state['root_id']
         definition_scope=definitions.context(state['nodes'][identity]['question'],identity,
             r1.tree.ancestors(state,identity))
-        outputs = {'research/glossary.md': glossary_view.markdown(records, definition_scope),
-                   'research/glossary.html': glossary_view.html(records, definition_scope)}
+        from .interactions import now
+        generated_at = now()
+        old_view = self.store.path('research/glossary.html')
+        if old_view.exists():
+            old_text = old_view.read_text(encoding='utf-8')
+            previous = re.search(r'<meta name="mira-glossary-generated-at" content="([0-9T:.+Z-]+)">', old_text)
+            if previous and '<meta name="mira-glossary-commitment" content="' + metadata(state)['commitment'] + '">' in old_text:
+                generated_at = previous[1]
+        view_meta = {'revision': metadata(state)['revision'], 'commitment': metadata(state)['commitment'],
+                     'generated_at': generated_at,
+                     'scopes': {r['id']: definitions.context(state['nodes'][r['node_ids'][0]]['question'],
+                                r['node_ids'][0], r['node_ids']) for r in records}}
+        from .glossary_enrichment import coverage
+        view_meta['coverage'] = coverage(records, state)
+        source_refs = {}
+        for reference in sorted({e['evidence_ref'] for r in records for e in r['evidence']}):
+            if not re.fullmatch(r'research/results/[A-Za-z0-9_-]+\.json', reference): continue
+            path = self.store.path(reference)
+            if not path.is_file(): continue
+            for source in loads(path.read_text(encoding='utf-8')).get('results', []):
+                if isinstance(source, dict) and isinstance(source.get('id'), str):
+                    source_refs[(reference, source['id'])] = {key: source[key] for key in ('title', 'url') if isinstance(source.get(key), str)}
+        view_meta['source_references'] = source_refs
+        outputs = {'research/glossary.md': glossary_view.markdown(records, definition_scope, view_meta),
+                   'research/glossary.html': glossary_view.html(records, definition_scope, view_meta)}
         glossary_view.publish(self.store, outputs)
         return {'path': str(self.store.path('research/glossary.md')),
                 'html_path': str(self.store.path('research/glossary.html')), 'entries': len(records)}
