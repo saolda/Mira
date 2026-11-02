@@ -29,7 +29,7 @@ class DemoLLM(ScriptedLLM):
                   "R3" if "RETRIEVED RESEARCH\n" in content else
                   "R4" if "SCIENTIFIC EVIDENCE\n" in content else
                   "R5" if "ACCUMULATED RESEARCH\n" in content else
-                  "S2" if "Identify scientific synthesis opportunities" in content else "S3")
+                  "S2" if content.startswith("Your primary task is to discover") else "S3")
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()

@@ -437,8 +437,8 @@ class Research:
             state = tree.upgrade(state, memories)
             if state['unit_synthesis'].get('legacy_pending'):
                 return {'status':'blocked_legacy_synthesis','reason':'Historical pending synthesis requires operator review; no automatic replay.','pending_synthesis':state['pending_synthesis']}
-            from .synthesis_discovery import REPRESENTATION
-            discovery_identity={'representation':REPRESENTATION,'backend':getattr(self.synthesis_discovery.backend,'identity',None)}
+            from .synthesis_discovery import REPRESENTATION, RANKING
+            discovery_identity={'representation':REPRESENTATION,'ranking':RANKING,'backend':getattr(self.synthesis_discovery.backend,'identity',None)}
             if state['unit_synthesis'].get('discovery_identity')!=discovery_identity:
                 state['unit_synthesis'].update(discovery_identity=discovery_identity,scanned=None)
             retrieval.upgrade(state)

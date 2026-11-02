@@ -18,7 +18,9 @@ SLOTS = {action: (*slots, "research_brief") for action, slots in SLOTS.items()}
 SLOTS["R1"] = ("question", "question_scope", "research_context", "term_context",
                "completed_queries", "term_limit", "control_terms")
 SLOTS["R4"] = ("question", "question_scope", "scientific_evidence")
-SLOTS['S2'] = SLOTS['S3'] = ('root_question','question','research_brief','candidate',
+SLOTS['S2'] = ('root_question','question','research_brief','candidate',
+    'knowledge_units','parent_memories','existing_knowledge')
+SLOTS['S3'] = ('root_question','question','research_brief','candidate',
     'knowledge_units','parent_memories','objective','existing_knowledge')
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 

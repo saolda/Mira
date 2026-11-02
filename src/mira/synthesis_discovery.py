@@ -17,6 +17,7 @@ from .embeddings import cosine, validate_vectors
 from .format import digest, dumps, loads, require
 
 REPRESENTATION = 'qualified-scientific-unit-v1'
+RANKING = 'relatedness-opportunity-diversity-v1'
 STOP = set('a an and are as at be been being both by can could did do does each for from had has have how if in into is it its may more most of on or other our reported research result results scientific significantly study studies such than that the their these they this those to using was were what when where whether which while who why will with would patient patients finding findings based'.split())
 
 
@@ -107,6 +108,61 @@ def annotate(a,b,lexical,semantic):
         'reason':'Content and provenance require review; no deletion, merging or exclusion from similarity.'}
 
 
+def opportunity(a, b, row):
+    """Bounded retrieval hints, not findings about scientific compatibility.
+
+    Generic role words detect a possible method/measurement/outcome bridge.
+    Distinct source IDs measure catalogue variety, never study independence.
+    Shared-paper origin alone has no redundancy penalty.
+    """
+    role_words = [set('method methods protocol assay algorithm model calibrated calibration resolution estimation'.split()),
+                  set('measurement measurements measured observed count counts concentration duration volume diameter'.split()),
+                  set('outcome outcomes endpoint endpoints association correlation predicts prediction accuracy sensitivity specificity effect response'.split())]
+    def roles(r):
+        words=tokens(representation(r))
+        return {i for i,terms in enumerate(role_words) if words & terms}
+    left,right=roles(a),roles(b)
+    bridge=bool(left and right and left!=right and len(left|right)>1)
+    explicit=bool(set(row['explicit_relationships']) & {'CONTRADICTS','QUALIFIES','BUILDS_ON','SUPPORTS'})
+    difference=min(1.,len(set(row['distinctions']) & {'numbers_and_comparators','polarity','units','type'})/2)
+    exact={k:normal(v) for k,v in a['fields'].items() if k not in {'Provenance','Origin'}}=={k:normal(v) for k,v in b['fields'].items() if k not in {'Provenance','Origin'}} and a['type']==b['type']
+    overlap=len(set(a['leaf_units']) & set(b['leaf_units']))/max(1,len(set(a['leaf_units']) | set(b['leaf_units'])))
+    redundancy=1. if exact else max(overlap,.5 if row['category']=='potential_semantic_duplicate' else 0.)
+    distinct_sources=bool(a['source_ids'] and b['source_ids'] and set(a['source_ids'])!=set(b['source_ids']))
+    relatedness=(row['lexical'] if row['semantic'] is None else .5*row['lexical']+.5*max(0,row['semantic']))
+    if row['explicit_relationships']:relatedness=max(relatedness,.95)
+    return {'relatedness':round(relatedness,8),
+            'complementarity_hint':float(not exact)*max(float(explicit),.75*bridge,.35*(a['structural_type']!=b['structural_type'])),
+            'qualified_difference':difference if not exact else 0.,
+            'evidence_variety':float(distinct_sources), 'redundancy_hint':redundancy}
+
+
+def priority_score(dimensions):
+    # Positive terms sum to one; redundancy is a bounded, soft penalty.
+    return round(max(0.,min(1.,.55*dimensions['relatedness']+.25*dimensions['complementarity_hint']+
+        .10*dimensions['qualified_difference']+.10*dimensions['evidence_variety']-.20*dimensions['redundancy_hint'])),8)
+
+
+def diversify(groups, history=()):
+    """Soft exact-version overlap penalty against at most eight recent selections.
+
+    Every candidate remains eligible. This orders opportunities, never changes
+    the exact-version register or treats a subset as already evaluated.
+    """
+    recent=list(history)[-8:]
+    result=[]
+    for group in groups:
+        versions={(v['id'],v['version']) for v in group['unit_versions']}
+        overlaps=[]
+        for old in recent:
+            previous={(v['id'],v['version']) for v in old['unit_versions']}
+            overlaps.append(len(versions & previous)/len(versions | previous))
+        penalty=round(.18*max(overlaps,default=0.),8)
+        result.append({**group,'priority':round(max(0.,group['priority']-penalty),8),
+                       'selection_diversity':{'recent_groups':len(recent),'overlap_penalty':penalty,'base_priority':group['priority']}})
+    return sorted(result,key=lambda g:(-g['priority'],g['id']))
+
+
 class Discovery:
     def __init__(self, store, backend=None):
         self.store,self.backend=store,backend
@@ -157,10 +213,10 @@ class Discovery:
         counts=Counter(t for words in sets for t in words)
         lexical=[]
         for words in sets:
-            v={t:1+math.log((1+len(sets))/(1+counts[t])) for t in words}
+            v={t:1+math.log((1+len(sets))/(1+counts[t])) for t in sorted(words)}
             norm=math.sqrt(sum(w*w for w in v.values())) or 1
             lexical.append({t:w/norm for t,w in v.items()})
-        heaps=[[] for _ in records]
+        heaps=[[] for _ in records];opportunities=[[] for _ in records]
         for i,a in enumerate(records):
             for j in range(i):
                 b=records[j];lex=sum(w*lexical[j].get(t,0) for t,w in lexical[i].items())
@@ -169,17 +225,20 @@ class Discovery:
                 score=(.5*lex+.5*max(0,sem) if sem is not None else lex)
                 if explicit:score=max(score,.95)
                 if score<(.42 if vectors else .15):continue
+                potential=priority_score(opportunity(a,b,annotate(a,b,lex,sem)))
                 for left,right in [(i,j),(j,i)]:
                     # Negative position preserves ascending stable-ID ties.
                     heapq.heappush(heaps[left],(score,-right,right,lex,sem))
                     if len(heaps[left])>k:heapq.heappop(heaps[left])
+                    heapq.heappush(opportunities[left],(potential,-right,right,lex,sem))
+                    if len(opportunities[left])>k:heapq.heappop(opportunities[left])
         groups={}
         candidates=[]
-        for i,edges in enumerate(heaps):
-            candidates.append((i,edges,sorted({i,*(e[2] for e in edges)})))
-            # Explicit bounded smaller opportunities also survive when the full
-            # neighbourhood exceeds downstream capacity. No all-subset policy.
-            candidates.extend((i,[edge],sorted([i,edge[2]])) for edge in edges)
+        for neighbours in [heaps,opportunities]:
+            for i,edges in enumerate(neighbours):
+                candidates.append((i,edges,sorted({i,*(e[2] for e in edges)})))
+                # Retain original related pairs and full neighbourhoods too.
+                candidates.extend((i,[edge],sorted([i,edge[2]])) for edge in edges)
         for i,edges,selected in candidates:
             # A second parent is required; same-paper duplicates stay annotated.
             if len({records[j]['memory_id'] for j in selected})<2:continue
@@ -188,15 +247,17 @@ class Discovery:
             if not any(records[j]['structural_type']=='finding' for j in selected):continue
             group=[records[j] for j in selected];key=fingerprint(group)
             if key in groups:continue
-            annotations=[]
+            annotations=[];dimensions=[]
             for x,left in enumerate(selected):
                 for right in selected[:x]:
                     lex=sum(w*lexical[right].get(t,0) for t,w in lexical[left].items())
                     sem=cosine(vectors[left],vectors[right]) if vectors else None
-                    annotations.append(annotate(records[left],records[right],lex,sem))
+                    row=annotate(records[left],records[right],lex,sem)
+                    annotations.append(row);dimensions.append(opportunity(records[left],records[right],row))
+            mean={key:round(sum(d[key] for d in dimensions)/len(dimensions),8) for key in dimensions[0]}
             groups[key]={'id':key,'unit_ids':[r['id'] for r in group],
                 'unit_versions':[{'id':r['id'],'version':r['version']} for r in group],
                 'memory_ids':sorted({r['memory_id'] for r in group}),
-                'priority':round(sum(e[0] for e in edges)/len(edges),8),
-                'relationships':annotations,'reason':f'Bounded top-{k} lexical/semantic or explicit-relationship neighbourhood; scientific relevance requires S2 review.'}
+                'priority':priority_score(mean),'ranking':{'policy':RANKING,'dimensions':mean},
+                'relationships':annotations,'reason':f'Bounded top-{k} relatedness and opportunity neighbourhoods; ranked by relatedness, role/explicit relationship hints, qualified differences, source variety and soft redundancy. These are review hints, not proof of complementarity or independence.'}
         return sorted(groups.values(),key=lambda g:(-g['priority'],g['id'])),status

@@ -791,6 +791,16 @@ scientific premises or becoming independent empirical evidence.
 Similarity is a discovery signal, not a scientific truth or duplication score.
 Candidate discovery preserves relationships that are complementary or
 methodologically important even when they are not nearest neighbours.
+Bounded relatedness and opportunity neighbour lists retain both kinds of
+candidate. Ranking combines bounded relatedness, explicit relationship and
+method/measurement/outcome role hints, qualified differences and source-record
+variety, with soft penalties for redundant content and recent exact-version
+group overlap. All dimensions and penalties are inspectable and deterministic.
+Role words and differing qualifications suggest opportunities; they do not
+establish scientific complementarity. Different source identities do not prove
+independence, and shared source origin alone does not imply redundancy.
+Overlap affects priority without excluding subsets, expanded or overlapping
+groups. The exact-version attempt register remains authoritative.
 
 Unit embeddings are keyed by representation, model identity and scientific
 content version and stored in rebuildable caches. Retrieval uses bounded
@@ -834,6 +844,14 @@ groups. Candidate discovery without evaluation does not mark a set completed.
 S2 uses one LLM call to examine the selected group and identify **specific
 analytical objectives**, not to publish a conclusion. It may propose several
 distinct synthesis opportunities or return `no_candidate`.
+S2 generates objectives and receives no assigned objective; the assigned
+objective is an S3 execution input. Selected scientific units and their
+relationships precede clearly labelled research-question background. Repeated
+tree-question metadata uses references while scientific units, qualifications
+and provenance remain complete. Research questions and research objectives
+guide interpretation rather than impose compulsory synthesis targets. A
+scientifically useful narrower comparison must not be rejected solely because
+it cannot answer the root question; unsupported integrations remain invalid.
 
 Each proposal includes:
 

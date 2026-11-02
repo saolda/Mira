@@ -10,7 +10,7 @@ import re
 from . import decisions, questions
 from .budget import measure
 from .format import Memory, Unit, Relationship, base36, digest, dumps, loads, render, require
-from .synthesis_discovery import Discovery, project, fingerprint, normal, tokens, representation
+from .synthesis_discovery import Discovery, diversify, project, fingerprint, normal, tokens, representation
 
 
 def initial():
@@ -65,7 +65,7 @@ def context(state, group, selected, memories, *, objective=None, existing=()):
     """Complete selected units; bounded parent metadata, never a global catalogue."""
     identity=owner(state,selected)
     parents={m.id:m for m in memories}
-    return {'root_question':state['nodes'][state['root_id']]['question'],
+    supplied={'root_question':state['nodes'][state['root_id']]['question'],
         'question':state['nodes'][identity]['question'],
         **questions.context(state,'S3' if objective else 'S2',identity),
         'candidate':{'id':group['id'],'reason':group['reason'],'relationships':group['relationships']},
@@ -77,6 +77,28 @@ def context(state, group, selected, memories, *, objective=None, existing=()):
         'objective':deepcopy(objective), 'existing_knowledge':[
             {'id':r['id'],'reference':'Complete scientific content is already supplied in knowledge_units.'}
             if r['id'] in {u['id'] for u in selected} else r for r in existing]}
+    return supplied if objective is not None else planning_context(supplied)
+
+
+def planning_context(supplied):
+    """Project current or saved pending S2 inputs without rewriting receipts.
+
+    Only repeated tree-question metadata becomes a reference. Scientific units,
+    source records, qualifications and the immutable research brief stay whole.
+    S3 continues to receive its existing, separate execution contract.
+    """
+    result=deepcopy(supplied);result.pop('objective',None)
+    seen={}
+    def question(value, path):
+        if not isinstance(value,str):return value
+        key=normal(value)
+        if key in seen:return {'same_as':seen[key]}
+        seen[key]=path
+        return value
+    for key in ['root_question','question']:result[key]=question(result[key],key)
+    for index,parent in enumerate(result['parent_memories']):
+        parent['question']=question(parent['question'],f'parent_memories[{index}].question')
+    return result
 
 
 def usage(state, llm, action, supplied):
@@ -96,6 +118,8 @@ def novelty_context(selected, all_records, limit=6):
 def select(state, memories, equations, llm, discovery, event):
     register=state['unit_synthesis'];all_records=records(state,memories,equations)
     groups,capability=discovery.discover(all_records)
+    history=sorted(register['groups'].values(),key=lambda g:(g.get('selected_cycle',-1),g['id']))
+    groups=diversify(groups,history)
     register['deferred_groups']=[]
     register['capability']=capability;event['embedding_capability']=capability
     lookup={r['id']:r for r in all_records};blocked=[]
@@ -111,7 +135,7 @@ def select(state, memories, equations, llm, discovery, event):
         group['context_requirements']={'s2':cost,'s3_estimate':s3cost,'s3_exact':'Measured again with the accepted objective before dispatch.'}
         if cost['over_context_budget'] or s3cost['over_context_budget']:
             blocked.append({'group_id':group['id'],'reason':'blocked_context_budget','usage':cost});continue
-        group.update(status='selected',node_id=owner(state,selected),selected_event=event['event_id'],
+        group.update(status='selected',node_id=owner(state,selected),selected_event=event['event_id'],selected_cycle=event['cycle'],
             s2_interaction_id=None,objectives=[],reason_outcome=None,context=supplied)
         register['groups'][group['id']]=group;register['selected_group']=group['id']
         event.update(selection=deepcopy(group),unit_ids=group['unit_ids'],node_id=group['node_id'],reason='selected')
@@ -162,7 +186,7 @@ def plan(state, memories, equations, llm, event, model):
     current={r['id']:r for r in records(state,memories,equations)}
     require(all(v['id'] in current and current[v['id']]['version']==v['version'] for v in group['unit_versions']), 'selected S2 unit versions changed or ineligible')
     selected=[current[i] for i in group['unit_ids']]
-    value=model(event,'S2',group['context'],state)
+    value=model(event,'S2',planning_context(group['context']),state)
     accepted,rejected=validate_s2(value,selected)
     event['rejected_components']=rejected
     require(not value['ideas'] or accepted,'all S2 proposals failed validation')
