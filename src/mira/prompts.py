@@ -6,7 +6,7 @@ import sys
 
 from .format import digest, dumps, require
 
-ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S1", "S2")
+ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S2", "S3")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
                 "children", "strategy", "next_database", "search_history", "equations")
 SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "search_outcomes"), "R3": ("question", "question_context", "research"),
@@ -18,6 +18,8 @@ SLOTS = {action: (*slots, "research_brief") for action, slots in SLOTS.items()}
 SLOTS["R1"] = ("question", "question_scope", "research_context", "term_context",
                "completed_queries", "term_limit", "control_terms")
 SLOTS["R4"] = ("question", "question_scope", "scientific_evidence")
+SLOTS['S2'] = SLOTS['S3'] = ('root_question','question','research_brief','candidate',
+    'knowledge_units','parent_memories','objective','existing_knowledge')
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 
 

@@ -47,6 +47,8 @@ def initial(question, databases, *, synthesis_interval=5, context_budget=8192, o
             "pending_synthesis": None, "synthesis_evaluated_catalogue": None}
 
     if synthesis_output_reserve is not None: state["synthesis_output_reserve"] = synthesis_output_reserve
+    from .synthesis import initial as synthesis_initial
+    state['unit_synthesis'] = synthesis_initial()
     from .glossary import metadata, validate_metadata
     state["glossary"] = {**metadata({}), "token_budget": glossary_token_budget, "limit": glossary_limit}
     validate_metadata(state["glossary"])
@@ -82,7 +84,7 @@ def frontier(state, memories, identity):
         if any(state["nodes"][i]["status"] == "killed" for i in ancestors(state, owner)): return False
         return all(relevant(documents[i]) for i in memory.metadata.get("source_memories", []))
     return sorted((m for m in memories if m.metadata.get("node_id") in scope and
-                   m.metadata["synthesized_by"] is None and relevant(m)), key=lambda m: m.metadata["created_order"])
+                   ('unit_synthesis' in state or m.metadata["synthesized_by"] is None) and relevant(m)), key=lambda m: m.metadata["created_order"])
 
 
 def eligible_subtree(state, identity):
@@ -144,8 +146,11 @@ def refresh(state, memories, *, complete=True):
         from .research_tree_v1 import refresh as legacy_refresh
         return legacy_refresh(state, memories, complete=complete)
     nodes = state["nodes"]
+    from . import synthesis
+    modern = 'unit_synthesis' in state
+    unit_work = synthesis.available(state, memories) if modern else False
     redesigned = "synthesis_attempts" in state
-    evaluated = redesigned and catalogue_evaluated(state, memories)
+    evaluated = not modern and redesigned and catalogue_evaluated(state, memories)
     for identity in reversed(descendants(state, state["root_id"])):
         n = nodes[identity]
         inputs = frontier(state, memories, identity)
@@ -153,24 +158,28 @@ def refresh(state, memories, *, complete=True):
         n["living_descendant_count"] = sum(int(nodes[c]["status"] == "living") + nodes[c]["living_descendant_count"] for c in n["child_ids"])
         pending = any(nodes[i]["status"] in {"living", "exhausted"} for i in eligible_subtree(state, identity))
         count = n["unsynthesized_memory_count"]
-        opportunity = permitted(state, inputs) and not evaluated if redesigned else count >= 2
-        n["synthesis_complete"] = not pending and not opportunity
+        opportunity = bool(inputs) and unit_work if modern else permitted(state, inputs) and not evaluated if redesigned else count >= 2
+        n["synthesis_complete"] = not pending and not opportunity and not (modern and inputs and synthesis.blocked(state))
         terminal = not pending and count >= 2
         n["synthesis_score"] = count + (state["terminal_synthesis_bonus"] if terminal else 0)
         n["ripeness_counts"] = research_counts(state, memories, identity)
         n["ripeness"] = sum(n["ripeness_counts"][k] * w for k, w in state["ripeness_weights"].items())
     state["living_priority_order"] = sorted((i for i, n in nodes.items() if n["status"] == "living"),
         key=lambda i: (-nodes[i]["priority"], nodes[i]["created_order"]))
-    state["synthesis_candidate_order"] = sorted((i for i, n in nodes.items() if eligible_subtree(state, i) and
-        (permitted(state, frontier(state, memories, i)) and not evaluated if redesigned else n["unsynthesized_memory_count"] >= 2)),
-        key=lambda i: (-nodes[i]["synthesis_score"], nodes[i]["created_order"]))
+    if modern:
+        state['synthesis_candidate_order']=[state['root_id']] if unit_work else []
+    else:
+        state["synthesis_candidate_order"] = sorted((i for i,n in nodes.items() if eligible_subtree(state,i) and
+            (permitted(state,frontier(state,memories,i)) and not evaluated if redesigned else n['unsynthesized_memory_count']>=2)),
+            key=lambda i:(-nodes[i]['synthesis_score'],nodes[i]['created_order']))
     state["ripeness_order"] = sorted((i for i, n in nodes.items() if n["status"] == "exhausted"),
         key=lambda i: (-nodes[i]["ripeness"], nodes[i]["created_order"]))
     active = state["active_node_id"]
     if active is None or nodes[active]["status"] != "living" or nodes[active]["priority"] == 0:
         state["active_node_id"] = next(iter(state["living_priority_order"]), None)
     if redesigned and (state["living_priority_order"] or state["ripeness_order"] or
-                       state.get("pending_synthesis") is not None or state["synthesis_candidate_order"]):
+                       state.get("pending_synthesis") is not None or state["synthesis_candidate_order"] or
+                       modern and synthesis.blocked(state)):
         # A revised catalogue may reopen a previously terminal experiment. Its
         # immutable historical terminal event remains in events/.
         state["terminal_event"] = None
@@ -179,9 +188,15 @@ def refresh(state, memories, *, complete=True):
 def upgrade(state, memories):
     """Journal the conversion on the next successful action; historical bytes stay intact."""
     if state["mira_research"] == 2:
-        if "synthesis_attempts" in state: return state
+        if "synthesis_attempts" in state:
+            if 'unit_synthesis' in state:return state
+            from . import synthesis
+            state=deepcopy(state);synthesis.upgrade(state);refresh(state,memories)
+            return state
         state = deepcopy(state)
         state.update(synthesis_attempts=[], pending_synthesis=None, synthesis_evaluated_catalogue=None)
+        from . import synthesis
+        synthesis.upgrade(state)
         if state["terminal_event"] is not None:
             state["legacy_terminal_event"] = state["terminal_event"]
             state["terminal_event"] = None
@@ -207,6 +222,8 @@ def upgrade(state, memories):
                 n["pending_results"] = None
             n["split_attempt"] = {"legacy": True, "questions": [state["nodes"][i]["question"] for i in n["child_ids"]]}
         n["legacy_status"] = old
+    from . import synthesis
+    synthesis.upgrade(state)
     refresh(state, memories)
     return state
 
@@ -308,6 +325,9 @@ def validate(state, memories, files):
     validate_state(state)
     if "synthesis_attempts" in state:
         validate_synthesis(state, memories)
+    if 'unit_synthesis' in state:
+        from .synthesis import validate_register
+        validate_register(state, memories, files)
     expected = deepcopy(state); refresh(expected, memories)
     require(expected == state, "stale tree counts, lifecycle or ordering")
 
@@ -411,6 +431,7 @@ def metrics(state):
             "synthesis_deferred": state.get("synthesis_deferred"),
             "synthesis_attempts": state.get("synthesis_attempts", []),
             "pending_synthesis": state.get("pending_synthesis"),
+            "unit_synthesis": state.get('unit_synthesis'),
             "synthesis_evaluated_catalogue": state.get("synthesis_evaluated_catalogue"),
             "ripeness_weights": state.get("ripeness_weights"), "recent_activity": state.get("recent_activity", [])}
 
@@ -418,6 +439,17 @@ def metrics(state):
 def validate_transition(before, after):
     """A durable split receipt cannot be cleared or replayed by any writer."""
     require(after.get("question_document") == before.get("question_document"), "question document is immutable")
+    if 'unit_synthesis' in before:
+        require('unit_synthesis' in after,'cannot discard unit synthesis register')
+        for section in ['groups','objectives']:
+            for key,old in before['unit_synthesis'][section].items():
+                new=after['unit_synthesis'][section].get(key)
+                require(new is not None,'cannot forget synthesis evaluation')
+                terminal=old['status'] in ({'evaluated','failed'} if section=='groups' else {'completed','failed','blocked_context'})
+                if terminal:require(new==old,'completed synthesis evaluation is immutable')
+                else:
+                    fixed=['id','unit_versions','context','selected_event'] if section=='groups' else ['id','group_id','unit_versions','proposal','s2_interaction_id']
+                    require(all(new[k]==old[k] for k in fixed),'pending synthesis evidence/objective is immutable')
     if 'legacy_query_policy' in before:
         require(after.get('legacy_query_policy') == before['legacy_query_policy'], 'legacy query policy is immutable')
     if before.get("mira_research") != 2: return

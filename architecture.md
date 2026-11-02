@@ -89,7 +89,7 @@ relationships are retained. The summary does not imply independent verification.
 # Synthesis: Combined evidence
 
 ```json
-{"version":2,"id":"s1","revision":1,"kind":"synthesis","node_id":"q1","created_order":3,"next":{"f":2,"q":1,"e":1},"source_memories":["r1","r2"],"synthesized_by":null}
+{"version":2,"id":"s1","revision":1,"kind":"synthesis","node_id":"q1","created_order":3,"next":{"f":2,"q":1,"e":1},"lineage_mode":"knowledge_units","source_memories":["r1","r2"],"synthesized_by":null,"synthesis_unit_versions":[{"id":"r1#f1","version":"0000000000000000000000000000000000000000000000000000000000000000"},{"id":"r2#f1","version":"0000000000000000000000000000000000000000000000000000000000000000"}]}
 ```
 
 ## Summary
@@ -104,6 +104,8 @@ An integrated proposition supported by the cited memory units.
 
 Evidence status: unverified
 Explanation: How the cited findings agree, differ or remain limited.
+Qualification: The inference remains limited by the supplied populations and methods.
+Epistemic type: inference
 Provenance: Interpretation restricted to the supplied sources.
 
 ## Relationships
@@ -729,6 +731,11 @@ When only exhausted nodes remain, R5 need not await nonexistent research work.
 The synthesis cadence defaults to five research/branching actions; an R5 action
 counts as a work slot. Synthesis does not starve research or R5.
 
+At most three synthesis actions form a consecutive burst while direct research
+or R5 work is ready. Pending objectives remain durable when the controller
+yields. Ordinary discovery follows the configured research/branching cadence;
+when no other work is ready, eligible synthesis can proceed immediately.
+
 A completed S2 `no_candidate` or S3 `no_synthesis` is a valid scientific
 outcome and must not trigger a loop on the same unchanged evidence.
 A changed knowledge-unit version, new relevant evidence or explicitly
@@ -777,6 +784,10 @@ S1 combines:
 - Source identities, evidence qualifications, experimental conditions and
   scientific type.
 
+Findings, equations and images form the primary evidence neighbourhood. Bounded
+open-question projections from relevant parents guide planning without replacing
+scientific premises or becoming independent empirical evidence.
+
 Similarity is a discovery signal, not a scientific truth or duplication score.
 Candidate discovery preserves relationships that are complementary or
 methodologically important even when they are not nearest neighbours.
@@ -787,6 +798,15 @@ neighbour structures and may update incrementally. A full quadratic
 similarity matrix is not required as durable production state. Unavailable
 semantic services are reported as degraded operation rather than silently
 substituted. Candidate ranking and tie-breaking are deterministic.
+
+The semantic backend uses the existing embedding configuration:
+`--embedding-url` and `--model-identity`, or `MIRA_EMBEDDING_URL` and
+`MIRA_EMBEDDING_MODEL_IDENTITY`. The identity includes the model artifact identity.
+`synthesis.sqlite3` is a disposable, safely confined embedding cache; its key
+includes representation, model identity and scientific-content version. Exact
+neighbour scans retain bounded per-unit heaps rather than a pair matrix. Full
+neighbourhoods and bounded related pairs provide overlapping group opportunities,
+including smaller groups that fit when a larger neighbourhood cannot.
 
 A candidate contains the versioned selected unit IDs, parent memory and
 source identities, scientific content and qualifications, similarity and
@@ -833,6 +853,12 @@ original root question. Python independently validates every reference,
 response field and eligible objective against the selected input, then
 durably records accepted objectives for S3.
 
+The JSON contract is `disposition=ideas|no_candidate`, `ideas` and `reason`.
+There are at most three proposals; each contains `category`, `objective`,
+`unit_ids`, `potential_new_understanding`, `limitations` and `novelty`.
+Invalid proposals are rejected individually. A response with no valid proposed
+objective is a validation failure, distinct from a valid `no_candidate`.
+
 One completed evaluation covers all objectives proposed from its selected
 set. The same unchanged set is not repeatedly sent to S2 merely to seek
 different wording. New evidence or an explicitly authorised reconsideration
@@ -868,6 +894,17 @@ Structural validation is not scientific proof; the LLM's scientific
 reasoning remains inspectable and unverified unless separately corroborated.
 Partial syntheses may be accepted when only some proposed relationships
 justify defensible findings.
+
+S3 returns `disposition=no_synthesis` with `reason`, or `disposition=synthesis`
+with `title`, `summary` and one to four findings. Each substantive finding
+integrates at least two distinct input memories and records proposition,
+explanation, qualification, `epistemic_type=inference|hypothesis`, exact
+`source_findings`, attributed verbatim `evidence_checks`, declared
+`quantitative_checks`, novelty rationale and comparisons with supplied existing
+knowledge. Python checks literal quotation attribution and declared arithmetic
+(sum, difference, ratio, product and numerical inequalities). These checks
+do not establish compatible populations, causal validity, completeness of
+calculations or the truth of quoted premises. Such limitations remain explicit.
 
 ### Novelty and scientific equivalence
 
@@ -1051,6 +1088,19 @@ Durable S1 selection, pending S2 evaluations, pending S3 objectives and exact
 unit-version attempt states use the same recovery and journal rules. A successful
 synthesis memory, its unit-level lineage, completed attempt and updated scheduler
 state are committed atomically, preventing duplicate publication on restart.
+
+`research/state.json` holds a versioned `unit_synthesis` register: selected and
+evaluated groups, independently tracked S3 objectives, context requirements,
+semantic capability, completed-corpus fingerprints and fair-scheduling counters.
+Immutable interaction request/response/outcome receipts bind dispatch and
+submission uncertainty to group/objective IDs. Read-only inspection exposes
+uncommitted submissions separately from scientific rejection. Validation,
+transport and context failures remain durable, are not automatically retried,
+and cannot be reported as scientific exhaustion or successful synthesis.
+With only such work remaining the controller reports `blocked_synthesis`.
+Historical pending two-stage execution is preserved and reports
+`blocked_legacy_synthesis` for operator review rather than being reinterpreted
+or silently replayed. Historical committed events and memory bytes remain intact.
 
 Version-1 state remains readable and validated by a retained compatibility module.
 On the next successful controller action, an upgrade is journaled with that action.

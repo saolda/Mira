@@ -201,7 +201,8 @@ class Experiments(LegacyReader):
                 # Unrelated files are not generated and remain untouched.
         for relative in ('research/state.json', 'research/question.md', 'research/glossary.md', 'research/glossary.html',
                          'identity.json', 'glossary.sqlite3', 'glossary.sqlite3-wal', 'glossary.sqlite3-shm',
-                         'index.sqlite3', 'index.sqlite3-wal', 'index.sqlite3-shm'):
+                         'index.sqlite3', 'index.sqlite3-wal', 'index.sqlite3-shm',
+                         'synthesis.sqlite3', 'synthesis.sqlite3-wal', 'synthesis.sqlite3-shm', 'synthesis.sqlite3-journal'):
             path = root / relative
             confined(path.parent)
             require(not path.is_symlink(), 'symlink generated file')

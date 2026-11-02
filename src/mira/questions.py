@@ -6,7 +6,7 @@ from .format import MD, digest, require
 
 PATH = "research/question.md"
 CONTEXT_BYTES = {"R0": 2048, "R1": 2048, "R3": 1536, "R4": 4096,
-                 "R5": 4096, "S1": 3072, "S2": 4096}
+                 "R5": 4096, "S1": 3072, "S2": 4096, "S3": 4096}
 
 
 def parse(markdown):

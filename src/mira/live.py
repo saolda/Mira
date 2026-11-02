@@ -102,7 +102,15 @@ def validate_lineage(documents):
                     "missing reciprocal synthesis lineage")
         for source in sources:
             require(source in docs and source in managed and
-                    docs[source].metadata["synthesized_by"] == m.id, "missing source/consumption mark")
+                    (meta.get('lineage_mode')=='knowledge_units' or docs[source].metadata["synthesized_by"] == m.id), "missing source/consumption mark")
+        if meta.get('lineage_mode')=='knowledge_units':
+            targets={e.target for e in m.relationships if e.type=='SYNTHESIZES'}
+            require(meta['kind']=='synthesis' and targets and {t.split('#')[0] for t in targets}==set(sources),
+                'unit synthesis parent lineage mismatch')
+            versions=meta.get('synthesis_unit_versions')
+            require(isinstance(versions,list) and len(versions)==len(targets) and
+                {v['id'] for v in versions}==targets and all(HASH.fullmatch(v['version']) for v in versions),
+                'unit synthesis versions missing')
     # Iterative walk also rejects cycles without imposing a depth limit.
     for identity in managed:
         seen = set()
@@ -110,6 +118,16 @@ def validate_lineage(documents):
             require(identity not in seen, "cyclic synthesis lineage")
             seen.add(identity)
             identity = managed[identity].metadata["synthesized_by"]
+    # New participation may reuse memories; validate the ancestry graph itself,
+    # including historical inputs, rather than following a single consumer.
+    visiting,visited=set(),set()
+    def visit(identity):
+        require(identity not in visiting,'cyclic synthesis ancestry')
+        if identity in visited:return
+        visiting.add(identity)
+        for parent in managed[identity].metadata['source_memories']:visit(parent)
+        visiting.remove(identity);visited.add(identity)
+    for identity in managed:visit(identity)
 
 
 class LiveStore:

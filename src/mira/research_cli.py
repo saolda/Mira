@@ -171,7 +171,15 @@ def _execute(args, catalog, managed, trace=None):
         terminology = Enricher(Path(args.root).absolute().parent / 'log' / 'terminology-cache',
             max_terms=args.terminology_limit, action_timeout=args.terminology_timeout,
             request_timeout=args.terminology_request_timeout)
-    research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []), terminology=terminology)
+    import os
+    from .embeddings import NomicHTTPEmbedding, TestEmbedding
+    embedding_url=getattr(args,'embedding_url',None) or os.environ.get('MIRA_EMBEDDING_URL')
+    model_identity=getattr(args,'model_identity',None) or os.environ.get('MIRA_EMBEDDING_MODEL_IDENTITY')
+    test_embedding=getattr(args,'test_embedding',False)
+    require(not (embedding_url and test_embedding),'choose one embedding backend')
+    require(not embedding_url or model_identity,'embedding model identity required with embedding URL')
+    backend=NomicHTTPEmbedding(embedding_url,model_identity) if embedding_url else TestEmbedding() if test_embedding else None
+    research = Research(args.root, llm, adapters, control_terms=getattr(args, "control_term", []), terminology=terminology, embedding_backend=backend)
     if trace is not None:
         trace.secrets = tuple(dict.fromkeys([*trace.secrets, *research.trace.secrets]))
         trace.log.secrets = trace.secrets

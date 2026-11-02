@@ -1,4 +1,8 @@
-"""Collection synthesis with lossless structured summaries and atomic lineage."""
+"""Historical memory-level helpers for compatibility and diagnostic fixtures.
+
+The production controller uses synthesis.py's knowledge-unit S1-S3 pipeline.
+These helpers preserve older canonical representations and diagnostic APIs.
+"""
 from dataclasses import asdict
 from collections import Counter
 from functools import lru_cache

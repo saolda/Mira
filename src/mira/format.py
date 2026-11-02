@@ -349,6 +349,9 @@ def validate_memory(memory):
         if unit.kind == "finding":
             if compact:
                 require({"Kind", "Proposition"} <= set(unit.fields) <= {"Kind", "Proposition", "Qualification"}, "compact finding fields")
+            elif memory.metadata.get('lineage_mode')=='knowledge_units':
+                require(set(unit.fields)=={'Kind','Evidence status','Proposition','Explanation','Provenance','Qualification','Epistemic type'}
+                    and unit.fields['Kind']=='synthesis' and unit.fields['Epistemic type'] in {'inference','hypothesis'},'unit synthesis finding fields')
             else:
                 require(set(unit.fields) == {"Kind", "Evidence status", "Proposition", "Explanation", "Provenance"}, "finding fields")
             require(unit.fields["Kind"] in KINDS and unit.fields.get("Evidence status", "unverified") in EVIDENCE, "finding vocabulary")

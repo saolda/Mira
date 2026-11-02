@@ -214,7 +214,10 @@ class Inspector:
                     list((context.get("scientific_evidence") or {}).get("memories", [])))
         supplied_ids = {m.get("id") for m in supplied if isinstance(m, dict)}
         if corpus is not None:
-            for m in corpus: m["included_in_request"] = m["id"] in supplied_ids
+            unit_ids=[u['id'] for u in context.get('knowledge_units',[]) if isinstance(u,dict) and isinstance(u.get('id'),str)]
+            for m in corpus:
+                m["included_in_request"] = m["id"] in supplied_ids
+                m['supplied_unit_ids']=[i for i in unit_ids if i.split('#')[0]==m['id']]
         # Evidence previously retrieved is displayed separately, not inserted into context.
         retrieved = []
         if event and event.get("journal_sequence") is not None:
@@ -239,6 +242,8 @@ class Inspector:
         inputs = {"root_question": context.get("question_scope", {}).get('root_question', context.get("root_question", (context.get("question_context") or [context.get("question")])[0])), "question": context.get("question"),
             "question_context": context.get("question_context"), "node": context.get("node"),
             "ancestor_questions": context.get("ancestor_questions"), "existing_memories": supplied or None,
+            "knowledge_units":context.get('knowledge_units'),"parent_memories":context.get('parent_memories'),
+            "synthesis_objective":context.get('objective'),"novelty_context":context.get('existing_knowledge'),
             "search_evidence": context.get("research", context.get("search_evidence")), "children": context.get("children"),
             "equations": context.get("equations", context.get('scientific_evidence', {}).get('equations')), "output_contract": structured.get("output_contract"),
             "system_messages": [m for m in messages if isinstance(m, dict) and m.get("role") == "system"] or None,

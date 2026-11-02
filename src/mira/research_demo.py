@@ -29,7 +29,7 @@ class DemoLLM(ScriptedLLM):
                   "R3" if "RETRIEVED RESEARCH\n" in content else
                   "R4" if "SCIENTIFIC EVIDENCE\n" in content else
                   "R5" if "ACCUMULATED RESEARCH\n" in content else
-                  "S1" if "Eligible memory catalogue:\n" in content else "S2")
+                  "S2" if "Identify scientific synthesis opportunities" in content else "S3")
         # Fixture-only inspection of explicitly labelled JSON values, not a
         # production prompt parser or substitute for real model evaluation.
         decoder = json.JSONDecoder()
@@ -52,22 +52,19 @@ class DemoLLM(ScriptedLLM):
                         ["How do fixture conditions matter?", "What uncertainties remain?"],
                         "How do fixture conditions matter?": ["What measurement assumptions apply?"]}.get(question, [])
             value = {"questions": children}
-        elif action == "S1":
-            catalogue = decoder.raw_decode(content.split("Eligible memory catalogue:\n", 1)[1])[0]
-            groups = [[m for m in catalogue if m["node_id"] == identity]
-                      for identity in dict.fromkeys(m["node_id"] for m in catalogue)]
-            chosen = next((g for g in groups if len(g) >= 2), catalogue)
-            value = {"disposition": "select", "memory_ids": [m["id"] for m in chosen],
-                     "objective": "Compare the fictional barrier measurements and their uncertainty.",
-                     "scores": {"R": 5, "C": 4, "X": 0, "N": 3, "E": 3},
-                     "reason": "Prewritten comparison of related fixture evidence."}
+        elif action == "S2":
+            units = decoder.raw_decode(content.split("SELECTED KNOWLEDGE UNITS\n",1)[1])[0]
+            if getattr(self,'_planned',False):
+                value={"disposition":"no_candidate","ideas":[],"reason":"No additional defensible fixture integration."}
+            else:
+                self._planned=True
+                value={"disposition":"ideas","ideas":[{"category":"comparison",
+                    "objective":"Compare the fictional measurements while retaining their uncertainty.",
+                    "unit_ids":[u['id'] for u in units],"potential_new_understanding":"A scoped fixture comparison.",
+                    "limitations":["Fictional data; no real-world inference."],"novelty":"Compare the measurements rather than repeat a single source."}],
+                    "reason":"Prewritten fixture opportunity."}
         else:
-            # Stable fixtures reference exactly the selected inputs; text is prewritten.
-            value = {"disposition": "synthesis", "title": "Fixture synthesis", "summary": "Synthetic comparison with uncertainty.",
-                "findings": [{"label": "Comparison", "proposition": "The fictional values differ, with no claim of real-world validity.",
-                    "explanation": "This scripted synthesis tests traceability rather than research quality.",
-                    "provenance": "Prewritten demonstration; see every input finding.",
-                    "source_findings": [m["id"] + "#f1" for m in decoder.raw_decode(content.split("Input memories:\n", 1)[1])[0]]}]}
+            value={"disposition":"no_synthesis","reason":"The fictional repeated statements establish no defensible new scientific conclusion."}
         return dumps({"model": self.model, "choices": [{"finish_reason": "stop", "message": {"content": dumps(value)}}], "usage": None})
 
 

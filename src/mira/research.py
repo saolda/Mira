@@ -13,7 +13,7 @@ from .search import validate_search
 from . import strategies, sources, query_profiles, retrieval
 import time
 from .budget import measure
-from . import glossary, questions
+from . import glossary, questions, synthesis
 
 
 def search_outcome(result):
@@ -35,12 +35,13 @@ def search_outcome(result):
 
 
 class Research:
-    def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None, terminology=None):
+    def __init__(self, root, llm, adapters, *, control_terms=(), clock=None, sleep=None, terminology=None, embedding_backend=None):
         self.knowledge = Knowledge(store=LiveStore(root))
         self.store = self.knowledge.store
         self.llm, self.adapters = llm, adapters
         self.clock, self.sleep = clock or time.time, sleep or time.sleep
         self.glossary = glossary.Directory(self.store)
+        self.synthesis_discovery = synthesis.Discovery(self.store, embedding_backend)
         from .terminology import Enricher
         self.terminology = terminology if terminology is not None else Enricher(self.store.root.parent / 'log' / 'terminology-cache')
         self.control_terms = r1.controls(control_terms)
@@ -126,7 +127,13 @@ class Research:
         with self.store.lock():
             self.store.read()
             state = loads(self.store._files()["research/state.json"])
-            return tree.metrics(state)
+            metrics=tree.metrics(state)
+            metrics['pending_model_submissions']=[{'interaction_id':r['id'],
+                'action':r.get('request',{}).get('action'),'group_id':r.get('request',{}).get('group_id'),
+                'objective_id':r.get('request',{}).get('objective_id'),
+                'status':'response_received_uncommitted' if 'response' in r else 'uncertain_submission'}
+                for r in self._unresolved(self.store._files())]
+            return metrics
 
     def _context(self, state, memories, equations, files, node_id):
         n = state["nodes"][node_id]
@@ -191,7 +198,7 @@ class Research:
 
     def _model(self, event, action, context, state):
         context = context if action in {"R1", "R4"} else {"research_brief": None, **context}
-        reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action == "S2" else state["output_reserve"]
+        reserve = state.get("synthesis_output_reserve", state["output_reserve"]) if action in {"S2", "S3"} else state["output_reserve"]
         require(0 < self.llm.settings["max_tokens"] <= reserve, "generation limit exceeds output reserve")
         unredacted, template = decisions.prepared_request(self.llm.model, self.llm.settings, action, context)
         serialized = self.trace.clean(unredacted)
@@ -393,74 +400,28 @@ class Research:
         return True
 
     def _synthesis(self, state, memories, equations, ledger, event):
-        from . import gardener
-        pending = state["pending_synthesis"]
-        if pending is not None:
-            attempt = next(a for a in state["synthesis_attempts"] if a["id"] == pending["attempt_id"])
-            identity = attempt["node_id"]
-            event.update(action="S2", node_id=identity, question=state["nodes"][identity]["question"],
-                         attempt_id=attempt["id"], input_ids=attempt["selected_memory_ids"], selection=pending["selection"])
-            eligible = {m.id: m for m in tree.frontier(state, memories, state["root_id"])}
-            require(all(i in eligible for i in attempt["selected_memory_ids"]), "pending S2 inputs are no longer eligible")
-            inputs = [eligible[i] for i in attempt["selected_memory_ids"]]
-            require(tree.memory_versions(inputs) == attempt["memory_versions"], "pending S2 memory versions changed")
-            context = pending["context"]
-            value = self._model(event, "S2", context, state)
-            contributing = gardener.validate(value, inputs, context["input_memories"])
-            output = None
-            if value["disposition"] == "synthesis":
-                output = gardener.apply(state, memories, ledger, identity, inputs, value, context["input_memories"])
-            attempt.update(status="completed", disposition=value["disposition"], s2_interaction_id=event["interaction_id"],
-                           contributing_memory_ids=contributing,
-                           unused_memory_ids=[m.id for m in inputs if m.id not in contributing],
-                           result_memory_id=output.id if output else None,
-                           reason=value.get("reason", value.get("summary", "")))
-            state["pending_synthesis"] = None
-            event.update(disposition=value["disposition"], contributing_memory_ids=contributing,
-                         unused_memory_ids=attempt["unused_memory_ids"],
-                         memory_ids=[output.id] if output else [], generated_memories=[render(output)] if output else [])
+        register=state['unit_synthesis']
+        require(not register.get('legacy_pending'), 'blocked_legacy_synthesis: inspect historical pending execution before reevaluation')
+        if any(o['status']=='pending' for o in register['objectives'].values()):
+            synthesis.execute(state,memories,equations,ledger,self.llm,event,self._model)
+        elif register['selected_group']:
+            synthesis.plan(state,memories,equations,self.llm,event,self._model)
         else:
-            event.update(action="S1", node_id=state["root_id"], question=state["nodes"][state["root_id"]]["question"])
-            context = gardener.selection_context(state, memories, equations, self.llm.model, self.llm.settings,
-                                                 getattr(self.llm, "count_tokens", None))
-            value = self._model(event, "S1", context, state)
-            inputs = gardener.validate_selection(value, state, memories)
-            event["decision"] = value
-            if not inputs:
-                event["reason"] = "no_candidate"
-                # The guard applies while research continues too. New eligible
-                # memory versions or question scope invalidate it in refresh().
-                state["synthesis_evaluated_catalogue"] = {"fingerprint": tree.catalogue_fingerprint(state, memories),
-                                                        "reason": value["reason"], "interaction_id": event["interaction_id"]}
-                state.pop("synthesis_deferred", None)
-            else:
-                identity, supplied, selection = gardener.prepare(state, memories, equations, inputs, value["objective"],
-                    self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None))
-                event.update(node_id=identity, input_ids=[m.id for m in inputs], selection=selection,
-                             scores=value["scores"], score=sum(value["scores"].values()))
-                if supplied is None:
-                    previous = state.get("synthesis_deferred", {})
-                    signature = digest(dumps({"versions": tree.memory_versions(inputs), "selection": selection}))
-                    deferred = {"node_id": identity, "reason": "no_fitting_collection", "signature": signature,
-                                "attempts": previous.get("attempts", 0) + 1 if previous.get("signature") == signature else 1}
-                    state["synthesis_deferred"] = deferred
-                    event.update(reason="no_fitting_collection", deferred=deferred)
-                    if not state["living_priority_order"] and not state["ripeness_order"]:
-                        event["status"] = "blocked_synthesis"
-                else:
-                    attempt_id = uuid.uuid4().hex
-                    state["synthesis_attempts"].append({"id": attempt_id, "node_id": identity,
-                        "selected_memory_ids": [m.id for m in inputs], "memory_versions": tree.memory_versions(inputs),
-                        "objective": value["objective"], "scores": value["scores"], "score": sum(value["scores"].values()),
-                        "selection_reason": value["reason"], "s1_interaction_id": event["interaction_id"],
-                        "s2_interaction_id": None, "status": "pending", "disposition": None,
-                        "contributing_memory_ids": [], "unused_memory_ids": [m.id for m in inputs],
-                        "reason": "", "result_memory_id": None})
-                    state["pending_synthesis"] = {"attempt_id": attempt_id, "context": supplied, "selection": selection}
-                    state.pop("synthesis_deferred", None)
-                    event["attempt_id"] = attempt_id
-        state["synthesis_cycles"] += 1; state["research_cycles_since_synthesis"] = 0
+            event.update(action='S1',node_id=state['root_id'],question=state['nodes'][state['root_id']]['question'])
+            synthesis.select(state,memories,equations,self.llm,self.synthesis_discovery,event)
+        state['synthesis_cycles']+=1
+        register['burst']=min(3,register['burst']+1)
+        state['research_cycles_since_synthesis']=0
         return True
+
+    @staticmethod
+    def _synthesis_due(state, *, other_ready=True):
+        register=state['unit_synthesis']
+        if not state['synthesis_candidate_order']:return False
+        # Complete the first S1/S2/S3 pipeline promptly, then yield to direct
+        # work. Multiple pending objectives survive the intervening cadence.
+        return (not other_ready or state['research_cycles_since_synthesis']>=state['synthesis_interval'] or
+                synthesis.pending(state) and register['burst']<3)
 
     def step(self, *, fault=None):
         with self.store.lock():
@@ -474,6 +435,12 @@ class Research:
                 "uncertain_provider_submission: inspect retrieval_calls and explicitly acknowledge before another search")
             original = deepcopy((state, memories, equations, ledger))
             state = tree.upgrade(state, memories)
+            if state['unit_synthesis'].get('legacy_pending'):
+                return {'status':'blocked_legacy_synthesis','reason':'Historical pending synthesis requires operator review; no automatic replay.','pending_synthesis':state['pending_synthesis']}
+            from .synthesis_discovery import REPRESENTATION
+            discovery_identity={'representation':REPRESENTATION,'backend':getattr(self.synthesis_discovery.backend,'identity',None)}
+            if state['unit_synthesis'].get('discovery_identity')!=discovery_identity:
+                state['unit_synthesis'].update(discovery_identity=discovery_identity,scanned=None)
             retrieval.upgrade(state)
             if retrieval.enabled(state): retrieval.restore_spacing(self, state)
             self._retrieval_fault = fault
@@ -500,8 +467,7 @@ class Research:
                     active = state['active_node_id']
                     if active not in ready and ready: state['active_node_id'] = ready[0]
                     blocked = [i for i in state['living_priority_order'] if state['nodes'][i].get('search_blocked')]
-                    synthesis_due = state['pending_synthesis'] is not None or bool(state['synthesis_candidate_order'] and
-                        (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] or blocked and not ready))
+                    synthesis_due = self._synthesis_due(state,other_ready=bool(ready or state['ripeness_order']))
                     branching_due = branching.due(state) or bool(blocked and not ready and state['ripeness_order'])
                     if state['living_priority_order'] and not ready and not synthesis_due and not branching_due:
                         pending = {i:[{**e, 'eligible_at':retrieval.eligible_at(state,e,self.adapters.get(e['provider']))}
@@ -518,7 +484,7 @@ class Research:
                             'pending_r4': blocked,
                             'research_cycles':state['research_cycles'], 'synthesis_cycles':state['synthesis_cycles']}
                 else:
-                    synthesis_due = state['pending_synthesis'] is not None or (state['research_cycles_since_synthesis'] >= state['synthesis_interval'] and state['synthesis_candidate_order'])
+                    synthesis_due = self._synthesis_due(state,other_ready=bool(state['living_priority_order'] or state['ripeness_order']))
                     branching_due = branching.due(state)
 
                 if synthesis_due:
@@ -539,6 +505,8 @@ class Research:
                         success = True
                 elif state["active_node_id"] is None:
                     if not state["synthesis_candidate_order"]:
+                        if synthesis.blocked(state):
+                            return {"status":"blocked_synthesis","reason":"Synthesis validation, context or legacy pending work requires review.","unit_synthesis":state["unit_synthesis"]}
                         if state["terminal_event"] is not None and original[0] == state:
                             return {"status": "finished", "research_cycles": state["research_cycles"], "synthesis_cycles": state["synthesis_cycles"]}
                         event.update(action="finished", status="finished", node_id=None)
@@ -549,11 +517,13 @@ class Research:
                     extras, success = self._research(state, memories, equations, ledger, files, event)
                 event["exhaustion"].extend(branching.assess(state, memories, equations, self.llm.model, self.llm.settings, getattr(self.llm, "count_tokens", None)))
                 tree.refresh(state, memories)
+                if success and event['action'] not in {'S1','S2','S3'}:
+                    state['unit_synthesis']['burst']=0
                 if success:
                     state["recent_activity"] = (state["recent_activity"] + [{"cycle": event["cycle"],
                         "action": event["action"], "node_id": event["node_id"], "timestamp": event["timestamp"]}])[-20:]
                 event["tree"] = deepcopy(state["nodes"])
-                if state["active_node_id"] is None and not state["ripeness_order"] and state["pending_synthesis"] is None and not state["synthesis_candidate_order"] and state["terminal_event"] is None:
+                if state["active_node_id"] is None and not state["ripeness_order"] and not synthesis.pending(state) and not synthesis.blocked(state) and not state["synthesis_candidate_order"] and state["terminal_event"] is None:
                     terminal_id = "terminal_" + event_id
                     state["terminal_event"] = terminal_id
                     terminal = {"run_id": state["run_id"], "timestamp": now(), "cycle": event["cycle"],
@@ -584,17 +554,12 @@ class Research:
                 event["tree"] = deepcopy(state["nodes"])
                 event.update(status="rejected", error=self.trace.clean(str(exc)), error_type=type(exc).__name__)
                 success = False; extras = {}
-                if event.get("action") == "S2" and state.get("pending_synthesis") is not None:
-                    # The failed attempt is durable, but never excludes a future
-                    # fresh S1 selection. All proposed memory/ID changes rolled back.
-                    pending_id = state["pending_synthesis"]["attempt_id"]
-                    attempt = next(a for a in state["synthesis_attempts"] if a["id"] == pending_id)
-                    attempt.update(status="failed", s2_interaction_id=event.get("interaction_id"), reason=event["error"])
-                    state["pending_synthesis"] = None
-                    state["synthesis_cycles"] += 1
-                    state["research_cycles_since_synthesis"] = 0
-                    state["revision"] += 1
-                    tree.refresh(state, memories)
+                if event.get('action') in {'S2','S3'} and 'unit_synthesis' in state:
+                    synthesis.fail(state,event)
+                    state['synthesis_cycles']+=1
+                    state['research_cycles_since_synthesis']=0
+                    state['revision']+=1
+                    tree.refresh(state,memories)
             interaction = event.get("interaction_id")
             if interaction:
                 self.trace.write(interaction, "validation", {"timestamp": now(), "accepted": success and event.get("extraction_accepted", True),
