@@ -1,0 +1,13 @@
+# Proposed glossary documentation amendments
+
+For review after the R1 provisional-definition implementation; no amendment to `architecture.md` or `futureWork.md` was made by this task.
+
+1. **R1 contract:** document optional, low-priority DEFINE alongside DISCOVER/SELECT; zero to three existing supplied glossary IDs; independent per-component validation; legacy compatibility; one model call and unchanged context/output limits. New concepts remain unverified candidates rather than new source-supported glossary entries.
+2. **Canonical representation:** specify the `llm_generated`/`provisional` definition row, actual model identity, scope/ambiguity, question/node context, interaction/event references and template/request hashes. Define model-only `provisional` availability while retaining the existing independently sourced status meanings. Require append-only preservation and same-R1 journal publication.
+3. **Preference and applicability:** record deterministic applicable authority > source-supported > provisional preference. A terminology match without a usable definition is not sufficient. Describe the initial lexical applicability heuristic and its limitations; do not describe it as reliable scientific disambiguation.
+4. **Enrichment and repetition:** provisional availability does not suppress MeSH backlog work or alter cooldowns/retries. An applicable stored provisional definition suppresses routine regeneration; a materially different question scope can permit reconsideration. Define any future explicit invalidation/review mechanism before adding it; none is introduced here.
+5. **Scientific boundary and presentation:** model definitions are terminology guidance, never independent evidence. Exports and R1 context must identify origin/verification and retain source-supported passages separately. Model errors must remain auditable rather than silently corrected.
+
+Recommended follow-up evaluation: independently reviewed ambiguous-term cases, scope changes with synonyms/shared generic words, paired repeated search/retrieval trials under matched budgets, and measurement of provisional-error propagation into later R1 selections. The current single paired Qwen comparison demonstrates functionality and added cost, not improved search quality. In particular, the retained volume-versus-diameter doubling qualification shows why scientific validation cannot be inferred from schema validation.
+
+Synthesis discovery and production S1–S3 redesign remain a separate decision. Preserving the committed experiment in this change imposes no permanent restriction on that redesign.
