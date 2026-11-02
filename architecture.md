@@ -238,7 +238,7 @@ Other research nodes and synthesis actions may be scheduled between steps.
 
 | Action | Name | Responsibility | Key variables / effects | LLM calls |
 | --- | --- | --- | --- | ---: |
-| **R1** | **Plan** | Discover 0–6 genuinely new concepts and select one ordered search plan for the **whole provider round**. | Read selected `question` and bounded context; supply `term_limit = max(profile.max_terms)` for this strategy; persist new candidates and accepted `keywords`/`search_concepts`; increment `search_round`; reset `next_database_index=0`. Empty/repeat-only selection sets a durable `search_blocked` flag. | **1** |
+| **R1** | **Plan** | Discover 0–6 genuinely new concepts and select one ordered search plan for the **whole provider round**. Use glossary definitions as terminology context; do not generate definitions. | Read selected `question` and bounded context; supply `term_limit = max(profile.max_terms)` for this strategy; persist new candidates and accepted `keywords`/`search_concepts`; increment `search_round`; reset `next_database_index=0`. Empty/repeat-only selection sets a durable `search_blocked` flag. | **1** |
 | **R2** | **Search** | Compile and execute **one logical provider search** using the **same R1 concept list**. | Read `keywords`, `next_database_index` and the provider's snapshotted query profile; advance index **once on first visit**; record `provider_outcomes`, query/receipt and optional `deferred_searches`; set `pending_results` for new sources. | **0** |
 | **R3** | **Extract** | Extract one previously unprocessed retrieved source. | Read `pending_results` and the per-source processed cursor; create at most one `r*` memory, accepted glossary terms/equations and source disposition; advance processing state atomically. | **1** |
 | **R4** | **Assess** | Assess whether relevant direct and synthesized scientific evidence answers the selected question, is irrelevant to both parent and root, or remains unresolved. | Read `question`, `question_scope`, `scientific_evidence`; return `answered|kill|unresolved`. Python persists `last_r4_assessment`, updates `status=answered|killed`, resets R1 when unresolved and unblocked, or sets `exhaustion_reason=search_blocked` and `status=exhausted` when unresolved and blocked. | **1** |
@@ -366,16 +366,18 @@ that current retention already behaves this way.
 
 ### R1: discovery and search-term selection
 
-R1 performs exactly **one LLM call per research round**, with three tasks
-in priority order: **discover** 0–6 genuinely new scientific concepts,
-**select** up to `term_limit` concepts for the shared search plan, and
-optionally **define** up to three relevant existing glossary terms that lack
-applicable independently sourced definitions. Definition generation is subordinate
-to search planning and does not require an additional LLM call. Zero discoveries,
-zero selected concepts or zero definitions are each permitted when justified.
-Selection may reuse established concepts and need not use newly discovered ones.
-R1 does not create subquestions; R5 does that. Do not invent terminology merely
-to appear novel.
+R1 performs exactly **one LLM call per research round**. Its two responsibilities
+are to **discover** 0–6 genuinely new scientific concepts relevant to the assigned
+research question and **select** up to `term_limit` concepts for the shared provider
+search plan. Zero discoveries or zero selected concepts are permitted when
+justified. Selection may reuse existing concepts and need not use newly
+discovered ones. R1 does not create subquestions; R5 does that. It must not
+invent terminology merely to appear novel.
+
+R1 uses applicable glossary definitions for terminology and disambiguation but
+does **not** generate, validate or update glossary definitions. Independent
+glossary enrichment supplies those definitions before, during or after research;
+its backlog never blocks an otherwise valid R1 or a completed research round.
 
 Python supplies **only the inputs that inform these tasks**:
 
@@ -388,17 +390,13 @@ Python supplies **only the inputs that inform these tasks**:
 | `term_limit` | The **single integer maximum** across the profiles of providers in the current strategy; order up to this many concepts by search value. No individual-provider profile list is supplied. |
 | `control_terms` | Exclude supplied prohibited terms/phrases. |
 
-The structured response contains `new_concepts`, `search_concepts`,
-optional `provisional_definitions` and `reason`. Definition proposals identify
-an existing supplied glossary ID and include `definition`, `scope` and
-`ambiguity`; the list is bounded to three and may be empty. Legacy responses
-without the optional field remain interpretable. New concepts number 0–6;
+The structured R1 response contains `new_concepts`, `search_concepts` and
+`reason`, without any definition-generation output. New concepts number 0–6;
 selected concepts number 0–`term_limit`. An empty selection is valid when
 no worthwhile distinct search exists. Each concept is one meaningful term
 or phrase of at most five words, without Boolean operators, provider names,
-field tags or query syntax. Python validates individual components; malformed
-or unsupported optional definitions do not invalidate an otherwise valid
-search plan. Accepted `search_concepts` become the round's `keywords`.
+field tags or query syntax. Python validates individual components; accepted
+`search_concepts` become the round's `keywords`.
 
 Python retains every newly proposed concept in a **durable per-node
 candidate register**, separate from the source-supported glossary.
@@ -483,60 +481,152 @@ structured synthesis projections retain the source and all substantive units.
 
 ### Research glossary
 
-Each experiment stores durable `glossary/g1.json`, `g2.json`, etc. IDs are decimal,
-monotonic and independent of memory IDs. Records retain canonical spelling,
-aliases, source-supported and model-generated definitions and qualifications,
-supporting passages, source IDs, immutable retrieval references, node context
-and typed links to other terms. Status distinguishes `candidate`, `provisional`,
-`source_defined` and `multiple_definitions`; provisional availability must not
-be confused with independently sourced evidence. Definitions with different
-scope or provenance remain separate. Glossary entries are terminology records,
-not new scientific knowledge units.
+#### Purpose and completion target
 
-R3 may propose up to five terms per source in its existing call. Each proposal has
-exactly `term`, nullable `definition`, `aliases`, `relationships`, `source_id`,
-`passage` and `qualification`. Relationship proposals name another term and use
-`SYNONYM_OF`, `BROADER_THAN`, `NARROWER_THAN` or `RELATED_TO`. Python verifies the
-source ID and exact supporting passage against supplied source content. Non-null
-definitions must quote a definitional statement containing the term within that
-passage. Otherwise the model should supply a candidate with null definition.
-Aliases require explicit naming evidence, and relationships require explicit
-supported wording; co-occurrence alone is insufficient. Unknown relationship
-targets are logged and omitted. Invalid optional proposals are logged independently
-and cannot reject otherwise valid substantive extraction. Invalid substantive
-extraction retains the existing skipped-source behavior and admits no terms.
+Mira maintains one canonical **scientific terminology glossary** within the
+active `memory/` corpus. It is an independently maintained scientific resource,
+not a by-product of continuing R1/R3 execution. Its objective is an applicable,
+useful, **attributed definition for every legitimate glossary concept**, whether
+or not research and synthesis continue. Glossary records are terminology, not
+independent empirical knowledge units. Missing, ambiguous and failed entries
+remain visible; they must not be removed or silently counted as defined to
+raise coverage.
 
-Matching uses Unicode normalization, case folding, whitespace and hyphen-spacing
-normalization, without fuzzy scientific equivalence. A source-supported redundant
-parenthetical abbreviation in a canonical label is separated into its alias.
-Expanded names merge conservatively; shared abbreviations do not merge concepts,
-and bare acronym labels retain definition/source scope. Definition and relationship
-grounding is deliberately conservative textual validation, not semantic verification.
+#### Canonical concepts, source admission and disambiguation
 
-Applicable definition precedence is: authoritative terminology description,
-source-extracted definition, then provisional LLM-generated definition. An
-authoritative match without an applicable descriptive definition does not count
-as a completed definition. All definitions and qualifications remain preserved
-when a preferred definition changes. Provisional definitions record the actual
-model identity, scope, ambiguity, generating interaction/event, template and
-request provenance, and `verification=provisional`; they are terminology guidance,
-not independent scientific evidence. Their presence does not suppress later
-MeSH enrichment. Previously accepted applicable provisional definitions are
-reused without routine same-scope regeneration. Contextual applicability uses
-conservative lexical signals and is not infallible scientific disambiguation.
+Each concept retains a stable ID, preferred term, aliases/abbreviations,
+definitions with scope and qualifications, provenance and verification, source
+citations and supporting passages, typed concept relationships, and an
+enrichment status/revision. Distinct scientific meanings may have separate
+records or separate explicitly scoped definitions; shared acronyms do not
+justify merging concepts. Ordinary enrichment preserves identity and meaning,
+while approved development-time schema replacements may remove obsolete
+generated representations. Do not retain parallel legacy schemas merely to
+support obsolete fixtures.
 
-`glossary.sqlite3` is a disposable exact-name/alias, FTS5 and relationship directory.
-Normal retrieval and deduplication use indexed bounded lookup and deserialize only
-selected or touched records. An absent, stale or corrupt directory is rebuilt or
-incrementally caught up from committed journal hashes and canonical records.
-Rebuilds and explicit full integrity audits may scan all terms; ordinary R1 does
-not. The index is refreshed lazily after commitment, so a cache failure cannot
-partially publish terminology. `glossary-rebuild --experiment NAME` explicitly
-rebuilds it. `glossary-export --experiment NAME` atomically regenerates the derived,
-case-insensitive alphabetical `research/glossary.md` and searchable
-`research/glossary.html`, including definitions, provenance, evidence and links.
-R3 and R1 do not rewrite these whole exports; explicit regeneration produces
-consistent derived views. Model-defined entries are visually marked provisional.
+R3 may propose up to five terms from each retrieved source in its existing
+extraction call. It identifies the source, exact relevant passage and
+qualification, and may provide a definition only when the original passage
+actually defines the term. An occurrence or a model paraphrase cannot be
+represented as a quotation defining it. Proposal aliases and relationships
+require source support. Independent proposal validation must not invalidate
+otherwise valid scientific extraction. R1-discovered terms remain unverified
+search candidates until admitted to the glossary through source evidence or
+another explicitly validated concept-admission mechanism.
+
+Normalize names conservatively (Unicode, case, whitespace, hyphenation);
+avoid fuzzy scientific equivalence and unsupported abbreviation expansion.
+Use research question, source passage, source identifiers, scope and
+relationships to disambiguate meanings. Unresolvable ambiguity is recorded
+as a specific, inspectable exception, never a guessed completion.
+
+#### Definitions and attribution
+
+An applicable definition may be:
+
+1. **Authoritative**: a recognised terminology authority such as biomedical
+   MeSH supplies actual descriptive text. Retain provider, stable concept ID,
+   URL, retrieved time, exact description and scope. A mere name match with
+   no applicable description does not count as a definition.
+2. **Research-derived**: a definitional statement supported by original
+   literature. Retain source identifier/citation, precise supporting passage,
+   extraction reference and qualifications. A passage merely mentioning the
+   term does not independently verify its meaning.
+3. **Model-generated**: Mira's configured LLM proposes a contextually grounded
+   definition when appropriate independently sourced definitions are unavailable.
+   Retain actual model identity, text, scope, ambiguity, timestamp and complete
+   prompt/interaction provenance; mark `verification=provisional`. Supporting
+   passages establish the context, not independent verification. Do not invent
+   authority, publication, empirical observation or quotation.
+
+For the same applicable meaning, prefer authoritative, then research-derived,
+then provisional definitions. **Scientific applicability comes before source
+prestige**; a strong description of the wrong sense is not preferred. Preserve
+distinct justified meanings, source references and qualifications. A better
+definition may supersede redundant provisional data without requiring permanent
+retention of duplicate generated prose; essential attribution and scientific
+provenance remain inspectable. New research or explicit invalidation can reopen
+enrichment, but stable completed scopes are not regenerated on each run.
+
+#### Independent, bounded, resumable enrichment
+
+A production glossary-enrichment operation scans the **whole active glossary**
+for missing or inadequate definitions and processes it incrementally,
+independently of R1–R5 or S1–S3 scheduling. It does not require a new research
+round, a new experiment or re-extraction of already processed papers. For each
+eligible concept it checks existing scoped definitions, relevant retained
+research passages, suitable authoritative terminology, and where needed
+generates a provisional model definition. It validates scope, attribution,
+text quality and scientific plausibility before admission.
+
+Individual network/model calls are bounded by rate, token and time budgets;
+batch limits must not cap total backlog coverage. The operation maintains
+durable work status, completed concept version/scope, failures, retries and
+unresolved ambiguities. Successful repeats are idempotent; interruption
+resumes without silently replaying a completed or uncertain external model
+submission. A temporary provider failure must not falsely mark a term complete,
+and the complete backlog must be able to proceed despite a failed individual
+term. Explicit reports separate errors from genuine ambiguity.
+
+Model contexts are compact and per-concept or bounded-batch: term, aliases,
+relevant original evidence, research scope and relationships. Do not flood a
+single model call with the complete glossary. Do not accept circular filler,
+fabricated source references, incorrect abbreviation expansions or unsupported
+scientific relationships. Independently check explicit quantitative definitions
+where feasible; volume and diameter doubling time are distinct quantities.
+
+#### Canonical persistence and indexes
+
+Glossary records and enrichment progress belong to one authoritative active
+corpus, committed with Mira's journal and atomic after-image protocol.
+R3-originated term changes share the R3 transaction; independent enrichment
+has its own transaction and durable interaction receipts. Definition admission,
+attribution, changed records, completion state and canonical revision are
+committed consistently. Uncertain submitted model calls are not automatically
+reissued; interrupted commits follow normal recovery.
+
+Search/alias, FTS and relationship indexes, caches and HTML/Markdown are
+**derived** and rebuildable. Ordinary retrieval reads bounded relevant entries
+rather than scanning every term. Full audit, backlog scheduling, export and
+explicit rebuild may enumerate the complete canonical glossary. Obsolete
+glossary-specific schemas or caches can be replaced during development,
+without preserving parallel originals, but do not delete unrelated scientific
+memories, private user inputs or the evidence needed to attribute definitions.
+
+#### Standard commands and viewing
+
+`glossary-enrich` runs/resumes independent enrichment over all outstanding
+concepts or a bounded batch, using the configured LLM and applicable authority
+providers; it reports progress, per-term failures, coverage and remaining work.
+`glossary-export` regenerates the standard active corpus views;
+`glossary-view` provides the standard glossary presentation;
+`glossary-rebuild` rebuilds derived indexes. Commands default to the
+**actual active corpus**, not an implicit legacy collection. After successful
+enrichment, derived views are regenerated or explicitly invalidated so that
+stale HTML is not mistaken for the current glossary.
+
+The user-facing outputs remain `memory/research/glossary.html` and
+`memory/research/glossary.md`. The searchable HTML view prominently displays
+the preferred definition, provenance and verification badge, scientific
+scope/ambiguity, alternative meanings, citations, supporting passages and
+related terms. Model-only definitions are clearly **provisional**; users must
+not encounter “No source definition recorded” where a useful provisional
+definition exists. The standard local Mira viewer provides discoverable,
+read-only access to the current glossary rather than making users navigate
+experimental directories or logs.
+
+Exports include generation time and canonical glossary revision. Show a
+coverage summary for the **entire active glossary**: total concepts; concepts
+with applicable authoritative definitions; research-derived definitions;
+provisional-only definitions; unresolved ambiguity; and concepts lacking usable
+definitions. Distinguish overlapping provenance counts from mutually exclusive
+preferred-source classes. Every unresolved or failed entry has a concrete
+reason. Enrichment completion is measured by actual concept coverage and
+quality, not by the count of successful model calls.
+
+Glossary completeness is independent of research/synthesis termination. The
+design target is zero undefined, unambiguous legitimate concepts, with any
+unresolved exceptions individually disclosed and not represented as complete.
 
 ### R4: assess research progress
 
@@ -1019,6 +1109,11 @@ The read-only local viewer continues showing canonical state and the exact saved
 request, prompt source/hash/bindings, raw model response, validation, outcome,
 retrieved evidence, generated Markdown and historical tree changes. R5 is an
 independent recorded action. Exports work without a running model or SQLite.
+Glossary inspection is independent of research/synthesis progress: the standard
+viewer links to the active searchable glossary, its attributed definitions,
+provisional/authoritative statuses, coverage and unresolved terms. It reads a
+revision-matched canonical view or marks stale exports clearly. A finished
+research investigation does not block continued glossary enrichment.
 
 Research executions additionally export existing interaction phases and action
 events incrementally to one append-only JSONL file under the project-level
@@ -1092,16 +1187,18 @@ after-images are fsynced, a prepared manifest is published before canonical edit
 individual atomic replacements are fsynced, and a committed marker appears only
 after complete validation. R5 commits its receipt, child IDs, allocator and event
 through this same protocol. A crash cannot silently grant a second committed split.
-Glossary edits use the same journal operation as their generating R1 or R3
-research action, state and event. Only affected records are staged/replaced. State stores the term
-allocator, revision, budgets and a hash-chain commitment to changed term hashes;
-this binds sparse glossary updates into the canonical revision without reading
-the full glossary on each action. Recovery checks touched after-images and their
-commitment before completing the joint operation. Indexed reads verify selected
-record hashes against the committed directory; full validation and recovery
-inspection verify every term against journal hashes, including missing/unregistered
-records and dangling glossary links. Untouched record damage is detected by its
-next lookup or an explicit full audit, not by a full scan at each R1.
+R3 glossary admissions share the R3 research transaction; **independent
+glossary enrichment** commits its own journaled operation. Each operation
+atomically records changed concept after-images, admitted definition provenance,
+enrichment status, revision and durable interaction receipts. An interrupted
+or uncertain model submission cannot silently publish or generate duplicate
+definitions. The term allocator, canonical revision and integrity commitments
+remain consistent. Rebuildable indexes, caches and generated views are never
+independent authorities. Ordinary lookup verifies touched records; full audits
+and explicit rebuilds verify the complete current glossary. Superseded glossary
+schemas and redundant generated representations need not be preserved as
+permanent compatibility layers; retain scientific attribution and necessary
+research source references.
 
 On incomplete operations, canonical access blocks for recovery assessment.
 `recovery inspect/validate` are read-only assessments; `recovery repair ID` defaults
@@ -1139,8 +1236,10 @@ rather than discarded or directly rescheduled on a split node. Existing memory b
 prompts remain interpretable by the compatibility parser while a legacy
 corpus is selected. **Explicit new-experiment reset intentionally discards the
 previous generated scientific corpus**, as separately authorized; this is
-not an in-place scientific migration. Historical R3 responses without
-glossary fields remain valid; the glossary initializes lazily when needed.
+not an in-place scientific migration. The current glossary schema supersedes obsolete glossary-specific generated
+formats. Compatibility is not a permanent requirement for superseded glossary
+data during active development; explicit schema replacement must retain
+scientifically meaningful attribution and source references.
 
 The historical Phase 1 snapshot store remains supported for compatible reads.
 Autonomous research uses live persistence in the single active corpus;
