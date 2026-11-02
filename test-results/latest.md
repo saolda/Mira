@@ -1,22 +1,22 @@
 # Latest development test results
 
-Recorded: 2026-10-31T04:37:33.486416+00:00
+Recorded: 2026-11-02T02:38:03.935821+00:00
 
-Tested implementation commit: `6fcb80604a12dfaa53da2bcbc22ceff4ea2939ea (working tree under test)`.
+Tested implementation commit: `2b782321891f629d9db064ecda4af2f9cbd36b0e (working tree under test)`.
 
-Tests: **392**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **500**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-glossary-export/glossary-view compatibility; complete hash-validated records and provenance; Unicode alphabetical ordering; standalone HTML with safe names/aliases-only search, keyboard navigation, highlighting, relationship links and CSP; corrupt/stale index repair; deterministic and atomic exports; canonical-state and recovery preservation. Real offline Chromium desktop/mobile checks passed. Current corpus exports contain 6 entries.
+S1 relatedness/opportunity neighbours, bounded scientific ranking and soft diversity; separate background-only S2 contract; disposable Qwen/Nomic evaluation; S3 prompt unchanged.
 
 ## Regressions and limitations
 
-None reported.
+- Structural acceptance does not establish scientific validity; Qwen retains root-question bias, inequality errors and unsupported mechanisms. See s1-s2-planning-improvement-20261102.md.
 
 ## Execution logs
 
-No persistent experiment was run; automated fixtures use temporary directories.
+- `log/s1-s2-improvement-20261102/live/result.json`
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.

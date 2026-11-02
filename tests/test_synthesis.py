@@ -5,9 +5,11 @@ import multiprocessing
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from mira import synthesis as sy, synthesis_discovery as sd, research_tree as tree, gardener
 from mira.decisions import ScriptedLLM
@@ -62,7 +64,7 @@ class FixtureModel(ScriptedLLM):
     def complete(self, wire):
         self.requests.append(wire);text=loads(wire)['messages'][0]['content'];decoder=json.JSONDecoder()
         units=decoder.raw_decode(text.split('SELECTED KNOWLEDGE UNITS\n',1)[1])[0]
-        if text.startswith('Identify scientific'):
+        if text.startswith('Your primary task is to discover'):
             value=plans() if self.planned else plans(*(idea([u['id'] for u in units],f'Compare qualified measurements, objective {i}.') for i in range(self.objectives)))
             self.planned=True
         elif self.publish:
@@ -124,6 +126,12 @@ class SynthesisTests(unittest.TestCase):
         event=reopened.step();self.assertEqual(event['action'],'S1');self.assertTrue(event['embedding_capability']['semantic'])
         self.assertEqual(backend.embed.call_count,2);self.assertFalse(reopened.llm.requests)
         self.assertEqual(reopened.step()['status'],'finished')
+    def test_ranking_policy_reopens_scan_without_replaying_evaluated_versions(self):
+        self.r.llm=ScriptedLLM([plans()]);self.advance();self.r.step()
+        self.assertEqual(self.r.step()['status'],'finished');before=deepcopy(self.state()['unit_synthesis']['groups'])
+        with patch.object(sd,'RANKING','future-ranking'):
+            event=self.r.step();self.assertEqual((event['action'],event['reason']),('S1','no_candidate'))
+        self.assertEqual(self.state()['unit_synthesis']['groups'],before);self.assertEqual(len(self.r.llm.requests),1)
     def test_only_actual_s3_subset_establishes_participation(self):
         with tempfile.TemporaryDirectory() as root:
             r=Research(root,ScriptedLLM([]),{});r.initialize('Question?', ['fixture'],context_budget=200000)
@@ -249,7 +257,11 @@ class SynthesisTests(unittest.TestCase):
                 _,docs,eqs,_=r.store.read();s=loads(r.store._files()['research/state.json']);units=sy.records(s,docs,eqs)
             self.assertEqual({u['memory_id'] for u in units},{'r1','r2'})
             self.assertEqual(sy.owner(s,units),'q1')
-            self.assertEqual(r.step()['selection']['memory_ids'],['r1','r2'])
+            group=r.step()['selection'];self.assertEqual(group['memory_ids'],['r1','r2'])
+            supplied=group['context'];self.assertEqual(supplied['question'],{'same_as':'root_question'})
+            self.assertEqual(supplied['parent_memories'][0]['question'],{'same_as':'root_question'})
+            self.assertEqual(supplied['parent_memories'][1]['question'],'Child?')
+            self.assertEqual(supplied['knowledge_units'],units)
     def test_fairness_yields_after_pipeline_with_more_objectives_pending(self):
         with tempfile.TemporaryDirectory() as root:
             r=Research(root,FixtureModel(objectives=3),{});r.initialize('Question?', ['fixture'],context_budget=200000)
@@ -355,6 +367,61 @@ class SynthesisTests(unittest.TestCase):
                 self.assertIn(distinction,text)
         text=PromptTemplates().sources('S3')[0]['source']
         self.assertIn('AUC',text);self.assertIn('no_synthesis',text)
+    def test_s2_contract_background_order_and_s3_contract_preserved(self):
+        from mira.prompts import SLOTS, PromptTemplates
+        self.r.step();group=next(iter(self.state()['unit_synthesis']['groups'].values()))
+        supplied=group['context'];self.assertNotIn('objective',supplied)
+        self.assertEqual(supplied['question'],{'same_as':'root_question'})
+        self.assertTrue(all(p['question']=={'same_as':'root_question'} for p in supplied['parent_memories']))
+        text=PromptTemplates().render('S2',supplied)[0][0]['content']
+        self.assertLess(text.index('SELECTED KNOWLEDGE UNITS\n'),text.index('ROOT QUESTION\n'))
+        self.assertEqual(text.count(self.state()['nodes']['q1']['question']),1)
+        self.assertNotIn('objective',SLOTS['S2']);self.assertIn('objective',SLOTS['S3'])
+        self.assertNotIn('{{objective}}',PromptTemplates().sources('S2')[0]['source'])
+        with self.r.store.lock():_,docs,eqs,_=self.r.store.read()
+        objective=idea();s3=sy.context(self.state(),group,self.units(),docs,objective=objective)
+        self.assertEqual(s3['objective'],objective);self.assertEqual(s3['question'],s3['root_question'])
+        self.assertEqual(digest(PromptTemplates().sources('S3')[0]['source']),
+            'e9c3f5674569a49525d137c982bd8c67cc762a195d5ccdf126b973ee19a442ba')
+        self.assertEqual(set(s3),set(SLOTS['S3']))
+    def test_saved_pre_change_s2_context_adapted_without_rewriting_selection(self):
+        # Reproduce the old committed S1 receipt, including its null objective.
+        select=sy.select
+        def historical_selection(*args):
+            select(*args);state=args[0];event=args[-1]
+            group=state['unit_synthesis']['groups'][state['unit_synthesis']['selected_group']]
+            group['context']['objective']=None
+            group['context']['question']=group['context']['root_question']
+            event['selection']=deepcopy(group)
+        with patch.object(sy,'select',side_effect=historical_selection):self.r.step()
+        state=self.state();key=state['unit_synthesis']['selected_group'];group=state['unit_synthesis']['groups'][key]
+        saved=deepcopy(group['context']);restarted=Research(self.root,FixtureModel(),{})
+        self.assertEqual(restarted.step()['status'],'committed')
+        self.assertEqual(self.state()['unit_synthesis']['groups'][key]['context'],saved)
+        current=read_records(self.root)[0]['request']['context']
+        self.assertNotIn('objective',current);self.assertEqual(current['question'],{'same_as':'root_question'})
+        self.assertEqual(current['knowledge_units'],saved['knowledge_units'])
+    def test_narrow_objective_and_valid_abstention_are_independently_supported(self):
+        self.r.llm=ScriptedLLM([plans(idea(objective='Compare the measurement methods without resolving the original diagnosis.'))])
+        self.advance();self.assertEqual(len(self.state()['unit_synthesis']['objectives']),1)
+        accepted,rejected=sy.validate_s2(plans(),self.units());self.assertEqual((accepted,rejected),([],[]))
+        from mira.prompts import PromptTemplates
+        text=PromptTemplates().sources('S2')[0]['source']
+        for clause in ['Do not reject an otherwise useful','own scientific merit','Do not force','<=400 days includes 28 days','Check inequalities']:
+            self.assertIn(clause,text)
+    def test_volume_diameter_regression_arithmetic_is_not_scientific_proof(self):
+        # The known model error: V proportional to D^3 implies Td=3*Tv=84,
+        # not Tv/3. Declared arithmetic alone cannot verify that mapping.
+        units=self.units();units[0]['fields']['Proposition']='Volume is proportional to diameter raised to exponent 3.'
+        units[1]['fields']['Proposition']='The defined volume doubling interval is 28 days.'
+        check={'operation':'ratio','operands':[{'unit_id':units[1]['id'],'value':'28','quote':units[1]['fields']['Proposition']},
+            {'unit_id':units[0]['id'],'value':'3','quote':units[0]['fields']['Proposition']}],
+            'result':'9.333333333333333333','assumptions':'Incorrect mapping despite correct division.'}
+        value=result(units,proposition='The diameter doubling interval is 9.333333333333333333 days.')
+        value['findings'][0]['quantitative_checks']=[check]
+        findings=sy.validate_s3(value,units,[])
+        state=self.state();memory=sy.apply(state,[],{'s':1},units,findings,value,{'id':'fixture-objective'})
+        self.assertEqual(memory.metadata['scientific_validation']['status'],'unverified')
     def test_unit_version_ignores_consumption_and_memory_bookkeeping(self):
         with self.r.store.lock():_,docs,eqs,_=self.r.store.read()
         first=sd.project(docs,eqs)
@@ -378,6 +445,11 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(groups);self.assertTrue(all(2<=len(g['unit_ids'])<=5 for g in groups))
         self.assertEqual(len({g['id'] for g in groups}),len(groups))
         a,b=groups[0],groups[-1];self.assertNotEqual(a['id'],b['id'])
+    def test_ranking_identical_across_python_hash_seeds(self):
+        code='import sys; from mira import synthesis_discovery as sd; from mira.format import loads,dumps; print(dumps(sd.Discovery(None).discover(loads(sys.stdin.read()))[0]))'
+        outputs=[subprocess.check_output([sys.executable,'-c',code],input=dumps(self.units),text=True,
+            env={**os.environ,'PYTHONHASHSEED':seed}) for seed in ['7','811']]
+        self.assertEqual(outputs[0],outputs[1])
     def test_real_backend_cache_identity_representation_and_changed_content(self):
         backend=Mock(identity='nomic-http:fixture-artifact-sha256:prefix-v1')
         backend.embed.side_effect=lambda texts,query=False:[[1.,.5,.25] for _ in texts]
@@ -416,6 +488,52 @@ class DiscoveryTests(unittest.TestCase):
         for relation,category in [('CONTRADICTS','apparent_contradiction'),('QUALIFIES','complementary_findings')]:
             a['relationships']=[{'type':relation,'to':b['id']}]
             self.assertEqual(sd.annotate(a,b,.1,.1)['category'],category)
+    def test_complementary_same_source_pair_outranks_similar_restatement(self):
+        a,b,c=deepcopy(self.units[:3])
+        for u in [a,b,c]:u['source_ids']=['same-primary-paper']
+        c['fields']['Proposition']='A calibrated method measures the complementary count of 8 under the same conditions.'
+        a['relationships']=[{'type':'BUILDS_ON','to':c['id']}]
+        duplicate=sd.opportunity(a,b,sd.annotate(a,b,1.,1.))
+        complement=sd.opportunity(a,c,sd.annotate(a,c,.6,.7))
+        self.assertGreater(sd.priority_score(complement),sd.priority_score(duplicate))
+        self.assertEqual(sd.annotate(a,c,.6,.7)['source_dependence'],'shared_evidence')
+        self.assertEqual(complement['redundancy_hint'],0.)
+        self.assertNotEqual(sd.annotate(a,c,.6,.7)['category'],'exact_duplicate')
+    def test_generic_roles_and_similarity_remain_bounded_review_hints(self):
+        a,b=deepcopy(self.units[:2]);a['fields']['Proposition']='Calibrated assay protocol estimates a defined sample quantity.'
+        b['fields']['Proposition']='Measured sample concentration predicts a qualified response endpoint.'
+        low=sd.opportunity(a,b,sd.annotate(a,b,.3,.3));high=sd.opportunity(a,b,sd.annotate(a,b,.8,.8))
+        self.assertGreater(high['complementarity_hint'],0.);self.assertGreater(sd.priority_score(high),sd.priority_score(low))
+        self.assertTrue(all(0<=v<=1 for v in high.values()))
+        self.assertEqual(sd.annotate(a,b,.8,.8)['source_dependence'],'independence_unverified')
+    def test_soft_diversity_retains_overlapping_expanded_and_exact_groups(self):
+        def group(identity,ids,priority):
+            return {'id':identity,'unit_versions':[{'id':i,'version':'v1'} for i in ids],'priority':priority}
+        repeated=group('a',['r1#f1','r2#f1'],.7);fresh=group('b',['r3#f1','r4#f1'],.65)
+        expanded=group('c',['r1#f1','r2#f1','r5#f1'],.68)
+        groups=[repeated,fresh,expanded];before=deepcopy(groups)
+        ranked=sd.diversify(groups,[repeated]);self.assertEqual(ranked[0]['id'],'b')
+        self.assertEqual({g['id'] for g in ranked},{'a','b','c'});self.assertEqual(groups,before)
+        self.assertEqual(ranked,sd.diversify(list(reversed(groups)),[repeated]))
+        self.assertEqual(sd.diversify([repeated],[repeated]+[fresh]*8)[0]['selection_diversity']['overlap_penalty'],0.)
+        changed=deepcopy(repeated)
+        for v in changed['unit_versions']:v['version']='v2'
+        self.assertEqual(sd.diversify([changed],[repeated])[0]['selection_diversity']['overlap_penalty'],0.)
+    def test_dual_neighbours_retain_related_pairs_and_add_opportunities(self):
+        units=deepcopy(self.units[:3])
+        # All identical related neighbours compete with one lower-similarity
+        # explicit complement. k=1 bounds both paths independently.
+        units[-1]['fields']['Proposition']='A calibrated assay method supplies a complementary concentration measurement.'
+        discovery=sd.Discovery(self.r.store)
+        discovery.vectors=Mock(return_value=([[1.,0.]]*3,{'semantic':True}))
+        groups,_=discovery.discover(units,k=1)
+        ids={tuple(g['unit_ids']) for g in groups}
+        self.assertIn(tuple(sorted([units[0]['id'],units[-1]['id']])),ids)
+        self.assertIn(tuple(sorted([units[0]['id'],units[1]['id']])),ids)
+        self.assertIn(tuple(sorted([units[1]['id'],units[-1]['id']])),ids)
+        for g in groups:
+            self.assertEqual(g['ranking']['policy'],sd.RANKING)
+            self.assertTrue(all(0<=v<=1 for v in g['ranking']['dimensions'].values()))
     def test_cache_symlink_rejected_without_writing_target(self):
         target=Path(self.tmp.name)/'target';target.write_text('private')
         (Path(self.tmp.name)/'synthesis.sqlite3').symlink_to(target)
