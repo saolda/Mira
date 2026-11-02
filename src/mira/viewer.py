@@ -27,14 +27,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args): pass  # Never put research or review text in request logs.
 
-    def _send(self, status, value, kind="application/json; charset=utf-8"):
+    def _send(self, status, value, kind="application/json; charset=utf-8", *, policy=None):
         body = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header("Content-Security-Policy", policy or "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.end_headers()
         try: self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError): pass
@@ -54,6 +54,24 @@ class Handler(BaseHTTPRequestHandler):
             if path in static:
                 name, kind = static[path]
                 return self._send(200, files("mira").joinpath("viewer_assets", name).read_bytes(), kind)
+            if path == '/glossary':
+                from .experiments import existing_reader
+                from .format import loads
+                from .glossary import metadata
+                from .glossary_view import content_policy
+                # Serve the standard export, without a second renderer, a new
+                # experiment, index writes or changes to canonical state.
+                with existing_reader(self.server.inspector.catalog.home, blocking=False) as store:
+                    store.read()
+                    state = loads(store.path('research/state.json').read_text(encoding='utf-8'))
+                    target = store.path('research/glossary.html')
+                    if not target.exists(): return self._send(404, {'error': 'Run glossary-view to generate the standard glossary.'})
+                    content = target.read_bytes()
+                    marker = '<meta name="mira-glossary-commitment" content="' + metadata(state)['commitment'] + '">'
+                    if marker.encode() not in content:
+                        return self._send(409, {'error': 'Glossary export is stale. Run glossary-view to display the current glossary.'})
+                return self._send(200, content, 'text/html; charset=utf-8',
+                                  policy=content_policy() + "; frame-ancestors 'none'")
             parts = self._parts()
             if parts == ["api", "session"]: return self._send(200, {"review_token": self.server.token})
             if parts == ["api", "prompt-templates"]: return self._send(200, PromptTemplates().catalog())
@@ -68,7 +86,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 5 and parts[3] == "actions":
                     return self._send(200, self.server.inspector.action(name, parts[4]))
             return self._send(404, {"error": "unknown viewer resource"})
-        except (ValueError, OSError, KeyError, TypeError) as exc:
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
             return self._send(400, {"error": str(exc)})
 
     def do_POST(self):

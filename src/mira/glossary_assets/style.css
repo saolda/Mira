@@ -53,3 +53,8 @@ code { font: .9em ui-monospace, monospace; white-space: pre-wrap; }
 }
 
 .definition-provisional { border-inline-start: 3px dashed #a66b00; padding-inline-start: 1rem; }
+.coverage { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; }
+.coverage div { padding: .6rem; border: 1px solid var(--line); border-radius: .4rem; }
+.coverage dt { font-size: .85rem; color: var(--muted); }
+.coverage dd { margin: 0; font-size: 1.5rem; font-weight: 650; }
+.preferred-definition { border-inline-start: 3px solid var(--accent); padding-inline-start: 1rem; }

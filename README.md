@@ -59,9 +59,10 @@ LLM prompts are editable in [prompt_templates/](prompt_templates/).
 The viewer’s **Prompt templates** button shows current sources; each decision
 shows the saved filled prompts and template provenance when recorded.
 
-Generate the complete glossary as Markdown and a standalone searchable HTML page:
+Complete the glossary definition backlog, then generate Markdown and a standalone searchable HTML page:
 
 ```bash
+PYTHONPATH=src python3 -m mira glossary-enrich
 PYTHONPATH=src python3 -m mira glossary-view
 xdg-open memory/research/glossary.html
 ```
@@ -73,6 +74,44 @@ from `file://`; its search matches names and aliases, with arrow keys and Enter
 for navigation. Ctrl+F remains available for full text. `--memory-dir PATH`
 selects another active corpus, and `--experiment NAME` supports legacy corpora.
 Exports are derived views; canonical research and glossary records stay unchanged.
+
+`glossary-enrich` maintains canonical terminology independently of research cycles.
+It visits the entire outstanding backlog in deterministic alphabetical order,
+tries the existing rate-limited MeSH service and retains explicit source definitions.
+Dedicated model completion currently requires owner approval of a new glossary
+prompt. It is **disabled**: remaining entries report `approval_required`, and no
+model is called. The proposal is in
+[`test-results/glossary-completion-approval-proposals.md`](test-results/glossary-completion-approval-proposals.md).
+Existing model-generated
+definitions show the actual model identity, scope, timestamp and interaction
+provenance and remain **provisional**. They are terminology guidance, not research
+evidence. Ambiguous terms remain visible with a reason; coverage never hides them.
+The standard views show preferred and alternative definitions, attribution,
+coverage, generation time and source glossary revision.
+
+```bash
+PYTHONPATH=src python3 -m mira glossary-enrich --status  # coverage and all unresolved reasons; no service calls
+PYTHONPATH=src python3 -m mira glossary-enrich --limit 10 --batch-size 4
+PYTHONPATH=src python3 -m mira glossary-enrich --retry-failed  # after the documented cooldown
+PYTHONPATH=src python3 -m mira glossary-enrich --upgrade-provisional
+PYTHONPATH=src python3 -m mira glossary-enrich --llm-url http://127.0.0.1:8090 --max-tokens 4096
+```
+
+The model configuration supports discovery from `MIRA_LLM_URL` (default
+localhost:8090); `--model` or `MIRA_LLM_MODEL` selects it explicitly. These options
+do not enable generation while prompt approval is pending. The tested generation
+transport uses temperature 0, JSON output and thinking disabled, with bounded
+batches and native model token-budget checks. Completed unchanged entries are not regenerated.
+New research context reopens inspection; `--upgrade-provisional` explicitly seeks
+authority supplementation without replacing accepted definitions. Failed entries
+need `--retry-failed` after their cooldown. Received but unpublished responses
+resume without another generation. Unknown submissions require transcript
+inspection and explicit acknowledgement through the existing recovery tools;
+the command never acknowledges them automatically. Journal recovery must finish
+before maintenance. `--no-model` and `--no-authority` disable individual services.
+Run `glossary-view` after maintenance to refresh the displayed revision.
+The browser decision viewer links to the same export through **Glossary**. It
+reports a stale export instead of silently displaying an older glossary revision.
 
 Each `research-init`, `research-run` and `research-demo` invocation writes a new,
 append-only JSONL file in ignored project `log/` (beside `--memory-dir` when configured). Filenames include UTC time, experiment name and a unique suffix.

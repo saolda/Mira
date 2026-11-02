@@ -38,23 +38,61 @@ def citation_url(value):
     return value if re.fullmatch(r'https://id\.nlm\.nih\.gov/mesh/M[0-9]+', value) else ''
 
 
-def markdown(records, current_scope=None):
+def content_policy():
+    def integrity(path):
+        return b64encode(sha256(path.read_bytes()).digest()).decode('ascii')
+    return ("default-src 'none'; script-src 'sha256-" + integrity(ASSETS / 'search.js') +
+            "'; style-src 'sha256-" + integrity(ASSETS / 'style.css') + "'; base-uri 'none'; form-action 'none'")
+
+
+def view_coverage(records, metadata):
+    from .glossary_enrichment import coverage
+    return metadata.get('coverage') or coverage(records)
+
+
+def coverage_lines(records, metadata):
+    c = view_coverage(records, metadata)
+    return [('Total glossary terms', c['total']), ('Authoritative definitions', c['authoritative']),
+            ('Research-source definitions', c['research_source']), ('Provisional definitions only', c['provisional_only']),
+            ('Requiring clarification', c['requiring_clarification']), ('Without usable definitions', c['without_usable_definitions'])]
+
+
+def unresolved_reason(record):
+    progress = record.get('enrichment', [])
+    return progress[-1]['reason'] if progress else 'No applicable definition yet; run glossary-enrich to complete this entry.'
+
+
+def source_label(evidence, metadata):
+    source = metadata.get('source_references', {}).get((evidence['evidence_ref'], evidence['source_id']), {})
+    return source.get('title', ''), source.get('url', '')
+
+
+def markdown(records, current_scope=None, metadata=None):
     # Preserve the established Markdown layout and ordering. Every untrusted
     # field is prose, including legacy source/evidence/node reference strings.
     from .glossary import r3_prose as prose
-    lines = ['# Research glossary', '', 'Source-derived terminology; definitions are not independently verified.', '']
+    metadata = metadata or {}
+    lines = ['# Research glossary', '', 'Scientific terminology with attributed definitions; provisional definitions are not independently verified.', '']
+    lines += [f'{label}: {count}' for label, count in coverage_lines(records, metadata)]
+    lines += ['', view_coverage(records, metadata)['category_note'], '']
+    if metadata:
+        lines += ['Generated: ' + prose(metadata['generated_at']) + '; glossary revision: ' + str(metadata['revision']),
+                  'Glossary commitment: ' + metadata['commitment'], '']
     if any(r.get('terminology') for r in records): lines += [NLM_NOTICE, '']
     for record in records:
         lines += ['## ' + prose(record['term']) + ' (' + record['id'] + ')', '', 'Status: ' + record['status'], '']
         if record['aliases']: lines += ['Aliases: ' + ', '.join(map(prose, record['aliases'])), '']
         if record.get('terminology') or not record['definitions']:
             lines += [prose(lookup_status(record)), '']
-        ordered=definitions.preferred(record,current_scope)
+        preferred = definitions.preferred(record, metadata.get('scopes', {}).get(record['id'], current_scope))
+        ordered=list(preferred)
         ordered += [d for d in definitions.preferred(record) if d not in ordered]
+        lines += ['Preferred definition: ' + prose(preferred[0]['text']) if preferred else prose(unresolved_reason(record)), '']
         if any(definitions.provisional(d) for d in ordered):
-            lines += ['Preferred definition: ' + prose(ordered[0]['text']) if definitions.preferred(record,current_scope)
-                else 'No applicable definition selected for the current research scope.', '',
-                'Supporting passages document term occurrence; they do not verify model-generated definitions.', '']
+            lines += ['Supporting passages document term occurrence; they do not verify model-generated definitions.', '']
+        if record.get('enrichment'):
+            last = record['enrichment'][-1]
+            lines += ['Enrichment: ' + prose(last['status']) + ' · ' + prose(last['updated_at']) + ' · ' + prose(last['reason']), '']
         for definition in ordered:
             if definitions.provisional(definition):
                 lines += ['- Definition: ' + prose(definition['text']),
@@ -62,13 +100,16 @@ def markdown(records, current_scope=None):
                     '  Scientific scope: ' + prose(definition['scope']),
                     '  Ambiguity: ' + prose(definition['ambiguity'] or 'None recorded.'),
                     '  Model: ' + prose(definition['model']),
-                    '  R1 interaction: ' + prose(definition['interaction_ref']),
-                    '  R1 event: ' + prose(definition['event_ref']),
+                    '  Generation timestamp: ' + prose(definition.get('generated_at', 'See interaction timestamp.')),
+                    '  Model identity: ' + prose(json.dumps(definition.get('model_identity', {'served_model': definition['model']}), ensure_ascii=False, sort_keys=True)),
+                    '  Generating interaction: ' + prose(definition['interaction_ref']),
+                    '  Generating event: ' + prose(definition['event_ref']),
                     '  Prompt template SHA256: ' + prose(definition['template_sha256'])]
                 continue
             lines += ['- ' + prose(definition['text']) + ' — ' + prose(definition['qualification'])]
-            if 'authority' not in definition and any(definitions.provisional(d) for d in record['definitions']):
-                lines += ['  Source: Source-supported research passage.']
+            if 'authority' not in definition:
+                lines += ['  Source: Source-supported research passage · ' + prose(definition['evidence']['source_id']) +
+                    ' · ' + prose(definition['evidence']['evidence_ref'])]
             if 'authority' in definition:
                 a = definition['authority']; url = citation_url(a['url'])
                 lines += ['  ' + prose(authority_label(definition)) +
@@ -77,25 +118,33 @@ def markdown(records, current_scope=None):
         for evidence in record['evidence']:
             lines += ['', '> ' + prose(evidence['passage']).replace('\n', '\n> '), '',
                 'Source: ' + prose(evidence['source_id']) + '; evidence: ' + prose(evidence['evidence_ref']) + '; node: ' + prose(evidence['node_id'])]
+            title, url = source_label(evidence, metadata)
+            if title: lines += ['Source title: ' + prose(title)]
+            if url: lines += ['Source reference: ' + prose(url)]
             if evidence['qualification']: lines += ['', 'Qualification: ' + prose(evidence['qualification'])]
         for link in record['relationships']: lines += ['', link['type'] + ': ' + link['target']]
         lines += ['']
     return '\n'.join(lines)
 
 
-def html(records, current_scope=None):
+def html(records, current_scope=None, metadata=None):
+    metadata = metadata or {}
     by_id = {r['id']: r for r in records}
     css = (ASSETS / 'style.css').read_text(encoding='utf-8')
     script = (ASSETS / 'search.js').read_text(encoding='utf-8')
-    def integrity(text): return b64encode(sha256(text.encode('utf-8')).digest()).decode('ascii')
-    policy = ("default-src 'none'; script-src 'sha256-" + integrity(script) +
-              "'; style-src 'sha256-" + integrity(css) + "'; base-uri 'none'; form-action 'none'")
+    policy = content_policy()
     parts = ['<!doctype html>', '<html lang="en">', '<head>', '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta http-equiv="Content-Security-Policy" content="' + escape(policy, quote=True) + '">',
         '<title>Research glossary · Mira</title>', '<style>' + css + '</style>', '</head>', '<body>',
         '<header class="page-header"><h1>Research glossary</h1>',
-        '<p>Source-derived terminology; definitions are not independently verified.</p></header>',
+        '<p>Scientific terminology with attributed definitions. Provisional definitions are not independently verified.</p>',
+        '<dl class="coverage">' + ''.join('<div><dt>' + escape(label) + '</dt><dd>' + str(count) + '</dd></div>'
+            for label, count in coverage_lines(records, metadata)) + '</dl>',
+        '<p class="reference">' + escape(view_coverage(records, metadata)['category_note']) + '</p>',
+        *(['<p class="reference">Generated: ' + escape(metadata['generated_at']) + ' · Glossary revision: ' + str(metadata['revision']) +
+            '<br>Commitment: <code>' + escape(metadata['commitment']) + '</code></p>'] if metadata else []),
+        '</header>',
         '<section class="search-panel" aria-label="Glossary term search"><div class="search-content">',
         '<label for="glossary-search">Search glossary terms</label>',
         '<input id="glossary-search" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" '
@@ -122,14 +171,18 @@ def html(records, current_scope=None):
         if record.get('terminology') or not record['definitions']:
             parts += ['<p class="qualification prose">' + escape(lookup_status(record)) + '</p>']
         parts += ['<h3>Definitions</h3>']
+        preferred=definitions.preferred(record, metadata.get('scopes', {}).get(record['id'], current_scope))
+        parts += ['<p class="preferred-definition prose"><strong>Preferred definition:</strong> ' +
+            escape(preferred[0]['text'] if preferred else unresolved_reason(record)) + '</p>']
+        if record.get('enrichment'):
+            last=record['enrichment'][-1]
+            parts += ['<p class="reference prose">Enrichment: ' + escape(last['status']) + ' · ' + escape(last['updated_at']) +
+                '<br>' + escape(last['reason']) + '</p>']
         if any(definitions.provisional(d) for d in record['definitions']):
-            preferred=definitions.preferred(record,current_scope)
-            parts += ['<p class="prose"><strong>Preferred for the current research scope:</strong> ' +
-                escape(preferred[0]['text'] if preferred else 'No applicable definition selected.') + '</p>',
-                '<p class="qualification prose">Supporting passages document term occurrence; they do not verify model-generated definitions.</p>']
+            parts += ['<p class="qualification prose">Supporting passages document term occurrence; they do not verify model-generated definitions.</p>']
         if record['definitions']:
             parts += ['<ol class="definitions">']
-            ordered=definitions.preferred(record,current_scope)
+            ordered=list(preferred)
             ordered += [d for d in definitions.preferred(record) if d not in ordered]
             for definition in ordered:
                 if definitions.provisional(definition):
@@ -139,8 +192,10 @@ def html(records, current_scope=None):
                         '<strong>Scientific scope:</strong> ' + escape(definition['scope']) + '<br>'
                         '<strong>Ambiguity:</strong> ' + escape(definition['ambiguity'] or 'None recorded.') + '<br>'
                         '<strong>Model:</strong> ' + escape(definition['model']) + '<br>'
-                        '<strong>R1 interaction:</strong> ' + escape(definition['interaction_ref']) + '<br>'
-                        '<strong>R1 event:</strong> ' + escape(definition['event_ref']) + '<br>'
+                        '<strong>Generated:</strong> ' + escape(definition.get('generated_at', 'See interaction timestamp.')) + '<br>'
+                        '<strong>Model identity:</strong> ' + escape(json.dumps(definition.get('model_identity', {'served_model': definition['model']}), ensure_ascii=False, sort_keys=True)) + '<br>'
+                        '<strong>Generating interaction:</strong> ' + escape(definition['interaction_ref']) + '<br>'
+                        '<strong>Generating event:</strong> ' + escape(definition['event_ref']) + '<br>'
                         '<strong>Prompt template SHA256:</strong> ' + escape(definition['template_sha256']) + '</p></li>']
                     continue
                 parts += ['<li><p class="prose">' + escape(definition['text']) + '</p>']
@@ -152,10 +207,10 @@ def html(records, current_scope=None):
                         (' · <a href="' + escape(url, quote=True) + '" rel="noreferrer">Source</a>' if url else '') +
                         '<br>Retrieved: ' + escape(a['retrieved_at']) + '<br>Scope: ' + escape(definition['scope']) + '</p></li>']
                 else:
-                    label='Source-supported research passage · ' if any(definitions.provisional(d) for d in record['definitions']) else ''
+                    label='Source-supported research passage · ' + escape(definition['evidence']['source_id']) + ' · '
                     parts += ['<p class="reference">' + label + support_link(definition['evidence']) + '</p></li>']
             parts += ['</ol>']
-        else: parts += ['<p>No source definition recorded.</p>']
+        else: parts += ['<p>' + escape(unresolved_reason(record)) + '</p>']
         parts += ['<h3>Supporting evidence</h3>']
         for index, evidence in enumerate(record['evidence'], 1):
             parts += ['<section class="evidence" id="' + identity + '-e' + str(index) + '">',
@@ -163,6 +218,9 @@ def html(records, current_scope=None):
                 '<p class="reference prose"><strong>Source:</strong> ' + escape(evidence['source_id']) +
                 '<br><strong>Evidence:</strong> <code>' + escape(evidence['evidence_ref']) + '</code>' +
                 '<br><strong>Node:</strong> ' + escape(evidence['node_id']) + '</p>']
+            title, url = source_label(evidence, metadata)
+            if title: parts += ['<p class="reference prose"><strong>Source title:</strong> ' + escape(title) + '</p>']
+            if url: parts += ['<p class="reference prose"><strong>Source reference:</strong> ' + escape(url) + '</p>']
             if evidence['qualification']:
                 parts += ['<p class="qualification prose"><strong>Qualification:</strong> ' + escape(evidence['qualification']) + '</p>']
             parts += ['</section>']
@@ -182,6 +240,9 @@ def html(records, current_scope=None):
         data = data.replace(character, '\\u' + format(ord(character), '04x'))
     parts += ['</main>', '<script id="glossary-search-data" type="application/json">' + data + '</script>',
               '<script>' + script + '</script>', '</body>', '</html>', '']
+    if metadata:
+        parts.insert(5, '<meta name="mira-glossary-commitment" content="' + escape(metadata['commitment'], quote=True) + '">')
+        parts.insert(5, '<meta name="mira-glossary-generated-at" content="' + escape(metadata['generated_at'], quote=True) + '">')
     return '\n'.join(parts)
 
 

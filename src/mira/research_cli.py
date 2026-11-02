@@ -61,6 +61,21 @@ def register(sub):
     state = sub.add_parser("research-state")
     glossary_export = sub.add_parser("glossary-export", aliases=['glossary-view'], help="export Markdown and standalone searchable HTML glossaries")
     glossary_rebuild = sub.add_parser("glossary-rebuild", help="rebuild the disposable glossary SQLite index")
+    glossary_enrich = sub.add_parser('glossary-enrich', help='complete or inspect the durable glossary definition backlog')
+    glossary_enrich.add_argument('--limit', type=int, help='maximum outstanding terms to process; omit for the entire backlog')
+    glossary_enrich.add_argument('--batch-size', type=int, default=4, help='maximum terms per model request (1..12)')
+    glossary_enrich.add_argument('--status', action='store_true', help='inspect coverage and unresolved reasons without model or authority calls')
+    glossary_enrich.add_argument('--undefined', action='store_true', help='alias for --status, including every unresolved term')
+    glossary_enrich.add_argument('--retry-failed', action='store_true', help='retry failed entries after their cooldown; never acknowledge uncertain submissions')
+    glossary_enrich.add_argument('--upgrade-provisional', action='store_true', help='attempt due authority lookups for completed provisional entries')
+    glossary_enrich.add_argument('--no-authority', action='store_true', help='disable authoritative lookups for this maintenance invocation')
+    glossary_enrich.add_argument('--no-model', action='store_true', help='use only authority and explicit source definitions')
+    glossary_enrich.add_argument('--llm-url', help='model URL (or MIRA_LLM_URL; default localhost:8090)')
+    glossary_enrich.add_argument('--model', help='model identifier (or MIRA_LLM_MODEL; otherwise discover the served model)')
+    glossary_enrich.add_argument('--api-key-env', default='MIRA_LLM_API_KEY')
+    glossary_enrich.add_argument('--max-tokens', type=int, default=4096)
+    glossary_enrich.add_argument('--timeout', type=float, default=180)
+    glossary_enrich.add_argument('--terminology-timeout', type=float, default=8)
     prune = sub.add_parser("research-prune")
     prune.add_argument("--apply", action="store_true", help="discard completed temporary retrievals; default dry run")
     viewer = sub.add_parser("viewer")
@@ -73,7 +88,7 @@ def register(sub):
     show.add_argument("--full", action="store_true")
     show.add_argument("--concise", action="store_true")
     show.add_argument("--output", help="optional export path; managed runs also export under log/transcripts/")
-    for command in (init, run, demo, state, show, prune, glossary_export, glossary_rebuild):
+    for command in (init, run, demo, state, show, prune, glossary_export, glossary_rebuild, glossary_enrich):
         command.add_argument("--experiment", help="persistent experiment name")
 
 
@@ -123,6 +138,34 @@ def execute(args):
 
 
 def _execute(args, catalog, managed, trace=None):
+    if args.command == 'glossary-enrich':
+        import os
+        import sys
+        from urllib.request import Request, urlopen
+        from .clients import HTTPModel
+        from .live import LiveStore
+        from .glossary_enrichment import Completion
+        from .terminology import Enricher
+        def model_factory():
+            endpoint = args.llm_url or os.environ.get('MIRA_LLM_URL', 'http://127.0.0.1:8090')
+            model = args.model or os.environ.get('MIRA_LLM_MODEL')
+            key = os.environ.get(args.api_key_env)
+            if not model:
+                url = endpoint.rstrip('/') + ('/models' if endpoint.rstrip('/').endswith('/v1') else '/v1/models')
+                with urlopen(Request(url, headers={'Authorization': 'Bearer ' + key} if key else {}), timeout=args.timeout) as response:
+                    served = loads(response.read().decode())['data']
+                require(len(served) == 1, 'specify --model when multiple models are served')
+                model = served[0]['id']
+            return HTTPModel(endpoint, model, api_key=key, temperature=0, max_tokens=args.max_tokens,
+                             timeout=args.timeout, no_thinking=True, json_output=True)
+        operation = Completion(LiveStore(args.root), model_factory=None if args.no_model else model_factory,
+            authority=None if args.no_authority else Enricher(catalog.log_home / 'terminology-cache', max_terms=1,
+                action_timeout=args.terminology_timeout), log_dir=catalog.log_home)
+        if args.status or args.undefined: return operation.inspect()
+        return operation.run(limit=args.limit, batch_size=args.batch_size, retry_failed=args.retry_failed,
+            upgrade_provisional=args.upgrade_provisional,
+            progress=lambda report: print('Glossary: ' + str(report['defined']) + '/' + str(report['total']) +
+                ' defined; ' + str(report['processed']) + '/' + str(report['selected']) + ' processed', file=sys.stderr))
     if args.command == "research-demo":
         from .research_demo import demonstrate
         result = demonstrate(args.root, max_cycles=args.max_cycles, trace=trace)
