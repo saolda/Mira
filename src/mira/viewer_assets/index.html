@@ -7,6 +7,7 @@
 <button data-workspace="overview" aria-current="page">Research Overview</button>
 <button data-workspace="knowledge">Knowledge Explorer</button>
 <button data-workspace="relationships">Knowledge Relationships</button>
+<button data-workspace="state-of-research">State of Research</button>
 <button data-workspace="decisions">Decisions</button>
 <a href="/glossary" target="_blank" rel="noopener">Glossary</a>
 </nav>
@@ -14,6 +15,7 @@
 <div class="brain-toolbar"><label>Research corpus<select id="brain-experiment"></select></label><span id="brain-revision"></span><button id="brain-refresh">Refresh scientific snapshot</button><a id="snapshot-export">Export structured research state</a></div>
 <p id="brain-error" role="alert" hidden></p>
 <div id="research-overview"></div>
+<section id="state-of-research-workspace" hidden><h1>State of Research</h1><p class="hint">A generated paper is bound to its recorded snapshot. Opening this workspace never invokes a model. Generate explicitly with the state-of-research-generate CLI.</p><p id="sor-status" role="status"></p><button id="sor-refresh">Open latest completed report</button><a id="sor-open" target="_blank" rel="noopener">Open paper in full window</a><iframe id="sor-paper" title="State of Research paper" hidden></iframe></section>
 <div id="knowledge-explorer" hidden>
 <div class="explorer-filters">
 <label>Search knowledge<input id="knowledge-search" type="search" placeholder="Unit ID, scientific text, source or research question"></label>

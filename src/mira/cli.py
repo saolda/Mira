@@ -20,6 +20,8 @@ def main():
     for command in ("validate", "rebuild", "integrity", "summaries", "demo"):
         sub.add_parser(command)
     research_cli.register(sub)
+    from . import sor_cli
+    sor_cli.register(sub)
     recovery = sub.add_parser("recovery")
     recovery.add_argument("recovery_action", nargs="?", choices=["inspect", "validate", "repair"], default="inspect")
     recovery.add_argument("operation_id", nargs="?")
@@ -38,6 +40,10 @@ def main():
     edges.add_argument("--direction", choices=["incoming", "outgoing"], default="outgoing")
     edges.add_argument("--status", action="append")
     args = parser.parse_args()
+    if args.command in {'state-of-research-generate','state-of-research-view'}:
+        result=sor_cli.execute(args)
+        print(result if isinstance(result,str) else json.dumps(result,indent=2,ensure_ascii=False))
+        return
     if args.command == "viewer":
         from .viewer import serve
         serve(args.memory_dir, port=args.port)

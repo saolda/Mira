@@ -200,6 +200,7 @@ class Experiments(LegacyReader):
                 if re.fullmatch(pattern, child.name) and child.is_file(): result.append(child)
                 # Unrelated files are not generated and remain untouched.
         for relative in ('research/state.json', 'research/question.md', 'research/glossary.md', 'research/glossary.html',
+                         'research/state_of_research.md', 'research/state_of_research.html', 'research/state_of_research.audit.json',
                          'identity.json', 'glossary.sqlite3', 'glossary.sqlite3-wal', 'glossary.sqlite3-shm',
                          'index.sqlite3', 'index.sqlite3-wal', 'index.sqlite3-shm',
                          'synthesis.sqlite3', 'synthesis.sqlite3-wal', 'synthesis.sqlite3-shm', 'synthesis.sqlite3-journal'):

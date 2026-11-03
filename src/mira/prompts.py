@@ -1,12 +1,13 @@
 """Small plain-text renderer with immutable per-call source and binding snapshots."""
 from pathlib import Path
+import json
 import os
 import re
 import sys
 
 from .format import digest, dumps, require
 
-ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S2", "S3", "G1")
+ACTIONS = ("R0", "R1", "R3", "R4", "R5", "S2", "S3", "G1", "SOR1", "SOR2", "SOR3")
 COMMON_SLOTS = ("root_question", "question", "node", "ancestor_questions", "linked_memories",
                 "children", "strategy", "next_database", "search_history", "equations")
 SLOTS = {"R0": ("question", "strategies"), "R1": ("question", "question_context", "previous_search_terms", "control_terms", "memory_context", "glossary_context", "search_outcomes"), "R3": ("question", "question_context", "research"),
@@ -23,6 +24,7 @@ SLOTS['S2'] = ('root_question','question','research_brief','candidate',
 SLOTS['S3'] = ('root_question','question','research_brief','candidate',
     'knowledge_units','parent_memories','objective','existing_knowledge')
 SLOTS['G1'] = ('entries',)
+for action in ('SOR1','SOR2','SOR3'): SLOTS[action] = ('payload',)
 PLACEHOLDER = re.compile(r"{{\s*([a-z_]+)\s*}}")
 
 
@@ -44,6 +46,13 @@ class PromptTemplates:
         return [{"path": "prompt_templates/" + name, "sha256": digest(source), "source": source}]
 
     def render(self, action, context):
+        if action in {'SOR1','SOR2','SOR3'}:
+            require(isinstance(context,dict) and set(context)=={'payload'}, 'SOR requires only structured payload')
+            sources=self.sources(action)
+            messages=[{'role':'system','content':sources[0]['source']},
+                      {'role':'user','content':json.dumps(context['payload'],ensure_ascii=False,separators=(',',':'))}]
+            return messages, {'version':2,'format':'text','action':action,'files':sources,
+                'bindings':{'context':context},'filled_messages':messages}
         if action == 'G1':
             # The owner-approved G1 source has no interpolation slots. Its exact
             # bytes remain the instructions; scientific data is a separate turn.

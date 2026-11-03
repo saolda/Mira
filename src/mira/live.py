@@ -188,7 +188,7 @@ class LiveStore:
                     # Atomic-write leftovers are not canonical, and remain inspectable.
                     if re.search(r"\.tmp-[0-9a-f]{32}\Z", p.name):
                         continue
-                    if relative in {"research/glossary.md", "research/glossary.html"}:
+                    if relative in {"research/glossary.md", "research/glossary.html", "research/state_of_research.md", "research/state_of_research.html", "research/state_of_research.audit.json"}:
                         continue  # Explicitly regenerated, disposable export.
                     require(CANONICAL.fullmatch(relative), "unexpected canonical file: " + relative)
                     result[relative] = p.read_bytes().decode("utf-8")

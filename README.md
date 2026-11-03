@@ -102,6 +102,28 @@ for navigation. Ctrl+F remains available for full text. `--memory-dir PATH`
 selects another active corpus, and `--experiment NAME` supports legacy corpora.
 Exports are derived views; canonical research and glossary records stay unchanged.
 
+Generate a snapshot-bound scientific paper with the local model, then open it in
+the existing viewer's **State of Research** workspace:
+
+```bash
+PYTHONPATH=src python3 -m mira state-of-research-generate
+PYTHONPATH=src python3 -m mira viewer
+PYTHONPATH=src python3 -m mira state-of-research-view --open
+```
+
+Generation explicitly runs the approved SOR1 author, SOR2 challenger and SOR3
+revision prompts. Viewing a report never runs the model. The Markdown, HTML and
+audit are derived files at `memory/research/state_of_research.{md,html,audit.json}`;
+exact requests and responses remain under private `log/state-of-research/`.
+Knowledge-unit citations open Brain Viewer, and terminology links open the
+canonical glossary. The viewer warns when the source snapshot has changed.
+The same model's adversarial review is additional scrutiny, not independent
+scientific verification. All units are projected in full and recorded in a
+coverage ledger; oversized contexts fail safely without truncating evidence.
+Use `--experiment NAME` to select a corpus, `--max-calls` to bound generation,
+or `--resume GENERATION_ID` to reuse safely received responses after interruption.
+Uncertain submissions require human review and are never automatically repeated.
+
 `glossary-enrich` maintains canonical terminology independently of research cycles.
 It visits the entire outstanding backlog in deterministic alphabetical order,
 tries the existing rate-limited MeSH service and retains explicit source definitions.

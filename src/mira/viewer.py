@@ -59,6 +59,16 @@ class Handler(BaseHTTPRequestHandler):
             if path in static:
                 name, kind = static[path]
                 return self._send(200, files("mira").joinpath("viewer_assets", name).read_bytes(), kind)
+            if path == '/state-of-research':
+                from .state_of_research import load
+                from .sor_view import html,content_policy
+                query=parse_qs(urlsplit(self.path).query)
+                if set(query)-{'experiment'} or any(len(v)!=1 for v in query.values()):
+                    raise ValueError('invalid report selection')
+                selected=query.get('experiment',[None])[0]
+                result=load(self.server.inspector.catalog,selected)
+                return self._send(200,html(result['audit'],stale=result['stale']).encode('utf-8'),
+                    'text/html; charset=utf-8',policy=content_policy()+"; frame-ancestors 'self'")
             if path == '/glossary':
                 from .experiments import existing_reader
                 from .format import loads
@@ -83,6 +93,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "experiments"]: return self._send(200, self.server.inspector.experiments())
             if len(parts) >= 3 and parts[:2] == ["api", "experiments"]:
                 name = parts[2]
+                if len(parts)==4 and parts[3]=='state-of-research':
+                    from .state_of_research import load
+                    return self._send(200,load(self.server.inspector.catalog,name))
                 if len(parts)>=4 and parts[3] in {'overview','knowledge','relationships','questions','snapshot'}:
                     knowledge=getattr(self.server,'knowledge',None)
                     if knowledge is None:

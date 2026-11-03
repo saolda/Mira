@@ -197,7 +197,7 @@ class KnowledgeInspector:
                 relative=p.relative_to(store.root).as_posix()
                 # Legacy stores and disposable glossary exports are not current state.
                 if base=='research' and len(p.relative_to(store.root).parts)>2 and p.relative_to(store.root).parts[1]!='results': continue
-                if relative in {'research/glossary.md','research/glossary.html'}: continue
+                if relative in {'research/glossary.md','research/glossary.html','research/state_of_research.md','research/state_of_research.html','research/state_of_research.audit.json'}: continue
                 store.path(relative)
                 stat=p.stat();rows.append((relative,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns))
         for relative in ('identity.json','.reset.json','.transition.json'):

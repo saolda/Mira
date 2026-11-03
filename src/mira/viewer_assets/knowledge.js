@@ -2,7 +2,7 @@
 (()=>{
  const $=id=>document.getElementById(id), element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const initial=new URLSearchParams(location.search);
- let experiment=initial.get('experiment')||'',view=initial.get('view')||(initial.has('decision')?'decisions':'overview'),overview=null,selected=initial.get('unit')||'',offset=0,page=null,ticket=0,detailTicket=0,expanded=new Set(),graphOffset=0,searchTimer;
+ let experiment=initial.get('experiment')||'',view=initial.get('view')||(initial.has('decision')?'decisions':'overview'),overview=null,selected=initial.get('unit')||'',offset=0,page=null,ticket=0,detailTicket=0,paperTicket=0,expanded=new Set(),graphOffset=0,searchTimer;
  const endpoint=resource=>'/api/experiments/'+encodeURIComponent(experiment)+'/'+resource;
  async function get(resource,params={}){const query=new URLSearchParams(params);const r=await fetch(endpoint(resource)+(query.size?'?'+query:''));const data=await r.json();if(!r.ok)throw Error(data.error||'Inspection unavailable');return data;}
  function fail(e){overview=null;$('brain-error').hidden=false;$('brain-error').textContent=e.message+' Refresh the scientific snapshot before continuing.';for(const id of ['research-overview','knowledge-list','knowledge-detail','relationship-view'])$(id).replaceChildren();$('brain-revision').textContent='Snapshot unavailable';$('snapshot-export').removeAttribute('href');}
@@ -14,11 +14,12 @@
  function pairs(parent,values){const dl=element('dl',undefined,'scientific-fields');for(const [key,value]of Object.entries(values)){dl.append(element('dt',key.replaceAll('_',' ')),element('dd',recorded(value)));}parent.append(dl);}
  function unitLink(id){return button(id,()=>openUnit(id));}
  function navigate(){const q=new URLSearchParams(location.search);q.set('view',view);q.set('experiment',experiment);if(selected)q.set('unit',selected);history.replaceState(null,'','?'+q);}
- function setView(next){if(!['overview','knowledge','relationships','decisions'].includes(next))next='overview';view=next;
+ function setView(next,paperUnit=null){if(!['overview','knowledge','relationships','state-of-research','decisions'].includes(next))next='overview';view=next;
   $('brain-workspace').hidden=next==='decisions';$('layout').hidden=next!=='decisions';
-  for(const [name,id]of [['overview','research-overview'],['knowledge','knowledge-explorer'],['relationships','knowledge-relationships']])$(id).hidden=next!==name;
+  for(const [name,id]of [['overview','research-overview'],['knowledge','knowledge-explorer'],['relationships','knowledge-relationships'],['state-of-research','state-of-research-workspace']])$(id).hidden=next!==name;
   document.querySelectorAll('[data-workspace]').forEach(b=>{if(b.dataset.workspace===next)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});navigate();
   if(next==='relationships'&&selected)loadRelationships().catch(fail);
+  if(next==='state-of-research'&&overview)loadPaper(paperUnit);
  }
  function cards(parent,entries){const grid=element('div',undefined,'brain-cards');for(const [label,value]of entries){const c=element('div',undefined,'brain-card');c.append(element('strong',recorded(value)),element('span',label));grid.append(c);}parent.append(grid);}
  function rememberBranches(){document.querySelectorAll('#research-overview details[data-node]').forEach(n=>{if(n.open)expanded.add(n.dataset.node);else expanded.delete(n.dataset.node);});}
@@ -50,7 +51,7 @@
  async function refresh(){const stamp=++ticket;rememberBranches();$('brain-error').hidden=true;try{const data=await get('overview');if(stamp!==ticket)return;overview=data;
    $('brain-revision').textContent='Snapshot '+data.revision.slice(0,16)+' · schema '+data.schema;$('brain-revision').title=data.revision;
    $('snapshot-export').href=endpoint('snapshot')+'?revision='+encodeURIComponent(data.revision);$('snapshot-export').download='mira-research-state.json';
-   options('knowledge-node',data.nodes.map(n=>[n.id,`${n.id} · ${n.status} · ${n.question.slice(0,85)}`]),'All branches');renderOverview();await loadInventory();if(selected)await loadDetail(selected);if(view==='relationships'&&selected)await loadRelationships();
+   options('knowledge-node',data.nodes.map(n=>[n.id,`${n.id} · ${n.status} · ${n.question.slice(0,85)}`]),'All branches');renderOverview();await loadInventory();if(selected)await loadDetail(selected);if(view==='relationships'&&selected)await loadRelationships();if(view==='state-of-research')await loadPaper();
   }catch(e){overview=null;$('research-overview').replaceChildren();$('knowledge-list').replaceChildren();$('knowledge-detail').replaceChildren();$('relationship-view').replaceChildren();$('brain-revision').textContent='Snapshot unavailable';$('snapshot-export').removeAttribute('href');fail(e);}}
  function filters(){const q={revision:overview.revision,offset,limit:50};for(const key of ['type','origin','evidence','participation','node','memory','sort'])if($('knowledge-'+key).value)q[key]=$('knowledge-'+key).value;q.descendants=String($('knowledge-descendants').checked);if($('knowledge-search').value.trim())q.q=$('knowledge-search').value;return q;}
  async function loadInventory(){if(!overview)return;const stamp=++ticket;const data=await get('knowledge',filters());if(stamp!==ticket)return;page=data;
@@ -78,6 +79,7 @@
   p.append(json({'Structural type':u.structural_type,'Scientific type':u.scientific_type,'Parent memory':u.memory_id,'Research node':u.node_id,'Research question':u.research_question,'Node status':u.node_status,'Eligible research subtree':u.eligible_subtree?'Yes':'No; historical knowledge remains retained','Question-unit state':u.question_state,'Current scientific version':u.version},'Research context and unit version'));
   const links=element('div',undefined,'unit-links');links.append(button('Inspect relationships and lineage',()=>{setView('relationships');}),button('Browse parent memory',()=>{resetFilters();setSelect('knowledge-memory',u.memory_id);offset=0;loadInventory().catch(fail);}),button('Inspect research branch',()=>{resetFilters();setSelect('knowledge-node',u.node_id||'');$('knowledge-descendants').checked=false;offset=0;loadInventory().catch(fail);}));p.append(links);
   p.append(json(data.memory.markdown,'Original canonical memory '+data.memory.id));
+  p.append(button('Find this unit in the State of Research paper',()=>setView('state-of-research',u.id)));
   p.append(element('h2','Original evidence and attribution'),element('p','A cited source is attribution, not independent scientific validation of the extracted proposition.','evidence-warning'));
   for(const source of u.sources)sourcePanel(p,source);
   if(u.original_evidence){p.append(element('p',u.original_evidence.notice,'hint'),element('p','Evidence reference: '+u.original_evidence.reference,'hint'));for(const source of u.original_evidence.source||[])sourcePanel(p,source);}else p.append(element('p','Unit-specific supporting passages: Not recorded. Do not treat a source citation as a quotation.','hint'));
@@ -88,6 +90,18 @@
   const relations=element('div',undefined,'unit-links');for(const edge of u.relationships){const other=edge.from===u.id?edge.to:edge.from;if(/^[rs][0-9a-z]+#[fqei][0-9a-z]+$/.test(other))relations.append(button(edge.type+' · '+other,()=>openUnit(other)));}p.append(relations,json(u.relationships,'Recorded relationships and their statuses'));
   navigate();
  }
+ async function loadPaper(focusUnit=null){
+  const stamp=++paperTicket,corpus=experiment;
+  $('sor-paper').hidden=true;$('sor-status').textContent='Loading completed report…';
+  try{const data=await get('state-of-research');const paper=data.audit.paper;
+   if(stamp!==paperTicket||corpus!==experiment)return;
+   $('sor-status').textContent=(data.stale?'Research has changed since this report was generated. ':'')+'Generated '+paper.generated_at+' · snapshot '+paper.source_revision.slice(0,16)+' · model '+paper.model_identity.served_model+' · adversarial review '+(paper.adversarial_review?'performed (not independent verification)':'not performed');
+   const url='/state-of-research?'+new URLSearchParams({experiment});const frame=$('sor-paper');
+   frame.onload=()=>{if(typeof focusUnit!=='string')return;const hit=[...frame.contentDocument.querySelectorAll('.ku-citation')].find(a=>new URL(a.href).searchParams.get('unit')===focusUnit);if(hit)hit.closest('.claim,li,article')?.scrollIntoView({block:'center'});};
+   $('sor-open').href=url;frame.src=url;frame.hidden=false;
+  }catch(e){if(stamp!==paperTicket||corpus!==experiment)return;$('sor-status').textContent=e.message;$('sor-open').removeAttribute('href');}
+ }
+ $('sor-refresh').onclick=loadPaper;
  function svg(tag,attributes={},text){const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value]of Object.entries(attributes))n.setAttribute(key,String(value));if(text!==undefined)n.textContent=text;return n;}
  async function loadRelationships(){if(!overview||!selected){$('relationship-view').replaceChildren(element('p','Select a unit in the Knowledge Explorer.'));return;}const id=selected,data=await get('relationships/'+encodeURIComponent(id),{revision:overview.revision});if(selected!==id)return;const root=$('relationship-view');root.replaceChildren(element('h2',id),element('p',data.notice,'hint'));const others=data.nodes.filter(n=>n.id!==id),shown=others.slice(graphOffset,graphOffset+12),center=data.nodes.find(n=>n.id===id)||{id,label:id};
   const graph=svg('svg',{viewBox:'0 0 1000 620',class:'relationship-graph',role:'group','aria-label':'Directed relationship neighbourhood of '+id});root.append(graph);const defs=svg('defs'),marker=svg('marker',{id:'knowledge-arrow',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'});marker.append(svg('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#718b99'}));defs.append(marker);graph.append(defs);
