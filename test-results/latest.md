@@ -1,22 +1,22 @@
 # Latest development test results
 
-Recorded: 2026-11-03T01:37:04.381983+00:00
+Recorded: 2026-11-03T04:23:02.513284+00:00
 
-Tested implementation commit: `8b781e9576dd5dd3dcf29dcfd2fd61617e5128bd (working tree under test)`.
+Tested implementation commit: `fc9710aad6d665689f85f53c78b4c91d68730bab (working tree under test)`.
 
-Tests: **611**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **658**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-Read-only Brain Viewer: consistent canonical unit inventory, independent epistemic and synthesis dimensions, versioned research snapshot APIs, focused relationships and preserved decisions/glossary; actual active-corpus Chromium checks.
+State of Research evidence projection, exact approved prompts, bounded author/challenger/revision including complete-paragraph review partitions, received-response resume, deterministic inventory, citations, atomic publication, recovery safeguards, existing viewer integration and canonical-state preservation. Separate Qwen experiments and real Chromium acceptance are reported in state-of-research-20261103.md.
 
 ## Regressions and limitations
 
-- Active corpus has no published synthesis memories or modern unit-synthesis register; these cases are covered by deterministic temporary-corpus fixtures, not invented active results.
+- Same-model review is not independent verification; the actual medical paper retains explicitly flagged scientific concerns. Existing SQLite ResourceWarnings occurred without test failures.
 
 ## Execution logs
 
-- `log/brain-viewer-20261103/final-suite.stderr`
+- `log/state-of-research-20261103/final-suite.stderr`
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.
