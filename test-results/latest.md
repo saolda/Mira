@@ -1,22 +1,22 @@
 # Latest development test results
 
-Recorded: 2026-11-03T00:47:45.868257+00:00
+Recorded: 2026-11-03T01:37:04.381983+00:00
 
-Tested implementation commit: `b6ba3589a68bb84e1f6391ff6e6138d7c325e625 (working tree under test)`.
+Tested implementation commit: `8b781e9576dd5dd3dcf29dcfd2fd61617e5128bd (working tree under test)`.
 
-Tests: **576**; failures: **0**; errors: **0**; skipped: **0**.
+Tests: **611**; failures: **0**; errors: **0**; skipped: **0**.
 Result: **PASS**.
 
 ## Validation
 
-Approved R1 DISCOVER/SELECT transition; attributed excluded-definition history and one current scientific issue in standard HTML/Markdown.
+Read-only Brain Viewer: consistent canonical unit inventory, independent epistemic and synthesis dimensions, versioned research snapshot APIs, focused relationships and preserved decisions/glossary; actual active-corpus Chromium checks.
 
 ## Regressions and limitations
 
-None reported.
+- Active corpus has no published synthesis memories or modern unit-synthesis register; these cases are covered by deterministic temporary-corpus fixtures, not invented active results.
 
 ## Execution logs
 
-- `log/r1-transition-viewer-20261103/full-suite.stdout`
+- `log/brain-viewer-20261103/final-suite.stderr`
 
 Ordinary runs replace this report. Specifically requested milestone reports are retained.
