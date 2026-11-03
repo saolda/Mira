@@ -1,0 +1,60 @@
+/* Real Chromium acceptance against the preserved medical corpus; no inference or writes.
+   node tests/sor_viewer_browser_test.js http://127.0.0.1:18867 19229 /tmp/mira-sor-browser */
+'use strict';
+const fs=require('node:fs'),assert=require('node:assert/strict');
+(async()=>{
+ const base=process.argv[2]||'http://127.0.0.1:8767',port=process.argv[3]||'19229',out=process.argv[4]||'/tmp/mira-sor-browser';fs.mkdirSync(out,{recursive:true});
+ const pages=await(await fetch(`http://127.0.0.1:${port}/json`)).json(),page=pages.find(t=>t.type==='page'&&t.url.startsWith(base));assert(page,'local viewer target');
+ const socket=new WebSocket(page.webSocketDebuggerUrl);await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});let sequence=0;const pending=new Map();
+ socket.onmessage=e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}};
+ const rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
+ async function evaluate(expression){const r=await rpc('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;}
+ const helpers=`const $=id=>document.getElementById(id),check=(v,m)=>{if(!v)throw Error(m);},sleep=ms=>new Promise(r=>setTimeout(r,ms));const wait=async(fn,label)=>{const end=Date.now()+20000;while(Date.now()<end){if(fn())return;await sleep(80);}throw Error('Timeout: '+label+' '+$('sor-status')?.textContent);};`;
+ await rpc('Page.navigate',{url:base+'/?view=state-of-research'});
+ const result=await evaluate(`(async()=>{${helpers}
+  await wait(()=>!$('sor-paper')?.hidden&&$('sor-paper')?.contentDocument?.querySelector('main h1')&&$('sor-status')?.textContent.includes('adversarial review performed'),'actual paper');
+  const doc=$('sor-paper').contentDocument;
+  check($('brain-experiment').value==='medical-retrieval-repair-20261031','active corpus');
+  check($('sor-status').textContent.includes('adversarial review performed'),'visible model/review metadata');
+  check(doc.body.textContent.includes('65e248a831a23f6b3eb4f61e1bd03b1d20b1831b0d7e2c2ec84e1aae8834d3ee'),'actual snapshot');
+  const sections=['abstract','introduction','methodology','coverage','findings','mathematics','synthesis','conflicts','limitations','questions','progress','conclusions','directions'];
+  check(sections.every(id=>doc.getElementById(id)?.querySelector('h2')),'all standard scientific sections');
+  check(doc.querySelector('#abstract .claim').textContent.includes('spiculation'),'meaningful actual abstract');
+  check(doc.querySelector('.expression').textContent==='TVDT = (t * ln(2)) / ln(V2/V1)','exact recorded equation');
+  check(doc.querySelector('.equation').textContent.includes('cubic millimeters'),'equation units');
+  check(doc.querySelector('#questions details').textContent.includes('state: open'),'recorded open questions');
+  check(doc.querySelector('#synthesis .recorded').textContent.includes('0'),'no invented published synthesis');
+  check(doc.querySelectorAll('.term').length===32,'complete canonical glossary');
+  check(doc.querySelector('#glossary').textContent.includes('Provisional, model-generated'),'provisional terminology remains provisional');
+  const unresolved=[...doc.querySelectorAll('.term')].find(n=>n.querySelector('a').getAttribute('href')==='/glossary#g30');check(unresolved?.textContent.includes('No accepted definition'),'clarification remains unresolved');
+  check(doc.querySelector('#methodology').textContent.includes('bookkeeping was withheld'),'inventory failure disclosed');
+  check(doc.querySelector('#review-concerns').textContent.includes('28 days satisfies'),'remaining interval-membership error visible');
+  check(doc.querySelector('#review-concerns').textContent.includes('explicitly excluded'),'revision-introduced overstatement visible');
+  const snapshot=await(await fetch('/api/experiments/medical-retrieval-repair-20261031/snapshot')).json(),ids=new Set(snapshot.units.map(u=>u.id));
+  const links=[...doc.querySelectorAll('.ku-citation')];check(links.length>46&&links.every(a=>ids.has(new URL(a.href).searchParams.get('unit'))),'all knowledge citations resolve');
+  const references=[...doc.querySelectorAll('#references a')];check(references.length===16&&references.every(a=>/^https?:$/.test(new URL(a.href).protocol)),'actual linked source bibliography');
+  check([...doc.querySelectorAll('a[href^="#source-"]')].every(a=>doc.getElementById(a.hash.slice(1))),'internal source anchors');
+  const history=doc.getElementById('adversarial-history');check(!history.open,'diagnostics collapsed by default');history.open=true;check(history.textContent.includes('obj_f2')&&history.textContent.includes('earlier retained evaluation'),'review and original revisions inspectable');history.open=false;
+  const input=doc.getElementById('paper-search'),search=q=>{input.value=q;input.dispatchEvent(new Event('input',{bubbles:true}));};
+  input.focus();search('ＳＰＩＣＵＬＡＴＩＯＮ');check(doc.querySelectorAll('#paper-results button').length>0,'incremental Unicode/case search');
+  input.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));const first=doc.querySelector('.paper-highlight');check(first&&doc.activeElement===input,'keyboard navigation retains search focus');
+  input.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));check(doc.querySelector('.paper-highlight')!==first,'next search match');
+  input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));check(doc.activeElement===input,'Enter navigation');
+  doc.querySelector('#paper-results button').click();check(doc.activeElement!==input&&doc.querySelector('.paper-highlight'),'selectable passage highlight');
+  search('thereisnosuchscientifictermxyz');check(doc.getElementById('paper-match-count').textContent==='No matching passages','clear no-match message');search('');
+  doc.defaultView.scrollTo(0,0);await wait(()=>!doc.querySelector('.paper-highlight'),'temporary highlight expires');
+  const resources=[...performance.getEntriesByType('resource'),...doc.defaultView.performance.getEntriesByType('resource')].map(r=>r.name);check(resources.every(url=>url.startsWith(location.origin)),'only local assets and APIs');
+  return {standard_sections:13,units_considered:46,units_cited:45,glossary_entries:32,sources:16,paper:true,metadata:true,canonical_equation:true,open_questions:true,no_published_synthesis:true,glossary_provenance:true,unresolved_terminology:true,inventory_failure_disclosed:true,unresolved_scientific_concerns:true,citation_resolution:true,review_history:true,unicode_search:true,keyboard_navigation:true,temporary_highlight:true,offline_assets:true};
+ })()`);
+ let shot=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(out+'/workspace.png',Buffer.from(shot.data,'base64'));
+ const unitHref=await evaluate(`(()=>{const doc=document.getElementById('sor-paper').contentDocument;return [...doc.querySelectorAll('.ku-citation')].find(a=>new URL(a.href).searchParams.get('unit')==='rc#e1').getAttribute('href');})()`);
+ await rpc('Page.navigate',{url:base+unitHref});await evaluate(`(async()=>{${helpers}await wait(()=>$('knowledge-detail')?.querySelector('h1')?.textContent.startsWith('rc#e1'),'paper to Brain');[...$('knowledge-detail').querySelectorAll('button')].find(b=>b.textContent==='Find this unit in the State of Research paper').click();await wait(()=>$('sor-paper')?.contentDocument?.querySelector('.expression')&&$('sor-paper').contentWindow.scrollY>0,'Brain to paper section');return true;})()`);result.paper_to_brain=true;result.brain_to_paper=true;
+ await rpc('Page.navigate',{url:base+'/state-of-research'});await evaluate(`(async()=>{${helpers}await wait(()=>document.querySelector('main .claim'),'standalone paper');return true;})()`);
+ shot=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(out+'/paper.png',Buffer.from(shot.data,'base64'));
+ await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+ const mobile=await evaluate(`(()=>({fits:document.documentElement.scrollWidth<=innerWidth,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}))()`);assert(mobile.fits,JSON.stringify(mobile));result.mobile_layout=true;
+ shot=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(out+'/mobile.png',Buffer.from(shot.data,'base64'));await rpc('Emulation.clearDeviceMetricsOverride');
+ await evaluate(`document.querySelector('#glossary .term a').click();true`);await evaluate(`(async()=>{${helpers}await wait(()=>location.pathname==='/glossary'&&$('glossary-search'),'paper to canonical glossary');check(document.getElementById(location.hash.slice(1)),'canonical glossary anchor');return true;})()`);result.paper_to_glossary=true;
+ await rpc('Page.navigate',{url:base+'/?view=decisions'});await evaluate(`(async()=>{${helpers}await wait(()=>document.querySelectorAll('#timeline button').length>0,'original Decisions');return true;})()`);result.decisions=true;
+ fs.writeFileSync(out+'/browser-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));socket.close();
+})().catch(error=>{console.error(error);process.exit(1);});

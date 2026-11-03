@@ -50,11 +50,18 @@ class PromptTests(unittest.TestCase):
             if record["action"] == "R4": self.assertIsNone(data["inputs"]["search_evidence"])
             self.assertEqual(file_hashes(root), before)
             seen.add(record["action"])
-        self.assertEqual(seen, set(ACTIONS) - {"R0", "R5", "S3", "G1"})
+        self.assertEqual(seen, {"R1", "R3", "R4", "S2"})
 
     def test_source_hashes_and_literal_context_not_recursively_templated(self):
         for action in ACTIONS:
             if action == 'G1': continue  # Dedicated immutable instructions plus separate data turn.
+            if action.startswith('SOR'):
+                context={'payload':{'question':'Literal {{ unknown }} ${name} \"quoted\" Unicode 温度'}}
+                messages,metadata=PromptTemplates().render(action,context)
+                self.assertEqual([m['role'] for m in messages],['system','user'])
+                self.assertEqual(loads(messages[1]['content']),context['payload'])
+                self.assertEqual(metadata['files'][0]['sha256'],digest(messages[0]['content']))
+                continue
             context = dict.fromkeys(SLOTS[action], None)
             context["question"] = 'Literal {{ unknown }} ${name} "quoted" \n Unicode 温度'
             messages, metadata = PromptTemplates().render(action, context)
@@ -78,6 +85,14 @@ class PromptTests(unittest.TestCase):
     def test_every_action_has_an_independent_plain_text_prompt(self):
         for action in ACTIONS:
             if action == 'G1': continue
+            if action.startswith('SOR'):
+                context={'payload':{'marker':action}}
+                messages,snapshot=PromptTemplates().render(action,context)
+                self.assertEqual(len(messages),2)
+                self.assertEqual(messages[0]['content'],snapshot['files'][0]['source'])
+                self.assertEqual(snapshot['files'][0]['path'],'prompt_templates/'+action+'.txt')
+                self.assertEqual(loads(messages[1]['content']),context['payload'])
+                continue
             context = {key: {"marker": key} for key in SLOTS[action]}
             messages, snapshot = PromptTemplates().render(action, context)
             self.assertEqual(len(messages), 1)
