@@ -61,40 +61,7 @@ class GlossaryViewTests(unittest.TestCase):
         first=record(1,'Zeta');second=record(2,'alpha')
         second['aliases']=['First alias'];second['relationships']=[{'type':'RELATED_TO','target':'g1','evidence':second['evidence'][0]}]
         self.seed([first,second]);self.export()
-        expected='''## alpha (g2)
-
-Status: source_defined
-
-Aliases: First alias
-
-Preferred definition: alpha is a synthetic benchmark term.
-
-- alpha is a synthetic benchmark term. — Synthetic.
-  Source: Source-supported research passage · synthetic · research/results/synthetic.json
-
-> alpha is a synthetic benchmark term.
-
-Source: synthetic; evidence: research/results/synthetic.json; node: q1
-
-Qualification: Synthetic fixture.
-
-RELATED_TO: g1
-
-## Zeta (g1)
-
-Status: source_defined
-
-Preferred definition: Zeta is a synthetic benchmark term.
-
-- Zeta is a synthetic benchmark term. — Synthetic.
-  Source: Source-supported research passage · synthetic · research/results/synthetic.json
-
-> Zeta is a synthetic benchmark term.
-
-Source: synthetic; evidence: research/results/synthetic.json; node: q1
-
-Qualification: Synthetic fixture.
-'''
+        expected='## alpha (g2)\n\nPreferred definition: alpha is a synthetic benchmark term.\n\nScientific verification: Source-supported research definition.\n\nStatus: source_defined\n\nAliases: First alias\n\n### Attribution and supporting evidence\n\nSource: Source-supported research passage · synthetic · research/results/synthetic.json\nQualification: Synthetic.\n\n> alpha is a synthetic benchmark term.\n\nSource: synthetic; evidence: research/results/synthetic.json; node: q1\n\nQualification: Synthetic fixture.\n\nRELATED_TO: g1\n\n### Technical provenance\n\n## Zeta (g1)\n\nPreferred definition: Zeta is a synthetic benchmark term.\n\nScientific verification: Source-supported research definition.\n\nStatus: source_defined\n\n### Attribution and supporting evidence\n\nSource: Source-supported research passage · synthetic · research/results/synthetic.json\nQualification: Synthetic.\n\n> Zeta is a synthetic benchmark term.\n\nSource: synthetic; evidence: research/results/synthetic.json; node: q1\n\nQualification: Synthetic fixture.\n\n### Technical provenance\n'
         md = self.md.read_text()
         self.assertEqual('## ' + md.split('## ', 1)[1], expected)
         self.assertIn('Total glossary terms: 2', md)

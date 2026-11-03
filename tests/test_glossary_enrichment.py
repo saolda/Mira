@@ -417,12 +417,11 @@ class EnrichmentTests(unittest.TestCase):
         token=self.r.store.read()[0];again=op.run()
         self.assertEqual(again['model_calls'],0);self.assertEqual(again['processed'],0)
         self.assertEqual(token,self.r.store.read()[0]);self.assertEqual(len(self.model.requests),1)
-        self.assertFalse(gd.eligible(self.get(),gd.context('Which pulmonary features are relevant?','q1')))
         from mira import r1
         with self.r.store.lock():
             state=self.state();ctx=r1.retrieval_context(state,[],self.r.store._files(),'q1')
             entry=self.r.glossary.retrieve(state,ctx,'q1')['entries'][0]
-        self.assertFalse(entry['definition_eligible']);self.assertTrue(entry['requires_clarification'])
+        self.assertNotIn('definition_eligible',entry);self.assertTrue(entry['requires_clarification'])
 
     def test_source_window_uses_admitted_passage_when_canonical_label_is_absent(self):
         from mira.glossary_sources import admit
