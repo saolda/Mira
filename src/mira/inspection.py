@@ -52,7 +52,7 @@ class Inspector:
             state = read_json(root, "research/state.json", warnings) or {}
             nodes = state.get("nodes", {})
             root_node = nodes.get(state.get("root_id"), {}) if isinstance(nodes, dict) else {}
-            result.append({"name": name, "question": root_node.get("question"), "run_id": state.get("run_id"),
+            result.append({"name": name, "active": name == self.catalog.active_name(), "question": root_node.get("question"), "run_id": state.get("run_id"),
                 "research_cycles": state.get("research_cycles"), "synthesis_cycles": state.get("synthesis_cycles"),
                 "warnings": warnings, "initialized": bool(state.get("run_id"))})
         return result

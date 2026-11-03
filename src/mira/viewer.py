@@ -4,9 +4,11 @@ from importlib.resources import files
 import hmac
 import json
 import secrets
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, parse_qs
 
 from .inspection import Inspector
+from .knowledge_inspection import KnowledgeInspector, SnapshotChanged
+from .live import RecoveryRequired
 from .reviews import Reviews
 from .store import ConflictError
 from .prompts import PromptTemplates
@@ -18,6 +20,7 @@ class ViewerServer(ThreadingHTTPServer):
     def __init__(self, home=None, *, port=8767):
         self.inspector = Inspector(home)
         self.reviews = Reviews(self.inspector.catalog)
+        self.knowledge = KnowledgeInspector(self.inspector.catalog)
         self.token = secrets.token_urlsafe(32)
         super().__init__(("127.0.0.1", port), Handler)
 
@@ -50,7 +53,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urlsplit(self.path).path
             static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                      "/style.css": ("style.css", "text/css; charset=utf-8")}
+                      "/style.css": ("style.css", "text/css; charset=utf-8"),
+                      "/knowledge.js": ("knowledge.js", "text/javascript; charset=utf-8"),
+                      "/knowledge.css": ("knowledge.css", "text/css; charset=utf-8")}
             if path in static:
                 name, kind = static[path]
                 return self._send(200, files("mira").joinpath("viewer_assets", name).read_bytes(), kind)
@@ -78,6 +83,28 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "experiments"]: return self._send(200, self.server.inspector.experiments())
             if len(parts) >= 3 and parts[:2] == ["api", "experiments"]:
                 name = parts[2]
+                if len(parts)>=4 and parts[3] in {'overview','knowledge','relationships','questions','snapshot'}:
+                    knowledge=getattr(self.server,'knowledge',None)
+                    if knowledge is None:
+                        knowledge=KnowledgeInspector(self.server.inspector.catalog)
+                        self.server.knowledge=knowledge
+                    query=parse_qs(urlsplit(self.path).query,keep_blank_values=True,strict_parsing=True)
+                    if any(len(v)!=1 for v in query.values()): raise ValueError('duplicate query parameter')
+                    params={k:v[0] for k,v in query.items()}
+                    if parts[3]!='knowledge' or len(parts)>4:
+                        if set(params)-{'revision'}: raise ValueError('unknown snapshot parameter')
+                    expected=params.get('revision')
+                    if len(parts)==4 and parts[3]=='overview': return self._send(200,knowledge.overview(name,expected))
+                    if len(parts)==4 and parts[3]=='snapshot': return self._send(200,knowledge.snapshot(name,expected))
+                    if len(parts)==4 and parts[3]=='knowledge': return self._send(200,knowledge.inventory(name,params))
+                    if len(parts)==5 and parts[3]=='knowledge': return self._send(200,knowledge.detail(name,parts[4],expected))
+                    if len(parts)==5 and parts[3]=='relationships': return self._send(200,knowledge.relationships(name,parts[4],expected))
+                    if len(parts)==5 and parts[3]=='questions':
+                        snapshot=knowledge.overview(name,expected)
+                        node=next((n for n in snapshot['nodes'] if n['id']==parts[4]),None)
+                        if node is None: raise ValueError('unknown research question')
+                        return self._send(200,{'schema':snapshot['schema'],'revision':snapshot['revision'],'node':node})
+                    return self._send(404,{'error':'unknown knowledge resource'})
                 if len(parts) == 3: return self._send(200, self.server.inspector.run(name))
                 if len(parts) == 5 and parts[3] == "decisions":
                     data = self.server.inspector.decision(name, parts[4])
@@ -86,6 +113,10 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 5 and parts[3] == "actions":
                     return self._send(200, self.server.inspector.action(name, parts[4]))
             return self._send(404, {"error": "unknown viewer resource"})
+        except SnapshotChanged as exc:
+            return self._send(409, {'error': str(exc)})
+        except (RecoveryRequired, BlockingIOError, FileNotFoundError) as exc:
+            return self._send(503, {'error': 'Canonical research snapshot unavailable; writer or recovery may be active.'})
         except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
             return self._send(400, {"error": str(exc)})
 

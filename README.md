@@ -25,6 +25,33 @@ Inspect persistent research locally:
 PYTHONPATH=src python3 -m mira viewer
 ```
 
+The local viewer opens the active corpus at **Research Overview**. Use **Knowledge
+Explorer** to search every canonical unit, combine type/origin/evidence/branch/
+memory filters, and inspect complete propositions, qualifications, original
+memories, source attribution and equations. **Knowledge Relationships** shows a
+bounded, directed neighbourhood with clickable units and recorded synthesis
+ancestry. **Decisions**, local human reviews and the standard **Glossary** remain
+available. Refresh preserves the selected unit and expanded question branches.
+No inspection action starts research or inference.
+
+The overview separates structural unit counts from scientific types, and separates
+S1/S2 activity, S3 attempts and actual published synthesis. Evidence status stays
+unverified or unrecorded as stored. Controller-answered nodes do not establish
+scientific truth or automatically answer question units. Legacy runs without a
+unit-level synthesis register show **Not recorded** for those metrics.
+
+Read-only APIs under `/api/experiments/<name>/` provide `overview`, paginated
+`knowledge`, `knowledge/<unit-id>`, `relationships/<unit-id>`, `questions/<node-id>`
+and `snapshot`. Encode the `#` in a unit ID as `%23`. The versioned
+`mira.research-state/1` snapshot supplies a structured research catalogue for future
+reporting; it does not generate a paper. The viewer offers a JSON export link.
+Responses carry the canonical revision; pass `revision=<hash>` to reject mixed
+snapshots with HTTP 409. An active writer or pending recovery returns an explicit
+unavailable response. Derived inspection caches are validated against journal and
+canonical-file metadata and rebuilt using the canonical readers when anything
+changes. There are no new scientific databases, remote assets or model calls.
+
+
 Open http://127.0.0.1:8767 and select an experiment and decision. New research
 runs use ignored project `memory/` directly as one active corpus. Private inputs
 under `memory/questions/` and unrelated files survive explicit corpus resets.

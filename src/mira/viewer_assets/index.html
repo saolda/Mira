@@ -1,9 +1,37 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mira · Decision viewer</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mira · Brain and Decision viewer</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/knowledge.css"><script src="/app.js" defer></script><script src="/knowledge.js" defer></script></head>
 <body>
-<header><strong>Mira</strong><span>Research decisions</span><small>Local records · canonical data is read-only</small><a href="/glossary" target="_blank" rel="noopener">Glossary</a><button id="templates">Prompt templates</button><button id="refresh">Refresh</button></header>
-<div id="layout">
+<header><strong>Mira</strong><span>Research console</span><small>Local records · canonical data is read-only</small><a href="/glossary" target="_blank" rel="noopener">Glossary</a><button id="templates">Prompt templates</button><button id="refresh">Refresh</button></header>
+<nav id="workspace-tabs" aria-label="Research workspace">
+<button data-workspace="overview" aria-current="page">Research Overview</button>
+<button data-workspace="knowledge">Knowledge Explorer</button>
+<button data-workspace="relationships">Knowledge Relationships</button>
+<button data-workspace="decisions">Decisions</button>
+<a href="/glossary" target="_blank" rel="noopener">Glossary</a>
+</nav>
+<section id="brain-workspace" aria-label="Scientific knowledge inspection">
+<div class="brain-toolbar"><label>Research corpus<select id="brain-experiment"></select></label><span id="brain-revision"></span><button id="brain-refresh">Refresh scientific snapshot</button><a id="snapshot-export">Export structured research state</a></div>
+<p id="brain-error" role="alert" hidden></p>
+<div id="research-overview"></div>
+<div id="knowledge-explorer" hidden>
+<div class="explorer-filters">
+<label>Search knowledge<input id="knowledge-search" type="search" placeholder="Unit ID, scientific text, source or research question"></label>
+<label>Unit type<select id="knowledge-type"><option value="">All types</option><option>finding</option><option>observation</option><option>claim</option><option>inference</option><option>hypothesis</option><option>question</option><option>equation</option><option>image</option></select></label>
+<label>Origin<select id="knowledge-origin"><option value="">All origins</option><option value="source_extracted">Source-extracted</option><option value="synthesized">Synthesized</option></select></label>
+<label>Evidence status<select id="knowledge-evidence"><option value="">All recorded statuses</option></select></label>
+<label>Synthesis history<select id="knowledge-participation"><option value="">All participation</option><option value="never_selected">Never selected</option><option value="selected">S1 selected</option><option value="evaluated">S2 evaluated</option><option value="objective">S2 objective</option><option value="attempted">S3 attempted</option><option value="contributed">Contributed to published synthesis</option><option value="no_candidate">S2 no candidate</option><option value="no_synthesis">Associated no-synthesis outcome</option><option value="blocked">Blocked</option><option value="failed">Failed</option><option value="not_recorded">Not recorded</option></select></label>
+<label>Research branch<select id="knowledge-node"><option value="">All branches</option></select></label>
+<label class="check"><input id="knowledge-descendants" type="checkbox" checked>Include descendants</label>
+<label>Parent memory<select id="knowledge-memory"><option value="">All memories</option></select></label>
+<label>Sort by<select id="knowledge-sort"><option value="id">Stable identifier</option><option value="memory">Parent memory</option><option value="node">Research question</option><option value="type">Unit type</option><option value="evidence">Evidence status</option><option value="participation">Synthesis participation</option></select></label>
+<button id="knowledge-clear">Clear filters</button>
+</div>
+<div class="explorer-content"><section aria-label="Knowledge inventory"><p id="knowledge-count" role="status"></p><div id="knowledge-list"></div><div class="pagination"><button id="knowledge-previous">Previous page</button><span id="knowledge-page"></span><button id="knowledge-next">Next page</button></div></section><article id="knowledge-detail" tabindex="-1"><h1>Inspect a knowledge unit</h1><p>Select a row to read complete scientific content and provenance.</p></article></div>
+</div>
+<div id="knowledge-relationships" hidden><h1>Knowledge Relationships</h1><p class="hint">Select a unit in the explorer, then follow its recorded, directed relationships. Proposed and unverified relationships are labelled.</p><div id="relationship-view"></div></div>
+</section>
+<div id="layout" hidden>
 <aside>
 <label for="experiments">Experiment</label><select id="experiments"><option>Loading…</option></select>
 <div id="run-question"></div><details open><summary>Question tree</summary><p class="hint" id="tree-label">Current recorded state</p><div id="tree"></div></details>
