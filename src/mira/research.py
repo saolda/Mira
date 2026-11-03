@@ -360,13 +360,6 @@ class Research:
                     event.update(status='rejected', error='validation_blocked: all selected concepts invalid')
                     state['revision'] += 1
                     return extras, False
-                if 'provisional_definitions' in value:
-                    term_files, audit = self.glossary.provisional_definitions(state,
-                        value['provisional_definitions'],context,event,self.llm.model)
-                    extras.update(term_files)
-                    accepted['provisional_definitions']=audit['accepted']
-                    event['provisional_definitions']=audit
-                    event['rejected_components'].extend(audit['rejected'])
             elif action == "R3":
                 sources.processed(state.setdefault("source_index", {}), evidence["results"], evidence["reference"])
                 sources.reconcile(state["source_index"], evidence.get("duplicates", []))

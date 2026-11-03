@@ -42,8 +42,7 @@ def validate(action, value, evidence=None):
         from .strategies import select
         select(evidence, value["strategy"])
     elif action == "R1":
-        require(isinstance(value, dict) and {"new_concepts", "search_concepts", "reason"} <= set(value)
-                <= {"new_concepts", "search_concepts", "reason", "provisional_definitions"}, "unexpected/missing response fields")
+        fields(value, ["new_concepts", "search_concepts", "reason"])
         for key, limit in (("new_concepts", 6), ("search_concepts", evidence if evidence is not None else 6)):
             require(isinstance(value[key], list) and len(value[key]) <= limit,
                     "R1 concept limit exceeded or invalid list")

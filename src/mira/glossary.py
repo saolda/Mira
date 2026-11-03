@@ -73,20 +73,13 @@ def validate_transaction(old, proposed):
             for definition in record['definitions']:
                 if not definitions.provisional(definition) or definition in previous_definitions: continue
                 event=loads(proposed.get(definition['event_ref'],'{}'))
-                if event.get('action_committed') == 'glossary-enrich':
-                    require(event.get('status') == 'committed' and
-                        definition in event.get('definitions', {}).get(record['id'], []) and
-                        definition['interaction_ref'] == 'interactions/' + event.get('interaction_id', '') + '/request.json' and
-                        definition['context'] == event.get('contexts', {}).get(record['id']) and
-                        'generated_at' in definition and 'model_identity' in definition,
-                        'definition lacks committed glossary enrichment provenance')
-                    continue
-                require(event.get('action_committed')=='R1' and event.get('status')=='committed' and
-                    definition['interaction_ref']=='interactions/'+event.get('interaction_id','')+'/request.json' and
-                    definition['context']=={'node_id':event.get('node_id'),'question':event.get('question')} and
-                    {'term_id':record['id'],'definition':definition['text'],'scope':definition['scope'],
-                     'ambiguity':definition['ambiguity']} in event.get('provisional_definitions',{}).get('accepted',[]),
-                    'provisional definition lacks committed R1 provenance')
+                require(event.get('action_committed') == 'glossary-enrich' and
+                    event.get('status') == 'committed' and
+                    definition in event.get('definitions', {}).get(record['id'], []) and
+                    definition['interaction_ref'] == 'interactions/' + event.get('interaction_id', '') + '/request.json' and
+                    definition['context'] == event.get('contexts', {}).get(record['id']) and
+                    'generated_at' in definition and 'model_identity' in definition,
+                    'definition lacks committed glossary enrichment provenance')
         require(sorted(new_ids) == list(range(before["next_id"], after["next_id"])), "glossary allocator would reuse or skip an ID")
     else:
         require(after["revision"] == before["revision"] and after["commitment"] == before["commitment"] and
@@ -493,39 +486,6 @@ class Directory:
         return files, {"accepted": len(accepted), "rejected": rejected, "merged": merged, "changed_ids": list(records),
                        **({'enrichment': enrichment} if enrichment is not None else {})}
 
-    def provisional_definitions(self, state, values, context, event, model):
-        """Sparse after-images, committed only with the successful R1 action."""
-        scope = definitions.context(context['question'],event['node_id'],
-            r1.tree.ancestors(state,event['node_id']))
-        accepted, rejected = definitions.proposals(values, context['term_context']['glossary']['entries'], scope)
-        files={};admitted=[]
-        if not accepted: return files, {'accepted': admitted, 'rejected': rejected}
-        self.ensure(state)
-        request_ref='interactions/'+event['interaction_id']+'/request.json'
-        request=loads(self.store.path(request_ref).read_text(encoding='utf-8'))
-        template=request['prompt_template']['files'][0]['sha256']
-        for value in accepted:
-            with closing(self._db()) as db:
-                row=db.execute('SELECT sha FROM terms WHERE id=?',(value['term_id'],)).fetchone()
-            record=self._read(value['term_id'],row['sha'])
-            if not definitions.eligible(record,scope):
-                rejected.append({'field':'provisional_definitions','term_id':record['id'],
-                    'error':'term already has an applicable definition'})
-                continue
-            generated={'origin':'llm_generated','verification':'provisional','term_id':record['id'],
-                'text':value['definition'],'scope':value['scope'],'ambiguity':value['ambiguity'],
-                'model':model,'interaction_ref':request_ref,'event_ref':'events/'+event['event_id']+'.json',
-                'template_sha256':template,'request_sha256':digest(request['serialized_request']),
-                'context':{'node_id':event['node_id'],'question':context['question']}}
-            definitions.validate(generated,record['id'])
-            record['definitions'].append(generated);record['status']=definitions.status(record['definitions'], record.get('definition_reviews', []))
-            validate_record(record)
-            files['glossary/'+record['id']+'.json']=dumps(record);admitted.append(value)
-        if files:
-            meta=deepcopy(metadata(state));meta['revision']+=1
-            meta['commitment']=commitment(meta['commitment'],files);state['glossary']=meta
-        return files, {'accepted':admitted,'rejected':rejected}
-
     def used(self, query, state):
         self.ensure(state)
         if query.startswith('all:"'):
@@ -598,7 +558,6 @@ class Directory:
                 (-int(present(a, context['question'])), -len(r1.tokens(a) & assigned), len(a), a))[:2]
             entry['aliases'] = [clean for alias in aliases if (clean := r1.clean_text(alias, 100)[0])]
             entry['status'] = record['status']
-            entry['definition_eligible'] = definitions.eligible(record, scope)
             if (record.get('enrichment') or [{}])[-1].get('status') == 'clarification' and not preferred:
                 entry['requires_clarification'] = True
             if preferred:

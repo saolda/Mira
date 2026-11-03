@@ -1,4 +1,4 @@
-"""Definition provenance, contextual preference and bounded R1 fallback admission.
+"""Definition provenance and contextual preference for independently enriched terminology.
 
 These deterministic scope checks are conservative lexical heuristics, not a
 scientific meaning classifier. Every generated definition remains provisional.
@@ -110,38 +110,3 @@ def preferred(record, current=None):
     rows=[d for d in record['definitions'] if digest(dumps(d)) not in rejected and applicable(d,record,current)]
     def rank(d): return (0 if 'authority' in d else 2 if provisional(d) else 1, normalize(d['text']), dumps(d))
     return sorted(rows,key=rank)
-
-
-def eligible(record, current):
-    # The legacy optional R1 fallback must not override an explicit unresolved
-    # meaning. Independent enrichment reopens it when source context changes.
-    last = (record.get('enrichment') or [{}])[-1]
-    return not preferred(record,current) and last.get('status') != 'clarification'
-
-
-def proposals(values, supplied, current):
-    """Reject optional entries independently; never change search components."""
-    accepted=[];rejected=[]
-    if not isinstance(values,list):
-        return [],[{'field':'provisional_definitions','error':'provisional_definitions must be an array'}]
-    by_id={e['id']:e for e in supplied};seen=set()
-    for index,value in enumerate(values):
-        try:
-            require(index<3,'at most three provisional definitions per R1')
-            require(isinstance(value,dict) and set(value)=={'term_id','definition','scope','ambiguity'}, 'invalid provisional definition proposal fields')
-            identity=value['term_id']
-            require(isinstance(identity,str) and re.fullmatch(r'g[1-9][0-9]*',identity) and identity in by_id,
-                'definition term must be in the supplied glossary')
-            require(identity not in seen,'duplicate provisional definition proposal')
-            seen.add(identity)
-            require(by_id[identity].get('definition_eligible') is True,'term already has an applicable definition')
-            text(value['definition'],600);text(value['scope'],160);text(value['ambiguity'],400,empty=True)
-            require(not re.search(r'https?://|\b(?:PMID|doi)\s*:|\b10\.\d{4,9}/',value['definition'],re.I),
-                'provisional definitions must not invent citations')
-            unresolved=r'\b(?:specific meaning|term.s meaning|meaning of (?:this|the) (?:term|abbreviation))\b.{0,60}\b(?:cannot|can.t|indeterminate)\b|\bsemantically indeterminate\b'
-            require(not re.search(unresolved,value['definition']+' '+value['ambiguity'],re.I),
-                'unresolved term meaning requires abstention')
-            accepted.append(value)
-        except (ValueError,TypeError,KeyError) as exc:
-            rejected.append({'field':'provisional_definitions','index':index,'error':str(exc)})
-    return accepted,rejected
